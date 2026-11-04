@@ -1,5 +1,8 @@
 # Release packaging
 
+The current native Swift release is **0.1.1 (build 2)**. Rust releases use a
+separate branch and `rs-` tags.
+
 `scripts/package_release.sh` builds a universal macOS 15+ app, signs it with
 Developer ID and Hardened Runtime, notarizes and staples the app and DMG,
 checks Gatekeeper acceptance, and produces a DMG, ZIP and SHA-256 checksums.
@@ -14,8 +17,8 @@ Requirements:
 ```bash
 MIJIALAN_SIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
 MIJIALAN_NOTARY_PROFILE='your-notary-profile' \
-MIJIALAN_VERSION=0.1.0 \
-MIJIALAN_BUILD_NUMBER=1 \
+MIJIALAN_VERSION=0.1.1 \
+MIJIALAN_BUILD_NUMBER=2 \
 ./scripts/package_release.sh
 ```
 

@@ -4,7 +4,19 @@ import MijiaCore
 import MijiaLAN
 
 public enum CapabilityHAPBinding: Sendable {
-    public enum Conversion: Sendable { case direct, active, running, mired, fanSpeed, purifierMode, filterChange }
+    public enum Conversion: Sendable {
+        case direct, active, running, mired, fanSpeed, purifierMode, filterChange
+        /// Power as a HAP current state: off is 0 (inactive), on is the given working state.
+        case working(UInt8)
+        /// Power plus the mode property as HAP current heater cooler state.
+        case climateCurrent(mode: String, heat: Int?, cool: Int?)
+        /// The mode property as HAP target heater cooler state (0 auto, 1 heat, 2 cool).
+        case climateTarget(auto: Int?, heat: Int?, cool: Int?)
+        /// The property's value range scaled to 0–100.
+        case percent
+        /// A motor status as HAP position state (0 closing, 1 opening, 2 stopped).
+        case position(opening: Int?, closing: Int?)
+    }
     case property(String, Conversion)
     case option(String, JSONValue)
     case adjust(String, Double)
@@ -19,10 +31,24 @@ public struct CapabilityHomeKitPlan: Sendable {
     public var services: [HAPService]
     public var bindings: [UInt64: CapabilityHAPBinding]
     public var signature: String
+    /// Services omitted to keep the accessory within HomeKit's limit, excluding duplicate definitions.
+    public var omittedServiceCount: Int = 0
+
+    /// Include mode constraints when deciding whether Home must reload the database. Keep the layout-only
+    /// signature above compatible with the migration fingerprints used to verify stable built-in IIDs.
+    public var databaseSignature: String {
+        signature + "|" + services.flatMap(\.characteristics).map {
+            let values = $0.validValues.map { $0.map(String.init).joined(separator: ",") } ?? "-"
+            return "\($0.iid):\($0.format.rawValue):\(values)"
+        }.joined(separator: ";")
+    }
 }
 
 /// Category mapping over a complete schema. Only protocol exceptions and convenient numeric presets are model-specific.
 public enum CapabilityHomeKitMapper {
+    /// Includes the Accessory Information service added by HAPBridge.
+    public static let maxServicesPerAccessory = 100
+
     public static func plan(snapshot s: DeviceSnapshot, legacyDevice: SmartDevice?, names: [String: String],
                             identifiers: inout [String: UInt64]) -> CapabilityHomeKitPlan {
         var configured: [HomeKitRole: String] = [:]
@@ -46,7 +72,7 @@ public enum CapabilityHomeKitMapper {
         }
         var builder = Builder(ids: identifiers, names: names)
         var consumed: Set<String> = []
-        if s.schema.category == "air-conditioner", let base {
+        if s.schema.category == "air-conditioner", let base, hasLegacyClimateLayout(s, plan: base) {
             for (i, service) in base.services.enumerated() {
                 let key = base.serviceKeys[i]
                 builder.service(key, type: service.type)
@@ -56,6 +82,7 @@ public enum CapabilityHomeKitMapper {
                 }
             }
             consumed.formUnion(s.capabilities.filter { [2, 3].contains($0.siid) }.map(\.id))
+        } else if native(s, into: &builder, consumed: &consumed) {
         } else if let power = s.primaryPower, power.writable {
             let category = s.schema.category
             let type: HAPServiceType = switch category {
@@ -151,7 +178,8 @@ public enum CapabilityHomeKitMapper {
         let signature = info.name + "|" + builder.services.map { service in
             "\(service.iid):\(service.type.rawValue):" + service.characteristics.map { "\($0.iid):\($0.type.rawValue):\($0.minValue ?? 0):\($0.maxValue ?? 0):\($0.minStep ?? 0)" }.joined(separator: ",")
         }.joined(separator: "|")
-        return CapabilityHomeKitPlan(info: info, services: builder.services, bindings: builder.bindings, signature: signature)
+        return CapabilityHomeKitPlan(info: info, services: builder.services, bindings: builder.bindings, signature: signature,
+                                     omittedServiceCount: builder.omittedServiceKeys.count)
     }
 
     public static func presets(model: String, capability c: DeviceCapability) -> [Double] {
@@ -165,13 +193,155 @@ public enum CapabilityHomeKitMapper {
         return Array(Set(values)).sorted().filter { (try? c.validated(.number($0))) != nil }
     }
 
+    static let humidifierService = HAPServiceType(rawValue: "BD")
+    static let currentHumidifierState = HAPCharacteristicType(rawValue: "B3")
+    static let targetHumidifierState = HAPCharacteristicType(rawValue: "B4")
+    static let waterLevel = HAPCharacteristicType(rawValue: "B5")
+    static let dehumidifierThreshold = HAPCharacteristicType(rawValue: "C9")
+    static let humidifierThreshold = HAPCharacteristicType(rawValue: "CA")
+
+    /// The AC companion's mapping addresses 2.1–2.3 and 3.1–3.2 directly. Other air conditioners use `native`.
+    static func hasLegacyClimateLayout(_ s: DeviceSnapshot, plan: HomeKitAccessoryPlan) -> Bool {
+        guard s.device.model == "lumi.acpartner.mcn02" else { return false }
+        guard [("p:2:1", "air-conditioner", "on"), ("p:2:2", "air-conditioner", "mode"), ("p:2:3", "air-conditioner", "target-temperature"),
+         ("p:3:1", "fan-control", "fan-level"), ("p:3:2", "fan-control", "vertical-swing")].allSatisfy({ id, service, name in
+            s.capabilitiesByID[id].map { $0.service == service && $0.name == name } == true
+        }) else { return false }
+        // The fixed legacy write routing is valid only for this mode table. A changed or incomplete table
+        // must use the schema-driven mapper, including its generic fallback when no native modes exist.
+        let mode = s.capability("air-conditioner", "mode")
+        let auto = option(mode, ["auto", "automatic"]), heat = option(mode, ["heat", "heating"]), cool = option(mode, ["cool", "cooling"])
+        let states = [auto.map { _ in 0 }, heat.map { _ in 1 }, cool.map { _ in 2 }].compactMap { $0 }
+        guard !states.isEmpty, auto == nil || auto == 0, heat == nil || heat == 3, cool == nil || cool == 1 else { return false }
+        return plan.services.first { $0.type == HomeKitAccessoryMapper.heaterCoolerService }?
+            .characteristics.first { $0.type == HomeKitAccessoryMapper.targetHeaterCoolerState }?.validValues == states
+    }
+
+    /// The value of the option whose spec description is one of `names`, compared without case or separators.
+    static func option(_ c: DeviceCapability?, _ names: Set<String>) -> Int? {
+        c?.options.first { names.contains($0.description.lowercased().filter(\.isLetter)) }?.value
+    }
+
+    /// Native Home services beyond fan, purifier and light, following homebridge-miot's category accessories
+    /// (MIT, `2186f61`). Returns false, leaving an outlet and named switches, when a required property is missing.
+    /// Fan levels stay named switches: their values carry no speed scale, and some lists mix in an auto level.
+    private static func native(_ s: DeviceSnapshot, into builder: inout Builder, consumed: inout Set<String>) -> Bool {
+        let category = s.schema.category
+        let power = s.primaryPower.flatMap { $0.writable ? $0 : nil }
+        func number(_ name: String) -> DeviceCapability? {
+            s.capability(category, name).flatMap {
+                guard $0.control == .number, $0.writable, let lo = $0.min, let hi = $0.max,
+                      lo.isFinite, hi.isFinite, lo <= hi, $0.step.isFinite, $0.step > 0 else { return nil }
+                return $0
+            }
+        }
+        func reading(_ name: String) -> DeviceCapability? {
+            (s.capability("environment", name) ?? s.capability(category, name)).flatMap { $0.readable ? $0 : nil }
+        }
+        /// Apple Home requires a current temperature; most air conditioners and heaters have no thermometer, so the set point stands in.
+        func climate(_ key: String, power: DeviceCapability, target: DeviceCapability, states: [Int]) {
+            let temperature = reading("temperature") ?? reading("indoor-temperature") ?? target
+            builder.add(key, type: .currentTemperature, format: .float, binding: .property(temperature.id, .direct), min: -40, max: 100, step: 0.1, unit: .celsius)
+            let lo = max(0, target.min ?? 0)
+            let hi = min(38, max(lo, target.max ?? 38))
+            if states.contains(0) || states.contains(2) {
+                builder.add(key, type: HomeKitAccessoryMapper.coolingThresholdTemperature, format: .float, binding: .property(target.id, .direct),
+                            writable: true, min: lo, max: hi, step: target.step, unit: .celsius)
+            }
+            if states.contains(0) || states.contains(1) {
+                builder.add(key, type: HomeKitAccessoryMapper.heatingThresholdTemperature, format: .float, binding: .property(target.id, .direct),
+                            writable: true, min: lo, max: hi, step: target.step, unit: .celsius)
+            }
+            // Celsius; Apple Home converts for display.
+            builder.add(key, type: HomeKitAccessoryMapper.temperatureDisplayUnits, format: .uint8, binding: .constant(.uint8(0)), writable: true, min: 0, max: 1)
+            consumed.formUnion([power.id, target.id, temperature.id])
+        }
+        switch category {
+        case "humidifier", "dehumidifier":
+            guard let power, let humidity = reading("relative-humidity"), let threshold = number("target-humidity"),
+                  let minimum = threshold.min, let maximum = threshold.max,
+                  max(0, minimum) <= min(100, maximum) else { return false }
+            let humidifying = category == "humidifier"
+            let key = humidifierService.rawValue
+            builder.service(key, type: humidifierService)
+            builder.add(key, type: .active, format: .uint8, binding: .property(power.id, .active), writable: true, min: 0, max: 1)
+            let working: UInt8 = humidifying ? 2 : 3
+            builder.add(key, type: currentHumidifierState, format: .uint8, binding: .property(power.id, .working(working)),
+                        min: 0, max: 3, validValues: [0, 1, Int(working)])
+            let target: UInt8 = humidifying ? 1 : 2
+            builder.add(key, type: targetHumidifierState, format: .uint8, binding: .constant(.uint8(target)), writable: true,
+                        min: 0, max: 2, validValues: [Int(target)])
+            builder.add(key, type: .currentRelativeHumidity, format: .float, binding: .property(humidity.id, .direct), min: 0, max: 100, step: 1, unit: .percentage)
+            builder.add(key, type: humidifying ? humidifierThreshold : dehumidifierThreshold, format: .float, binding: .property(threshold.id, .direct),
+                        writable: true, min: max(0, minimum), max: min(100, maximum), step: threshold.step, unit: .percentage)
+            consumed.formUnion([power.id, humidity.id, threshold.id])
+            if let water = s.capability(category, "water-level"), water.readable, water.min != nil, water.max != nil {
+                builder.add(key, type: waterLevel, format: .float, binding: .property(water.id, .percent), min: 0, max: 100, step: 1, unit: .percentage)
+                consumed.insert(water.id)
+            }
+            return true
+        case "heater":
+            guard let power, let target = number("target-temperature") else { return false }
+            let key = HomeKitAccessoryMapper.heaterCoolerService.rawValue
+            builder.service(key, type: HomeKitAccessoryMapper.heaterCoolerService)
+            builder.add(key, type: .active, format: .uint8, binding: .property(power.id, .active), writable: true, min: 0, max: 1)
+            builder.add(key, type: HomeKitAccessoryMapper.currentHeaterCoolerState, format: .uint8, binding: .property(power.id, .working(2)),
+                        min: 0, max: 3, validValues: [0, 1, 2])
+            builder.add(key, type: HomeKitAccessoryMapper.targetHeaterCoolerState, format: .uint8, binding: .constant(.uint8(1)), writable: true,
+                        min: 0, max: 2, validValues: [1])
+            climate(key, power: power, target: target, states: [1])
+            return true
+        case "air-conditioner":
+            guard let power, let target = number("target-temperature"), let mode = s.capability(category, "mode"), mode.writable else { return false }
+            let auto = option(mode, ["auto", "automatic"]), heat = option(mode, ["heat", "heating"]), cool = option(mode, ["cool", "cooling"])
+            let states = [auto.map { _ in 0 }, heat.map { _ in 1 }, cool.map { _ in 2 }].compactMap { $0 }
+            guard !states.isEmpty else { return false }
+            let key = HomeKitAccessoryMapper.heaterCoolerService.rawValue
+            builder.service(key, type: HomeKitAccessoryMapper.heaterCoolerService)
+            builder.add(key, type: .active, format: .uint8, binding: .property(power.id, .active), writable: true, min: 0, max: 1)
+            builder.add(key, type: HomeKitAccessoryMapper.currentHeaterCoolerState, format: .uint8,
+                        binding: .property(power.id, .climateCurrent(mode: mode.id, heat: heat, cool: cool)), min: 0, max: 3)
+            builder.add(key, type: HomeKitAccessoryMapper.targetHeaterCoolerState, format: .uint8,
+                        binding: .property(mode.id, .climateTarget(auto: auto, heat: heat, cool: cool)), writable: true, min: 0, max: 2, validValues: states)
+            climate(key, power: power, target: target, states: states)
+            if let swing = s.capability("fan-control", "vertical-swing") ?? s.capability("fan-control", "horizontal-swing"), swing.writable, swing.format == "bool" {
+                builder.add(key, type: .swingMode, format: .uint8, binding: .property(swing.id, .active), writable: true, min: 0, max: 1)
+                consumed.insert(swing.id)
+            }
+            // Apple Home's heater cooler knows auto, heat and cool only; the other modes stay named switches.
+            for o in mode.options where ![auto, heat, cool].contains(o.value) {
+                builder.option(key: "\(mode.id)=\(o.value)", title: "\(mode.displayTitle)·\(o.title)", binding: .option(mode.id, .number(Double(o.value))))
+            }
+            consumed.insert(mode.id)
+            return true
+        case "curtain":
+            guard let current = s.capability(category, "current-position"), current.readable, current.min != nil, current.max != nil,
+                  let target = number("target-position") else { return false }
+            let key = HAPServiceType.windowCovering.rawValue
+            builder.service(key, type: .windowCovering)
+            builder.add(key, type: .currentPosition, format: .uint8, binding: .property(current.id, .percent), min: 0, max: 100, step: 1, unit: .percentage)
+            builder.add(key, type: .targetPosition, format: .uint8, binding: .property(target.id, .percent), writable: true, min: 0, max: 100, step: 1, unit: .percentage)
+            if let status = s.capability(category, "status"), status.readable {
+                builder.add(key, type: .positionState, format: .uint8,
+                            binding: .property(status.id, .position(opening: option(status, ["opening"]), closing: option(status, ["closing"]))), min: 0, max: 2)
+                consumed.insert(status.id)
+            } else {
+                builder.add(key, type: .positionState, format: .uint8, binding: .constant(.uint8(2)), min: 0, max: 2)
+            }
+            consumed.formUnion([current.id, target.id])
+            return true
+        default:
+            return false
+        }
+    }
+
     public static func value(_ binding: CapabilityHAPBinding, snapshot s: DeviceSnapshot,
                              legacyValues: [HomeKitRole: HAPCharacteristicValue], names: [String: String]) -> HAPCharacteristicValue? {
         switch binding {
-        case .name(let key, let title): return .string(names[key] ?? title)
+        case .name(let key, let title): return .string(HAPString.bounded(names[key] ?? title))
         case .constant(let v): return v
         case .legacy(let role):
-            if role.isConfiguredName { return .string(names[role.rawValue] ?? (role == .climateDryConfiguredName ? L10n.tr("除湿模式", "Dry Mode") : L10n.tr("仅送风", "Fan Only"))) }
+            if role.isConfiguredName { return .string(HAPString.bounded(names[role.rawValue] ?? (role == .climateDryConfiguredName ? L10n.tr("除湿模式", "Dry Mode") : L10n.tr("仅送风", "Fan Only")))) }
             if role == .climateDryName || role == .climateFanOnlyName || role == .climateDisplayUnits { return legacyValues[role] }
             let ids: [String] = switch role {
             case .climateActive: ["p:2:1"]
@@ -181,19 +351,22 @@ public enum CapabilityHomeKitMapper {
             case .climateSwing: ["p:3:2"]
             default: []
             }
-            guard s.isOnline, ids.allSatisfy({ s.value($0) != nil }) else { return nil }
+            guard s.isOnline, ids.allSatisfy({ id in
+                guard let c = s.capabilitiesByID[id], let value = s.value(id) else { return false }
+                return (try? c.validatedReading(value)) != nil
+            }) else { return nil }
             return legacyValues[role]
         case .action, .adjust: return .bool(false)
         case .option(let id, let option):
             guard let c = s.capabilities.first(where: { $0.id == id }) else { return nil }
             if c.control == .button { return .bool(false) }
             if c.prepared { return .bool(s.prepared[id] == option) }
-            guard s.isOnline, let value = s.value(id) else { return nil }
+            guard s.isOnline, let raw = s.value(id), let value = try? c.validatedReading(raw) else { return nil }
             return .bool(value == option)
         case .property(let id, let conversion):
             guard let c = s.capabilities.first(where: { $0.id == id }) else { return nil }
             if c.prepared, c.format == "bool" { return .bool(s.prepared[id]?.boolValue == true) }
-            guard s.isOnline, let v = s.value(id) else { return nil }
+            guard s.isOnline, let raw = s.value(id), let v = try? c.validatedReading(raw) else { return nil }
             let n = v.doubleValue
             let b = v.boolValue ?? n.map { $0 != 0 }
             switch conversion {
@@ -204,12 +377,34 @@ public enum CapabilityHomeKitMapper {
                 // Powered on in auto mode does not necessarily mean the motor is running.
                 guard let rpm = s.value("custom-service", "moto-speed-rpm")?.doubleValue else { return nil }
                 return .uint8(rpm > 0 ? 2 : 1)
-            case .mired: return n.flatMap { $0 > 0 ? .int32(Int32((1_000_000 / $0).rounded())) : nil }
+            case .mired:
+                guard let n, n > 0 else { return nil }
+                let mired = (1_000_000 / n).rounded()
+                guard mired.isFinite, mired >= Double(Int32.min), mired <= Double(Int32.max) else { return nil }
+                return .int32(Int32(mired))
             case .purifierMode: return n.map { .uint8($0 == 0 ? 1 : 0) }
             case .filterChange: return n.map { .uint8($0 <= 0 ? 1 : 0) }
             case .fanSpeed:
                 guard let power = s.value("fan", "on")?.boolValue else { return nil }
                 return n.map { .float(power ? $0 : 0) }
+            case .working(let state): return b.map { .uint8($0 ? state : 0) }
+            case .climateCurrent(let modeID, let heat, let cool):
+                guard let b else { return nil }
+                if !b { return .uint8(0) }
+                guard let mode = s.value(modeID)?.intValue else { return nil }
+                return .uint8(mode == heat ? 2 : mode == cool ? 3 : 1)
+            case .climateTarget(let auto, let heat, let cool):
+                guard let n else { return nil }
+                let states = [(auto, UInt8(0)), (heat, 1), (cool, 2)].filter { $0.0 != nil }
+                // Other modes show as auto, or the first state the device has.
+                let match = states.first { $0.0.map(Double.init) == n } ?? states.first { $0.1 == 0 } ?? states.first
+                return match.map { .uint8($0.1) }
+            case .percent:
+                guard let n, let lo = c.min, let hi = c.max, hi > lo else { return nil }
+                return .float(((n - lo) * 100 / (hi - lo)).rounded())
+            case .position(let opening, let closing):
+                guard let n else { return nil }
+                return .uint8(n == opening.map(Double.init) ? 1 : n == closing.map(Double.init) ? 0 : 2)
             case .direct:
                 if c.format == "bool" { return b.map(HAPCharacteristicValue.bool) }
                 return n.map(HAPCharacteristicValue.float)
@@ -247,6 +442,8 @@ public enum CapabilityHomeKitMapper {
             case .climateDisplayUnits: return []
             default: throw HAPError.readOnly
             }
+        // A fixed state, such as a humidifier's only target mode or Celsius display units: nothing to send.
+        case .constant: return []
         case .action(let id): return n == 0 ? [] : [.invoke(id)]
         case .adjust(let id, let d): return n == 0 ? [] : [.adjust(id, d)]
         case .option(let id, let v): return n == 0 ? [] : [.set(id, v)]
@@ -262,6 +459,13 @@ public enum CapabilityHomeKitMapper {
                 guard (0...100).contains(n), let power = s.capability("fan", "on") else { throw HAPError.invalidValue }
                 return n == 0 ? [.set(power.id, .bool(false))] : [.set(id, .number(n.rounded())), .set(power.id, .bool(true))]
             case .purifierMode: return [.set(id, .number(n == 1 ? 0 : 2))]
+            case .climateTarget(let auto, let heat, let cool):
+                guard (0...2).contains(n), n.rounded() == n, let mode = [auto, heat, cool][Int(n)] else { throw HAPError.invalidValue }
+                return [.set(id, .number(Double(mode)))] + (s.primaryPower.map { [.set($0.id, .bool(true))] } ?? [])
+            case .percent:
+                guard (0...100).contains(n), let lo = c.min, let hi = c.max, hi > lo else { throw HAPError.invalidValue }
+                let raw = lo + ((n * (hi - lo) / 100) / c.step).rounded() * c.step
+                return [.set(id, .number(min(hi, max(lo, raw))))]
             case .active, .direct:
                 if c.name == "brightness", n == 0, let power = s.capability("light", "on") { return [.set(power.id, .bool(false))] }
                 return [.set(id, c.format == "bool" ? .bool(n != 0) : .number(n))]
@@ -277,26 +481,34 @@ public enum CapabilityHomeKitMapper {
         var services: [HAPService] = []
         var keys: [String] = []
         var bindings: [UInt64: CapabilityHAPBinding] = [:]
+        var omittedServiceKeys: Set<String> = []
         mutating func iid(_ key: String) -> UInt64 {
             if let id = ids[key] { return id }
             let id = max(7, ids.values.max() ?? 7) + 1; ids[key] = id; return id
         }
         mutating func service(_ key: String, type: HAPServiceType) {
             guard !keys.contains(key) else { return }
+            guard services.count < CapabilityHomeKitMapper.maxServicesPerAccessory - 1 else {
+                omittedServiceKeys.insert(key)
+                return
+            }
             let id = iid("s:" + key)
             keys.append(key); services.append(HAPService(iid: id, type: type, characteristics: []))
         }
         mutating func add(_ key: String, characteristic c: HAPCharacteristic, binding: CapabilityHAPBinding) {
+            guard let index = keys.firstIndex(of: key),
+                  !services[index].characteristics.contains(where: { $0.type == c.type }) else { return }
             let id = iid("c:\(key):\(c.type.rawValue)")
             let char = HAPCharacteristic(iid: id, type: c.type, value: c.value, permissions: c.permissions, format: c.format,
                 minValue: c.minValue, maxValue: c.maxValue, minStep: c.minStep, unit: c.unit, validValues: c.validValues)
-            services[keys.firstIndex(of: key)!].characteristics.append(char)
+            services[index].characteristics.append(char)
             bindings[id] = binding
         }
         mutating func add(_ key: String, type: HAPCharacteristicType, format: HAPFormat, binding: CapabilityHAPBinding,
-                          writable: Bool = false, min: Double? = nil, max: Double? = nil, step: Double? = nil, unit: HAPUnit? = nil) {
+                          writable: Bool = false, min: Double? = nil, max: Double? = nil, step: Double? = nil, unit: HAPUnit? = nil,
+                          validValues: [Int]? = nil) {
             add(key, characteristic: HAPCharacteristic(iid: 0, type: type, permissions: writable ? [.read, .write, .notify] : [.read, .notify],
-                format: format, minValue: min, maxValue: max, minStep: step, unit: unit), binding: binding)
+                format: format, minValue: min, maxValue: max, minStep: step, unit: unit, validValues: validValues), binding: binding)
         }
         mutating func names(_ key: String, title: String) {
             add(key, type: .name, format: .string, binding: .name(key, title))

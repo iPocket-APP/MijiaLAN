@@ -107,13 +107,7 @@ public final class DeviceController {
                 snapshots[device.did] = template
                 continue
             }
-            // Bundled schemas pin the reviewed version; newly imported models can use the full raw cache.
-            let cached: DeviceSchema? = device.specType.flatMap { type in
-                let url = LocalHomeProvider.specCacheDirectory.appendingPathComponent("instances")
-                    .appendingPathComponent(type.replacingOccurrences(of: ":", with: "_") + ".json")
-                return (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode(DeviceSchema.self, from: $0) }
-            }
-            guard let schema = DeviceSchema.bundled(model: device.model) ?? cached else {
+            guard let schema = DeviceSchema.load(model: device.model, specType: device.specType) else {
                 snapshots[device.did] = nil
                 continue
             }
@@ -251,11 +245,12 @@ public final class DeviceController {
         let health = await api.currentHealth()
         guard !Task.isCancelled, var snapshot = snapshots[did], ProbeScheduler.sameEndpoint(snapshot.device, device) else { return }
         for (key, var reading) in readings {
-            if let value = reading.value, reading.isAvailable,
-               let cap = snapshot.capabilitiesByID[key], cap.format != "string",
-               (try? cap.validated(value)) == nil {
-                reading.error = L10n.tr("设备返回的数据类型或取值不符合规格", "The returned value or data type does not match the device specification.")
-                reading.value = nil
+            if let value = reading.value, reading.isAvailable, let cap = snapshot.capabilitiesByID[key] {
+                if let checked = try? cap.validatedReading(value) { reading.value = checked }
+                else {
+                    reading.error = L10n.tr("设备返回的数据类型或取值不符合规格", "The returned value or data type does not match the device specification.")
+                    reading.value = nil
+                }
             }
             // Keep the last confirmed value for diagnosis, but never return it as a fresh successful read.
             if reading.value == nil {

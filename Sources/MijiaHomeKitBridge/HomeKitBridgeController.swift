@@ -36,6 +36,12 @@ public final class HomeKitBridgeController {
     public private(set) var setupURI: String?
     public private(set) var isPaired = false
     public private(set) var exposedDeviceCount = 0
+    public struct ServiceLimitWarning: Identifiable, Equatable, Sendable {
+        public let id: String
+        public let deviceName: String
+        public let omittedServiceCount: Int
+    }
+    public private(set) var serviceLimitWarnings: [ServiceLimitWarning] = []
 
     public var isEnabled: Bool {
         didSet {
@@ -101,6 +107,7 @@ public final class HomeKitBridgeController {
     private let vault: HomeKitBridgeVault
     private let defaults: UserDefaults
     private let preferredPort: UInt16?
+    private let loopbackOnly: Bool
     private let logger = os.Logger(subsystem: "com.mijialan.MijiaLAN", category: "HomeKitBridge")
 
     @ObservationIgnored private weak var store: HomeStore?
@@ -129,10 +136,11 @@ public final class HomeKitBridgeController {
     @ObservationIgnored private var sleepActivity: NSObjectProtocol?
 
     /// - Parameter port: a fixed TCP port (tests); nil reuses the last port, or lets the system pick one.
-    public init(vault: HomeKitBridgeVault, defaults: UserDefaults = .standard, port: UInt16? = nil) {
+    public init(vault: HomeKitBridgeVault, defaults: UserDefaults = .standard, port: UInt16? = nil, loopbackOnly: Bool = false) {
         self.vault = vault
         self.defaults = defaults
         self.preferredPort = port
+        self.loopbackOnly = loopbackOnly
         self.isEnabled = defaults.object(forKey: Self.enabledKey) as? Bool ?? true
         self.keepsMacAwake = defaults.object(forKey: Self.keepAwakeKey) as? Bool ?? true
         self.layout = defaults.data(forKey: Self.layoutKey)
@@ -257,7 +265,7 @@ public final class HomeKitBridgeController {
                 pairingStore: pairingStore
             )
             do {
-                try await service.start(port: port)
+                try await service.start(port: port, loopbackOnly: loopbackOnly)
                 started = service
                 break
             } catch {
@@ -276,7 +284,7 @@ public final class HomeKitBridgeController {
         layout.port = service.port
         saveLayout()
         status = .running(port: service.port)
-        logger.info("HomeKit bridge running on port \(service.port) with \(self.exposed.count) accessories")
+        logger.info("HomeKit bridge running on port \(service.port) with \(self.exposedDeviceCount) accessories")
         updateSleepAssertion()
         // Changes that arrived while starting.
         scheduleSync()
@@ -296,6 +304,7 @@ public final class HomeKitBridgeController {
         capabilityStructureDirty = true
         forceRefresh = []
         exposedDeviceCount = 0
+        serviceLimitWarnings = []
         await running?.stop()
         status = .stopped
         updateSleepAssertion()
@@ -467,17 +476,23 @@ public final class HomeKitBridgeController {
         let visible = controller.snapshots.values.filter { !store.hiddenDeviceIds.contains($0.id) }.sorted { $0.id < $1.id }
         let ordered = visible.filter { layout.aids[$0.id] != nil } + visible.filter { layout.aids[$0.id] == nil }
         var retained: Set<String> = []
+        var limitWarnings: [ServiceLimitWarning] = []
         for snapshot in ordered.prefix(HomeKitAccessoryMapper.maxBridgedAccessories) {
             let did = snapshot.id
             var ids = capabilityIIDs[did] ?? [:]
             let plan = CapabilityHomeKitMapper.plan(snapshot: snapshot, legacyDevice: legacyDevices[did],
                 names: serviceNames[did] ?? [:], identifiers: &ids)
             syncStatistics.planBuilds += 1
+            if plan.omittedServiceCount > 0 {
+                limitWarnings.append(ServiceLimitWarning(id: did, deviceName: snapshot.device.name,
+                                                         omittedServiceCount: plan.omittedServiceCount))
+                logger.warning("HomeKit service limit reached for device \(did, privacy: .private): \(plan.omittedServiceCount) services omitted")
+            }
             guard !plan.services.isEmpty else { continue }
             capabilityIIDs[did] = ids
             retained.insert(did)
             let characteristics = Dictionary(plan.services.flatMap(\.characteristics).map { ($0.iid, $0) }, uniquingKeysWith: { first, _ in first })
-            if let existing = capabilityPlans[did], existing.plan.signature == plan.signature {
+            if let existing = capabilityPlans[did], existing.plan.databaseSignature == plan.databaseSignature {
                 capabilityPlans[did] = CapabilityAccessory(aid: existing.aid, plan: plan, characteristics: characteristics)
                 continue
             }
@@ -499,6 +514,7 @@ public final class HomeKitBridgeController {
             publishedCapabilityValues[did] = nil
         }
         exposedDeviceCount = capabilityPlans.count
+        serviceLimitWarnings = limitWarnings
         if savedCapabilityIIDs != capabilityIIDs, let data = try? JSONEncoder().encode(capabilityIIDs) {
             defaults.set(data, forKey: Self.capabilityIIDsKey)
             savedCapabilityIIDs = capabilityIIDs
@@ -529,9 +545,7 @@ public final class HomeKitBridgeController {
             } ?? [:]
             for (iid, binding) in entry.plan.bindings {
                 var value = CapabilityHomeKitMapper.value(binding, snapshot: snapshot, legacyValues: legacy, names: serviceNames[did] ?? [:])
-                if case .float(let number) = value,
-                   let c = entry.characteristics[iid],
-                   number < (c.minValue ?? -.infinity) || number > (c.maxValue ?? .infinity) { value = nil }
+                value = value.flatMap { entry.characteristics[iid]?.normalizedRead($0) }
                 let status: HAPStatus = value == nil ? .communicationFailure : .success
                 let previous = publishedCapabilityValues[did]?[iid]
                 let recovered = previous?.status == HAPStatus.communicationFailure.rawValue && status.rawValue == HAPStatus.success.rawValue
@@ -635,7 +649,7 @@ public final class HomeKitBridgeController {
     }
 
     private func layoutSignature() -> String {
-        (exposed.map { "\($0.value.aid)=\($0.value.signature)" } + capabilityPlans.values.map { "\($0.aid)=\($0.plan.signature)" }).sorted().joined(separator: ";")
+        (exposed.map { "\($0.value.aid)=\($0.value.signature)" } + capabilityPlans.values.map { "\($0.aid)=\($0.plan.databaseSignature)" }).sorted().joined(separator: ";")
     }
 
     private func configurationChanged(_ number: Int) {

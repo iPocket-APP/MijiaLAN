@@ -7,6 +7,16 @@ import Testing
 struct DeviceCapabilityTests {
     private let token = "00112233445566778899aabbccddeeff"
 
+    @Test("Repeated services, properties and actions keep the first capability definition")
+    func duplicateSchemaEntries() throws {
+        var schema = try #require(DeviceSchema.bundled(model: "careli.fryer.maf07c"))
+        let original = DeviceCapabilityCatalog.capabilities(schema: schema, model: "careli.fryer.maf07c")
+        schema.services += schema.services
+        let repeated = DeviceCapabilityCatalog.capabilities(schema: schema, model: "careli.fryer.maf07c")
+        #expect(repeated == original)
+        #expect(Set(repeated.map(\.id)).count == repeated.count)
+    }
+
     @Test("Every enabled MIoT property routes to its exact service and property", arguments: DeviceSchema.bundledModels.filter { LegacyMiioProfile.forModel($0) == nil })
     func everyProperty(model: String) async throws {
         let (controller, fake, _) = try makeController(model: model)

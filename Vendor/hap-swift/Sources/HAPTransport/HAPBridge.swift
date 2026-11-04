@@ -204,7 +204,17 @@ public actor HAPBridge {
             }
         }
 
-        let accessory = HAPAccessory(aid: aid, services: servicesHaveStableIIDs ? [infoService] + services : allServices)
+        var accessory = HAPAccessory(aid: aid, services: servicesHaveStableIIDs ? [infoService] + services : allServices)
+        for si in accessory.services.indices {
+            for ci in accessory.services[si].characteristics.indices {
+                let c = accessory.services[si].characteristics[ci]
+                let checked = c.value.flatMap { c.normalizedRead($0) }
+                accessory.services[si].characteristics[ci].value = checked
+                if c.isReadable {
+                    readStatuses[Self.handlerKey(aid: aid, iid: c.iid)] = checked == nil ? .communicationFailure : .success
+                }
+            }
+        }
         accessories[aid] = accessory
 
         await incrementAndNotify()
@@ -244,7 +254,12 @@ public actor HAPBridge {
     private var managedValues: Set<String> = []
     private var readStatuses: [String: HAPStatus] = [:]
     public func setReadStatus(aid: UInt64, iid: UInt64, status: HAPStatus) {
-        readStatuses[Self.handlerKey(aid: aid, iid: iid)] = status
+        let key = Self.handlerKey(aid: aid, iid: iid)
+        let previous = readStatuses[key] ?? .success
+        readStatuses[key] = status
+        if status != .success && status != previous {
+            notifySubscribers(aid: aid, iid: iid, value: nil, status: status)
+        }
     }
     public func readStatus(aid: UInt64, iid: UInt64) -> HAPStatus {
         readStatuses[Self.handlerKey(aid: aid, iid: iid)] ?? .success
@@ -265,6 +280,7 @@ public actor HAPBridge {
             throw HAPError.notFound
         }
 
+        var normalizedValue: HAPCharacteristicValue?
         var found = false
         for serviceIndex in 0 ..< accessory.services.count {
             for charIndex in 0 ..< accessory.services[serviceIndex].characteristics.count {
@@ -273,25 +289,9 @@ public actor HAPBridge {
                         throw HAPError.readOnly
                     }
                     let char = accessory.services[serviceIndex].characteristics[charIndex]
-                    let number: Double? = switch value {
-                    case .bool(let v): v ? 1 : 0
-                    case .uint8(let v): Double(v)
-                    case .uint16(let v): Double(v)
-                    case .uint32(let v): Double(v)
-                    case .int32(let v): Double(v)
-                    case .float(let v): v
-                    default: nil
-                    }
-                    if [.bool, .uint8, .uint16, .uint32, .int, .float].contains(char.format) {
-                        guard let number, number.isFinite else { throw HAPError.invalidValue }
-                        if char.format == .bool && number != 0 && number != 1 { throw HAPError.invalidValue }
-                        if char.format != .float && number.rounded() != number { throw HAPError.invalidValue }
-                        if number < (char.minValue ?? -.infinity) || number > (char.maxValue ?? .infinity) { throw HAPError.outOfRange }
-                        if let valid = char.validValues, !valid.contains(Int(number)) { throw HAPError.invalidValue }
-                    } else if char.format == .string, case .string = value {} else if char.format == .string { throw HAPError.invalidValue }
-                    accessory.services[serviceIndex].characteristics[charIndex].value = value.clamped(
-                        minValue: char.minValue, maxValue: char.maxValue
-                    )
+                    guard let normalized = char.normalizedWrite(value) else { throw HAPError.invalidValue }
+                    normalizedValue = normalized
+                    accessory.services[serviceIndex].characteristics[charIndex].value = normalized
                     found = true
                     break
                 }
@@ -299,14 +299,14 @@ public actor HAPBridge {
             if found { break }
         }
 
-        guard found else { throw HAPError.notFound }
+        guard found, let normalizedValue else { throw HAPError.notFound }
         let key = Self.handlerKey(aid: aid, iid: iid)
         if let handler = writeHandlers[key] {
-            try await handler(value)
+            try await handler(normalizedValue)
         }
         // Handlers that perform a real device readback own the resulting value. A failed write never changes cache.
         if !managedValues.contains(key) {
-            updateCharacteristic(aid: aid, iid: iid, value: value)
+            updateCharacteristic(aid: aid, iid: iid, value: normalizedValue)
         }
     }
 
@@ -331,14 +331,24 @@ public actor HAPBridge {
             for charIndex in 0 ..< accessory.services[serviceIndex].characteristics.count {
                 if accessory.services[serviceIndex].characteristics[charIndex].iid == iid {
                     let char = accessory.services[serviceIndex].characteristics[charIndex]
-                    let clamped = value.clamped(minValue: char.minValue, maxValue: char.maxValue)
+                    let bounded: HAPCharacteristicValue
+                    if case .string(let text) = value,
+                       ["23", "20", "21", "30", "52", "E3"].contains(char.type.rawValue) {
+                        bounded = .string(HAPString.bounded(text))
+                    } else { bounded = value }
+                    guard let normalized = char.normalizedRead(bounded) else {
+                        setReadStatus(aid: aid, iid: iid, status: .communicationFailure)
+                        return
+                    }
+                    let recovered = readStatus(aid: aid, iid: iid) != .success
+                    setReadStatus(aid: aid, iid: iid, status: .success)
                     let oldValue = char.value
-                    accessory.services[serviceIndex].characteristics[charIndex].value = clamped
+                    accessory.services[serviceIndex].characteristics[charIndex].value = normalized
                     accessories[aid] = accessory
 
                     // Notify subscribers if value changed
-                    if forceNotify || oldValue != clamped {
-                        notifySubscribers(aid: aid, iid: iid, value: clamped)
+                    if forceNotify || recovered || oldValue != normalized {
+                        notifySubscribers(aid: aid, iid: iid, value: normalized)
                     }
                     return
                 }
@@ -350,8 +360,21 @@ public actor HAPBridge {
 
     public func subscribe(connectionID: Int, aid: UInt64, iid: UInt64) {
         let key = Self.handlerKey(aid: aid, iid: iid)
-        subscriptions[key, default: []].insert(connectionID)
+        guard subscriptions[key, default: []].insert(connectionID).inserted else { return }
         logger.debug("Event subscribe: connection \(connectionID) → aid=\(aid) iid=\(iid)")
+        let status = readStatus(aid: aid, iid: iid)
+        if let handler = onCharacteristicChange {
+            let event = Self.buildEventPayload(aid: aid, iid: iid,
+                value: status == .success ? readCharacteristic(aid: aid, iid: iid) : nil, status: status)
+            Task { await handler([connectionID], event) }
+        }
+    }
+
+    public func subscriptionStatus(aid: UInt64, iid: UInt64) -> HAPStatus {
+        guard let c = accessories[aid]?.services.flatMap(\.characteristics).first(where: { $0.iid == iid }) else {
+            return .resourceDoesNotExist
+        }
+        return c.supportsNotification ? .success : .notificationNotSupported
     }
 
     public func unsubscribe(connectionID: Int, aid: UInt64, iid: UInt64) {
@@ -366,7 +389,7 @@ public actor HAPBridge {
         }
     }
 
-    private func notifySubscribers(aid: UInt64, iid: UInt64, value: HAPCharacteristicValue) {
+    private func notifySubscribers(aid: UInt64, iid: UInt64, value: HAPCharacteristicValue?, status: HAPStatus = .success) {
         let key = Self.handlerKey(aid: aid, iid: iid)
         guard let subscribers = subscriptions[key], !subscribers.isEmpty else {
             logger.debug("Event notify: aid=\(aid) iid=\(iid) — no subscribers")
@@ -377,8 +400,8 @@ public actor HAPBridge {
             return
         }
 
-        logger.debug("Event notify: aid=\(aid) iid=\(iid) value=\(value) → \(subscribers.count) subscriber(s)")
-        let eventData = Self.buildEventPayload(aid: aid, iid: iid, value: value)
+        logger.debug("Event notify: aid=\(aid) iid=\(iid) status=\(status.rawValue) → \(subscribers.count) subscriber(s)")
+        let eventData = Self.buildEventPayload(aid: aid, iid: iid, value: value, status: status)
         let subs = subscribers
         Task { await handler(subs, eventData) }
     }
@@ -393,8 +416,10 @@ public actor HAPBridge {
     /// \r\n
     /// {"characteristics":[{"aid":<aid>,"iid":<iid>,"value":<value>}]}
     /// ```
-    private static func buildEventPayload(aid: UInt64, iid: UInt64, value: HAPCharacteristicValue) -> Data {
-        let jsonValue: Any = switch value {
+    private static func buildEventPayload(aid: UInt64, iid: UInt64, value: HAPCharacteristicValue?, status: HAPStatus = .success) -> Data {
+        var charDict: [String: Any] = ["aid": aid, "iid": iid]
+        if status == .success, let value {
+            let jsonValue: Any = switch value {
         case .bool(let v): v
         case .uint8(let v): v
         case .uint16(let v): v
@@ -404,9 +429,9 @@ public actor HAPBridge {
         case .string(let v): v
         case .data(let v): v.base64EncodedString()
         case .tlv8(let v): v.base64EncodedString()
-        }
-
-        let charDict: [String: Any] = ["aid": aid, "iid": iid, "value": jsonValue]
+            }
+            charDict["value"] = jsonValue
+        } else { charDict["status"] = (status == .success ? HAPStatus.communicationFailure : status).rawValue }
         let body: [String: Any] = ["characteristics": [charDict]]
         let jsonData = (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
 

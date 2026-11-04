@@ -23,6 +23,8 @@ final class FakeMiioNetwork: MiioTransport, @unchecked Sendable {
         /// Set for a pre-MIoT device: it answers `get_prop` / `set_<name>` from these and `-9999` to MIoT methods.
         var legacyProps: [String: JSONValue]?
         var legacyCalls: [String] = []
+        /// The names of each `get_prop`, in order.
+        var legacyReads: [[String]] = []
         var receivedMethods: [String] = []
         var receivedStamps: [UInt32] = []
         var receivedPayloads: [Data] = []
@@ -89,11 +91,15 @@ final class FakeMiioNetwork: MiioTransport, @unchecked Sendable {
         var reply: [String: JSONValue] = ["id": request["id"] ?? .null]
         if var legacy = device.legacyProps, method != "miIO.info" {
             if method == "get_prop" {
-                reply["result"] = .array((params.arrayValue ?? []).map { legacy[$0.stringValue ?? ""] ?? .string("") })
-            } else if method.hasPrefix("set_"), let value = params.arrayValue?.first {
+                let names = (params.arrayValue ?? []).map { $0.stringValue ?? "" }
+                device.legacyReads.append(names)
+                reply["result"] = .array(names.map { legacy[$0] ?? .string("") })
+            } else if method.hasPrefix("set_") {
                 device.legacyCalls.append("\(method) \(params.compactJSONString)")
-                legacy[String(method.dropFirst(4))] = value
-                device.legacyProps = legacy
+                if let value = params.arrayValue?.first {
+                    legacy[String(method.dropFirst(4))] = value
+                    device.legacyProps = legacy
+                }
                 reply["result"] = .array([.string("ok")])
             } else {
                 reply["error"] = .object(["code": .number(-9999), "message": .string("user ack timeout")])

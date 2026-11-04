@@ -274,6 +274,11 @@ public struct CharacteristicProtocol: Sendable {
                     try await bridge.writeCharacteristic(aid: aid, iid: iid, value: value)
                 }
                 if let ev = charDict["ev"] as? Bool {
+                    let subscriptionStatus = await bridge.subscriptionStatus(aid: aid, iid: iid)
+                    if subscriptionStatus != .success {
+                        results.append(["aid": aid, "iid": iid, "status": subscriptionStatus.rawValue])
+                        continue
+                    }
                     if ev { await bridge.subscribe(connectionID: connectionID, aid: aid, iid: iid) }
                     else { await bridge.unsubscribe(connectionID: connectionID, aid: aid, iid: iid) }
                 }

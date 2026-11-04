@@ -8,6 +8,8 @@ Original project code is MIT licensed. Dependencies retain their original copyri
 | 组件 / Component | 固定版本 / Revision | 许可证 / License |
 | --- | --- | --- |
 | [hap-swift](https://github.com/acumen-dev/hap-swift)（内置并修改 / vendored and modified） | `638001bd3590082a8909fd4046ec226ab1349f20` | [Apache-2.0](Vendor/hap-swift/LICENSE.md) |
+| [hass-xiaomi-miot](https://github.com/al-one/hass-xiaomi-miot)（转换后的设备映射数据 / converted device mapping data） | `75bc74f67275bde6a8742b6638039819e10eaea5` | [Apache-2.0](Vendor/hass-xiaomi-miot/LICENSE) |
+| [homebridge-miot](https://github.com/merdok/homebridge-miot)（移植的 HomeKit 映射规则 / ported HomeKit mapping rules） | `2186f61f2081ec1a51c0388e3072b79741aebb0a` | [MIT](Vendor/homebridge-miot/LICENSE) |
 | [mdns-swift](https://github.com/acumen-dev/mdns-swift) | `1.2.0` | [Apache-2.0](https://github.com/acumen-dev/mdns-swift/blob/ef8c8d387a15b762816f88264667d3278042fa78/LICENSE.md) |
 | [MenuBarMijia](https://github.com/jryang1997/MenuBarMijia) | `c6a9db1c84fa` | [MIT](https://github.com/jryang1997/MenuBarMijia/blob/c6a9db1c84fa30125ed4b642b6745487dec94e89/LICENSE) |
 | [swift-asn1](https://github.com/apple/swift-asn1) | `1.7.3` | [Apache-2.0](https://github.com/apple/swift-asn1/blob/3b6410f7dee09eb33cdd26260c5fd47fda19b0e2/LICENSE.txt) |
@@ -20,6 +22,12 @@ Original project code is MIT licensed. Dependencies retain their original copyri
 
 内置 HAP 的修改见 [Vendor/hap-swift/README.md](Vendor/hap-swift/README.md)，被修改的源文件保留原版权并标记了修改。
 Local HAP changes are documented in [Vendor/hap-swift/README.md](Vendor/hap-swift/README.md); modified sources retain upstream notices and carry modification notices.
+
+旧 miIO 设备的属性映射表转换自 hass-xiaomi-miot 的 `miio2miot_specs.py`，转换方式和改动见 [Vendor/hass-xiaomi-miot/README.md](Vendor/hass-xiaomi-miot/README.md)。
+The legacy miIO property tables are converted from hass-xiaomi-miot's `miio2miot_specs.py`; the conversion and changes are documented in [Vendor/hass-xiaomi-miot/README.md](Vendor/hass-xiaomi-miot/README.md).
+
+加湿器、除湿机、取暖器、空调和窗帘的 HomeKit 服务映射参照 homebridge-miot 的类别规则移植，见 [Vendor/homebridge-miot/README.md](Vendor/homebridge-miot/README.md)。
+The HomeKit service mapping for humidifiers, dehumidifiers, heaters, air conditioners and curtains follows homebridge-miot's category rules; see [Vendor/homebridge-miot/README.md](Vendor/homebridge-miot/README.md).
 
 App 构建脚本会将项目及依赖的 LICENSE / NOTICE 等原文复制到 `MijiaLAN.app/Contents/Resources/Licenses`，随二进制一起分发。
 The app build script includes original project and dependency LICENSE / NOTICE files in `MijiaLAN.app/Contents/Resources/Licenses` for binary redistribution.

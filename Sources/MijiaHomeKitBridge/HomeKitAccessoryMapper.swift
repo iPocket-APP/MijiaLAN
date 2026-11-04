@@ -209,6 +209,10 @@ public enum HomeKitAccessoryMapper {
             let on = number != 0
             return on == s.isOn ? nil : .power(on)
 
+        case (.outletOn, .climate(let s)):
+            let on = number != 0
+            return on == isActive(s) ? nil : .power(on)
+
         case (.fanActive, .fan(let s)):
             let on = number >= 1
             return on == s.isOn ? nil : .power(on)
@@ -358,6 +362,13 @@ public enum HomeKitAccessoryMapper {
 
     private static func climateSpecs(_ s: ClimateSpec, configuredNames: [HomeKitRole: String]) -> [Spec] {
         let states = validTargetStates(for: s)
+        guard !states.isEmpty else {
+            // No auto, heat or cool capability: keep power and supported mode switches without inventing a mode.
+            return [
+                spec(.outletOn, .bool(isActive(s)), writable: true),
+                spec(.outletInUse, .bool(isActive(s))),
+            ] + climateModeSpecs(s, configuredNames: configuredNames)
+        }
         // The device's own range, kept within what Apple Home draws.
         let minTemp = max(0, s.minTemp)
         let maxTemp = min(38, max(minTemp, s.maxTemp))
@@ -390,6 +401,11 @@ public enum HomeKitAccessoryMapper {
         // Celsius; Apple Home converts for display.
         specs.append(spec(.climateDisplayUnits, .uint8(0), writable: true, min: 0, max: 1))
 
+        return specs + climateModeSpecs(s, configuredNames: configuredNames)
+    }
+
+    private static func climateModeSpecs(_ s: ClimateSpec, configuredNames: [HomeKitRole: String]) -> [Spec] {
+        var specs: [Spec] = []
         // Apple Home's heater cooler knows auto, heat and cool only.
         let extraModes: [(mode: String, role: HomeKitRole, nameRole: HomeKitRole, configuredRole: HomeKitRole, name: String, displayName: String)] = [
             ("dry", .climateDrySwitch, .climateDryName, .climateDryConfiguredName, L10n.tr("除湿", "Dry"), L10n.tr("除湿模式", "Dry Mode")),
@@ -416,7 +432,7 @@ public enum HomeKitAccessoryMapper {
         switch s.hvacMode {
         case "heat" where states.contains(1): return 1
         case "cool" where states.contains(2): return 2
-        default: return states.contains(0) ? 0 : states[0]
+        default: return states.contains(0) ? 0 : (states.first ?? 0)
         }
     }
 
@@ -435,8 +451,7 @@ public enum HomeKitAccessoryMapper {
         if s.availableModes.contains(where: autoModes.contains) { states.append(0) }
         if s.availableModes.contains("heat") { states.append(1) }
         if s.availableModes.contains("cool") { states.append(2) }
-        // HAP needs one; a device with none of these runs on Active and its mode switches.
-        return states.isEmpty ? [0] : states
+        return states
     }
 
     static func hvacMode(forTargetState state: Int, availableModes: [String]) -> String? {

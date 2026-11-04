@@ -8,6 +8,82 @@ import MijiaCore
 
 @MainActor
 struct IncrementalSyncTests {
+    @Test("Invalid firmware readings become unavailable and recover without rebuilding the accessory")
+    func invalidReadings() async throws {
+        let fixture = try await Fixture.make()
+        let before = fixture.bridge.syncStatistics
+        let iid = try #require(await fixture.hap.accessoryDatabase().first { $0.aid == 2 }?.services.flatMap(\.characteristics).first { $0.type == .rotationSpeed }?.iid)
+        for raw in [JSONValue.number(-1), .number(101), .string("50"), .bool(true)] {
+            await fixture.transport.set("8.1", raw)
+            await fixture.devices.refreshNow()
+            await fixture.settle()
+            #expect(fixture.devices.snapshots["123"]?.value("p:8:1") == nil)
+            #expect(await fixture.hap.readStatus(aid: 2, iid: iid) == .communicationFailure)
+            #expect(await fixture.hap.readCharacteristic(aid: 2, iid: iid) == .float(50))
+        }
+        await fixture.transport.set("8.1", .number(50))
+        await fixture.devices.refreshNow()
+        await fixture.settle()
+        #expect(await fixture.hap.readStatus(aid: 2, iid: iid) == .success)
+        #expect(fixture.bridge.syncStatistics.planBuilds == before.planBuilds)
+        await fixture.stop()
+    }
+
+    @Test("Truncated devices publish at most 100 services, report omissions and clear warnings when hidden")
+    func serviceLimitWarnings() async throws {
+        let identifier = UUID().uuidString
+        let properties: [[String: Any]] = (1...120).map { i in
+            ["iid": i, "type": "urn:miot-spec-v2:property:\(i == 1 ? "on" : "toggle-\(i)"):00000006:audit:1",
+             "format": "bool", "access": ["read", "write"]]
+        }
+        let json: [String: Any] = ["model": "test.audit.\(identifier)",
+            "type": "urn:miot-spec-v2:device:outlet:0000A002:audit-\(identifier):1",
+            "services": [["iid": 2, "type": "urn:miot-spec-v2:service:outlet:00007803:audit:1", "properties": properties]]]
+        let schema = try JSONDecoder().decode(DeviceSchema.self, from: JSONSerialization.data(withJSONObject: json))
+        let fixture = try await Fixture.make(schema: schema)
+        let accessory = try #require(await fixture.hap.accessoryDatabase().first { $0.aid == 2 })
+        #expect(accessory.services.count == 100)
+        let warning = try #require(fixture.bridge.serviceLimitWarnings.first)
+        #expect(warning.id == "123")
+        #expect(warning.deviceName == "Fan")
+        #expect(warning.omittedServiceCount == 21)
+        fixture.store.hideDevice("123")
+        await fixture.settle()
+        #expect(fixture.bridge.serviceLimitWarnings.isEmpty)
+        fixture.store.unhideDevice("123")
+        await fixture.settle()
+        #expect(fixture.bridge.serviceLimitWarnings.first?.omittedServiceCount == 21)
+        await fixture.stop()
+        #expect(fixture.bridge.serviceLimitWarnings.isEmpty)
+    }
+
+    @Test("Changing only the allowed climate modes refreshes the Home database while preserving IIDs")
+    func climateModeConstraints() async throws {
+        let url = try #require(Bundle.module.url(forResource: "xiaomi-mc4", withExtension: "json", subdirectory: "Specs"))
+        var schema = try JSONDecoder().decode(DeviceSchema.self, from: Data(contentsOf: url))
+        let identifier = UUID().uuidString
+        schema.model = "test.audit.\(identifier)"
+        schema.type = "urn:miot-spec-v2:device:air-conditioner:0000A004:audit-\(identifier):1"
+        let fixture = try await Fixture.make(schema: schema)
+        let before = try #require(await fixture.hap.accessoryDatabase().first { $0.aid == 2 })
+        let beforeTarget = try #require(before.services.flatMap(\.characteristics).first { $0.type.rawValue == "B2" })
+        let configuration = await fixture.hap.currentConfigurationNumber
+        #expect(beforeTarget.validValues == [1, 2])
+        let si = try #require(schema.services.firstIndex { $0.name == "air-conditioner" })
+        let pi = try #require(schema.services[si].properties.firstIndex { $0.name == "mode" })
+        schema.services[si].properties[pi].valueList?.append(.init(value: 0, description: "Auto"))
+        try JSONEncoder().encode(schema).write(to: #require(fixture.schemaURL), options: .atomic)
+        fixture.devices.reconcileConfiguration(force: true)
+        await fixture.settle()
+        let after = try #require(await fixture.hap.accessoryDatabase().first { $0.aid == 2 })
+        let afterTarget = try #require(after.services.flatMap(\.characteristics).first { $0.type.rawValue == "B2" })
+        #expect(afterTarget.validValues == [0, 1, 2])
+        #expect(afterTarget.iid == beforeTarget.iid)
+        #expect(after.services.map(\.iid) == before.services.map(\.iid))
+        #expect(await fixture.hap.currentConfigurationNumber > configuration)
+        await fixture.stop()
+    }
+
     @Test("Unchanged polls do not rebuild HomeKit plans, write defaults, or push characteristic actors")
     func unchangedPolls() async throws {
         let fixture = try await Fixture.make()
@@ -118,14 +194,24 @@ struct IncrementalSyncTests {
         let transport: SyncTestTransport
         let defaults: UserDefaults
         let suite: String
+        let schemaURL: URL?
 
-        static func make() async throws -> Fixture {
+        static func make(schema: DeviceSchema? = nil) async throws -> Fixture {
             let suite = "test.mijialan.incremental.\(UUID().uuidString)"
             let defaults = try #require(UserDefaults(suiteName: suite))
             defaults.set(false, forKey: HomeKitBridgeController.keepAwakeKey)
-            let device = LocalDevice(did: "123", name: "Fan", model: "dmaker.fan.p28", host: "test", token: String(repeating: "0", count: 32))
+            let model = schema?.model ?? "dmaker.fan.p28"
+            let schemaURL: URL?
+            if let schema {
+                let directory = LocalHomeProvider.specCacheDirectory.appendingPathComponent("instances")
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let url = directory.appendingPathComponent(schema.type.replacingOccurrences(of: ":", with: "_") + ".json")
+                try JSONEncoder().encode(schema).write(to: url, options: .atomic)
+                schemaURL = url
+            } else { schemaURL = nil }
+            let device = LocalDevice(did: "123", name: "Fan", model: model, host: "test", token: String(repeating: "0", count: 32), specType: schema?.type)
             let config = LocalHomeConfig(devices: [device])
-            let transport = SyncTestTransport()
+            let transport = SyncTestTransport(model: model)
             let api = LANMiotAPI(config: { config }, transport: transport)
             let devices = DeviceController(api: api, config: { config })
             await devices.refreshNow()
@@ -138,7 +224,7 @@ struct IncrementalSyncTests {
             bridge.attach(to: store, capabilities: devices)
             await bridge.waitUntilIdle()
             let hap = try #require(bridge.bridge)
-            let result = Fixture(api: api, devices: devices, store: store, bridge: bridge, hap: hap, transport: transport, defaults: defaults, suite: suite)
+            let result = Fixture(api: api, devices: devices, store: store, bridge: bridge, hap: hap, transport: transport, defaults: defaults, suite: suite, schemaURL: schemaURL)
             await result.settle()
             return result
         }
@@ -152,6 +238,7 @@ struct IncrementalSyncTests {
             devices.shutdown()
             await api.shutdown()
             defaults.removePersistentDomain(forName: suite)
+            if let schemaURL { try? FileManager.default.removeItem(at: schemaURL) }
         }
     }
 }
@@ -164,8 +251,10 @@ private actor CapturedEvents {
 
 private actor SyncTestTransport: MiioTransport {
     private let token = Data(repeating: 0, count: 16)
+    private let model: String
     private var offline = false
     private var values: [String: JSONValue] = ["2.1": .bool(true), "8.1": .number(50)]
+    init(model: String = "dmaker.fan.p28") { self.model = model }
     func set(_ key: String, _ value: JSONValue) { values[key] = value }
     func setOffline(_ value: Bool) { offline = value }
     func exchange(_ packet: Data, host: String, port: UInt16, timeout: Duration) async throws -> Data {
@@ -179,7 +268,7 @@ private actor SyncTestTransport: MiioTransport {
         let args = request["params"]?.arrayValue ?? []
         let result: JSONValue
         switch method {
-        case "miIO.info": result = .object(["model": .string("dmaker.fan.p28")])
+        case "miIO.info": result = .object(["model": .string(model)])
         case "get_properties":
             result = .array(args.map { p in
                 let key = "\(p["siid"]?.intValue ?? 0).\(p["piid"]?.intValue ?? 0)"

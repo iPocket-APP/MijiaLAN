@@ -2,45 +2,36 @@
 
 [简体中文](README.md) · **English**
 
-Control Mijia Wi-Fi devices from your Mac menu bar and bring them into Apple Home.
+Control Mijia Wi-Fi devices from your Mac menu bar and bring them into Apple Home over your local network.
 
-MijiaLAN talks directly to devices over your local network using miIO / MIoT. Add a device with an existing token, or scan a QR code with Xiaomi Home to import credentials from Xiaomi once. Daily control then uses the LAN. Your Mac also acts as a HomeKit bridge for iPhone, Apple Watch, HomePod and Siri.
+[Download](https://github.com/iPocket-APP/MijiaLAN/releases/latest) · [Setup](#setup) · [Device support](#device-support) · [FAQ](#faq) · [Privacy](#privacy) · [Development](#development)
+
+MijiaLAN talks to devices directly on your LAN using miIO / MIoT. You import credentials once: scan a QR code with Xiaomi Home to fetch them from Xiaomi, or enter a token you already have. Daily control then stays on the LAN. Your Mac also acts as a HomeKit bridge, so iPhone, Apple Watch, HomePod and Siri can control the same devices.
 
 ## Features
 
-- **Control Center style panel** with device tiles, power controls, detail pages and offline explanations. Left-click to show or hide the panel; right-click for the Quit menu.
-- **Apple Home bridge** with lights, outlets, fans, air purifiers, air conditioners and sensors. Choose which devices to expose.
-- **Detailed controls and shared state**: the Mac and HomeKit share capabilities, polling and command execution for supported modes, brightness, color temperature, temperature, fan speed, swing, readings and cooking presets.
-- **Local credentials**: device tokens, the registry and HomeKit pairing material live in macOS Keychain. Xiaomi cloud login sessions are not persisted.
-- **Chinese and English UI**, with system, light and dark appearances.
-- **IP rediscovery** to recover from DHCP address changes using device IDs.
-- **Background performance**: offline retries back off to a maximum interval of 24 hours. The panel releases its views after 30 seconds hidden while retaining the page, scroll position and input drafts. See [performance and background operation](docs/performance.md).
-
-## Requirements
-
-- macOS 15 or later.
-- An Apple Silicon or Intel Mac. Release packages include both architectures.
-- Connectivity between your Mac and devices, with Local Network permission enabled. HomeKit discovery also needs reachable Bonjour / mDNS.
-- Internet access for QR import and uncached device specifications.
+- **Menu bar panel**: Control Center style device tiles, with power controls, detail pages and offline explanations. Left-click to show or hide the panel; right-click for Settings and Quit.
+- **Apple Home bridge** with light, outlet, fan, air purifier, air conditioner and sensor services. Choose which devices to expose.
+- **One shared state**: the Mac and Apple Home share capabilities, polling and command execution. Modes, brightness, color temperature, temperature, fan speed, swing, readings and cooking presets follow each model.
+- **Credentials stay on your Mac**: device tokens, the registry and HomeKit pairing material live in macOS Keychain. Xiaomi cloud login sessions are not kept.
+- **IP rediscovery**: periodic discovery broadcasts update addresses by device ID after your router reassigns them.
+- **Light in the background**: retries for offline devices back off to at most once every 24 hours. The panel releases its views after 30 seconds hidden and keeps the page, scroll position and input drafts. See [performance and background operation](docs/performance.md).
+- **Chinese and English UI**, following the system or a per-app language, with light and dark appearances.
 
 ## Download and install
 
-Download `MijiaLAN-<version>-universal.dmg` from [GitHub Releases](https://github.com/iPocket-APP/MijiaLAN/releases/latest), open it and drag `MijiaLAN.app` into Applications, then launch it. A ZIP package and `SHA256SUMS.txt` checksums are also available.
+Current native Swift release: **0.1.1 (build 2)**. The Rust version uses a separate branch and `rs-` tags.
 
-Release packages are Developer ID signed with Hardened Runtime enabled and notarized by Apple. Both the app and disk image have stapled notarization tickets. Allow Local Network access when prompted.
+1. Download `MijiaLAN-<version>-universal.dmg` from [GitHub Releases](https://github.com/iPocket-APP/MijiaLAN/releases/latest), open it and drag `MijiaLAN.app` into Applications. A ZIP package and `SHA256SUMS.txt` checksums are also available.
+2. Launch the app and allow Local Network access when macOS asks.
 
-## Build and launch
+Release packages are Developer ID signed with Hardened Runtime enabled and notarized by Apple. Both the app and the disk image have stapled notarization tickets.
 
-Source builds require Xcode / command line tools providing **Swift 6.4 or later** and internet access for the initial SwiftPM dependency download.
+**Requirements**
 
-```bash
-git clone https://github.com/iPocket-APP/MijiaLAN.git
-cd MijiaLAN
-./scripts/build_app.sh
-open build/MijiaLAN.app
-```
-
-By default, the script produces an ad hoc signed `build/MijiaLAN.app` for local use. Source builds are not automatically notarized. See the [release workflow](docs/releasing.md) for distribution packaging.
+- macOS 15 or later, on an Apple Silicon or Intel Mac. Release packages include both architectures.
+- A network path between your Mac and the devices. HomeKit discovery also needs reachable Bonjour / mDNS.
+- Internet access for QR import and for device specifications that are not cached yet.
 
 ## Setup
 
@@ -49,13 +40,17 @@ By default, the script produces an ad hoc signed `build/MijiaLAN.app` for local 
 3. Choose the devices to expose in HomeKit settings. Exclude devices already connected to HomeKit natively to avoid duplicates.
 4. In Apple Home on iPhone, select **+ → Add Accessory** and scan the bridge QR code. Confirm the uncertified accessory prompt to continue.
 
-Keep the Mac and app running. Idle sleep prevention is enabled by default and can be disabled in Settings. Devices may become unresponsive in Apple Home while the Mac sleeps, shuts down or the app exits. Remote access and home automations also require a home hub such as HomePod or Apple TV.
+## Device support
 
-Reconfiguring a device's Wi-Fi may change its token; import it again in that case. A device needs valid credentials, an IP address and firmware that supports LAN control.
+MijiaLAN controls Wi-Fi devices it can reach directly on the LAN. Support comes in three levels:
 
-## Device support and limitations
+| Level | Scope | How it works |
+| --- | --- | --- |
+| Built in | The 10 models below | Specifications ship with the app and each interface is checked; controls survive an offline launch |
+| Other MIoT devices | Wi-Fi models with a specification on miot-spec.org | The specification is fetched once on import and cached; controls are generated by category |
+| Older miIO devices | About 160 older models that only accept `get_prop` / `set_*` | Property tables converted from [hass-xiaomi-miot](https://github.com/al-one/hass-xiaomi-miot) |
 
-The app bundles specifications and capability mappings for these **10 models**. Specifications, protocol mappings and automated tests do not establish hardware acceptance for every feature or firmware version.
+Built-in models:
 
 | Category | Models |
 | --- | --- |
@@ -69,11 +64,34 @@ The app bundles specifications and capability mappings for these **10 models**. 
 | Air fryer | `careli.fryer.maf07c` |
 | Rice cooker | `chunmi.cooker.cmwy3` |
 
-Bluetooth devices, Zigbee / Bluetooth Mesh gateway subdevices and cloud light groups are outside the current direct control scope. Other Wi-Fi models depend on valid credentials, firmware LAN support and available protocol mappings.
+How generated controls appear in Apple Home: lights, fans, air purifiers, humidifiers, dehumidifiers, heaters, air conditioners and curtains use their native services, the last five following [homebridge-miot](https://github.com/merdok/homebridge-miot). Other devices with a power switch appear as outlets, and readings such as temperature and humidity appear as sensors. The Mac panel builds switches, choices, numbers and readings from the specification. Properties without a clear parameter definition are not written, and services such as device information and self-check are hidden.
 
-Selecting a cooking preset only stages parameters; starting the appliance requires a separate action. Interfaces with unconfirmed parameter semantics do not send guessed commands. Additional HomeKit controls use named switches or presets, and some readings remain available only on the Mac. The AC's current temperature is currently a placeholder based on its target temperature, not a room temperature measurement.
+**Not supported yet**: Bluetooth devices, Zigbee / Bluetooth Mesh gateway subdevices, cloud light groups, and older miIO models that report state through commands rather than properties.
 
-See the [device interface matrix](docs/device-interface-matrix-2026-10-31.md) for permissions, parameters and validation limits. The matrix is currently in Chinese.
+**Verification limits**: specifications, protocol mappings and automated tests do not establish hardware acceptance for every firmware, and this project has not verified the last two levels on hardware. A property marked writable in a specification may still be rejected over the LAN by some firmware.
+
+**Control conventions**
+
+- Selecting a cooking preset only stages parameters; starting the appliance is a separate action.
+- Interfaces with unconfirmed parameter semantics never receive guessed commands.
+- Features without a suitable native Home control use named switches or presets; some readings appear only on the Mac.
+- For air conditioners and heaters without a temperature reading, the current temperature is a placeholder based on the target temperature, not a room temperature measurement.
+
+See the [device interface matrix](docs/device-interface-matrix-2026-10-31.md) for permissions, parameters and verification status. The matrix is currently in Chinese.
+
+## FAQ
+
+**Does my Mac have to stay on?**
+Yes. The bridge runs in this app, so devices show as "No Response" in Apple Home while the Mac sleeps, shuts down or the app is closed. Idle sleep prevention is on by default and can be turned off in Settings. Remote access and home automations also need a home hub such as HomePod or Apple TV.
+
+**Apple Home says the accessory is uncertified.**
+That is expected. MijiaLAN is a community project without HomeKit / MFi certification; confirm the prompt to continue.
+
+**My iPhone cannot find the bridge.**
+Check that the iPhone and Mac are on the same LAN, the network allows Bonjour / mDNS, and MijiaLAN is allowed under System Settings › Privacy & Security › Local Network.
+
+**A device shows as offline.**
+IP changes are picked up automatically. Reconfiguring a device's Wi-Fi may change its token; import it again in that case. Devices without a valid token or IP from the cloud, or whose firmware does not support LAN control, cannot be controlled.
 
 ## Privacy
 
@@ -85,16 +103,34 @@ See the [privacy notes](PRIVACY.en.md) for data flows, CLI precautions and the p
 
 ## Development
 
+### Build from source
+
+Requires Xcode or command line tools providing **Swift 6.4 or later**, and internet access for the initial SwiftPM dependency download.
+
+```bash
+git clone https://github.com/iPocket-APP/MijiaLAN.git
+cd MijiaLAN
+./scripts/build_app.sh
+open build/MijiaLAN.app
+```
+
+By default, the script produces an ad hoc signed `build/MijiaLAN.app` for local use; it is not notarized. `./scripts/build_app.sh debug` builds the Debug app. See the [release workflow](docs/releasing.md) for distribution packaging.
+
+### Tests and command line tool
+
 ```bash
 swift test
-swift build --product mijia-lan
 swift run mijia-lan discover
 swift run mijia-lan matrix
 ```
 
-The CLI also provides `info`, `get`, `set`, `call`, `spec` and `status`, which reads a registry from standard input. Run `swift run mijia-lan` without arguments for usage. Discovery hides tokens by default; `--show-tokens` explicitly enables tokens exposed by some old firmware. Token arguments to other commands may enter shell history and process arguments; prefer the app for credential import.
+The CLI also provides `info`, `get`, `set`, `call`, `spec` and `status`, which reads a registry from standard input. Run `swift run mijia-lan` without arguments for usage.
 
-Build the Debug app with `./scripts/build_app.sh debug`, then run the Debug executable with simulated devices:
+Discovery hides tokens by default; `--show-tokens` explicitly prints tokens exposed by some old firmware. Token arguments to other commands may enter shell history and process arguments, so prefer the app for credential import.
+
+### Simulated devices and screenshots
+
+After a Debug build, run the app with simulated devices:
 
 ```bash
 MIJIALAN_UI_PREVIEW=1 "$(swift build --show-bin-path)/MijiaLANApp"
@@ -111,14 +147,27 @@ MIJIALAN_UI_PREVIEW=1 "$(swift build --show-bin-path)/MijiaLANApp"
 | `MIJIALAN_UI_PAGE=<did>/settings` | Choose the initial screenshot page; defaults to Home |
 | `MIJIALAN_SNAPSHOT_WINDOW=<seconds>` | Open an interactive native preview window |
 
+### Updating the hass-xiaomi-miot tables
+
+```bash
+python3 -I scripts/import_hass_xiaomi_miot.py <path>/miio2miot_specs.py <commit>
+```
+
+The script parses the upstream file without running it and writes `Sources/MijiaLAN/Resources/hass-xiaomi-miot-miio2miot.json`. The conversion rules and changes are described in [Vendor/hass-xiaomi-miot](Vendor/hass-xiaomi-miot/README.md).
+
+### Layout
+
 | Directory | Contents |
 | --- | --- |
 | `Sources/MijiaLAN` | miIO protocol, discovery, import, credential storage, capabilities and shared controller |
 | `Sources/MijiaHomeKitBridge` | HomeKit mapping, bridge and pairing state |
 | `Sources/MijiaLANApp` | SwiftUI / AppKit menu bar interface |
-| `Sources/mijia-lan` | Command line tools |
+| `Sources/mijia-lan` | Command line tool |
 | `Tests` | Protocol, capability, security boundary, HomeKit and localization tests |
 | `Vendor/hap-swift` | HAP implementation and local fixes, under its original license |
+| `Vendor/hass-xiaomi-miot` | Upstream license and conversion notes for the mapping tables |
+| `Vendor/homebridge-miot` | Upstream license and porting notes for the HomeKit category rules |
+| `scripts` | Packaging, release and table conversion scripts |
 
 ## License and acknowledgments
 
@@ -126,6 +175,8 @@ Original project code is licensed under the [MIT License](LICENSE), copyright iP
 
 - [MenuBarMijia](https://github.com/jryang1997/MenuBarMijia)'s `MijiaCore` (MIT) provides QR login, MIoT specification parsing, device synthesis and HomeStore.
 - [hap-swift](https://github.com/acumen-dev/hap-swift) (Apache-2.0) provides HomeKit Accessory Protocol support; the vendored copy includes local fixes.
+- [hass-xiaomi-miot](https://github.com/al-one/hass-xiaomi-miot) (Apache-2.0) provides the property tables for older miIO models, converted and shipped with the app.
+- [homebridge-miot](https://github.com/merdok/homebridge-miot) (MIT) provides the HomeKit service rules for humidifiers, dehumidifiers, heaters, air conditioners and curtains, rewritten in Swift.
 - Apple Swift libraries and other transitive dependencies are listed in [third party notices](THIRD_PARTY_NOTICES.md).
 
 This is a community project with no affiliation with Xiaomi, Mijia or Apple, and no HomeKit / MFi certification. The MIT license does not grant rights to third party protocols, services or trademarks.

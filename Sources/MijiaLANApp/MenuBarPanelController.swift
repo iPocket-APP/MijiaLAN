@@ -85,6 +85,11 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
         pendingShow = nil
         presentation.hide()
         let menu = NSMenu()
+        let settings = NSMenuItem(title: L10n.tr("设置…", "Settings…"), action: #selector(openSettings), keyEquivalent: ",")
+        settings.keyEquivalentModifierMask = .command
+        settings.target = self
+        menu.addItem(settings)
+        menu.addItem(.separator())
         let quit = NSMenuItem(title: L10n.tr("退出 MijiaLAN", "Quit MijiaLAN"),
                               action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         quit.keyEquivalentModifierMask = .command
@@ -96,6 +101,15 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
         PanelTransitionDiagnostics.flushSoon()
         let y = button.isFlipped ? button.bounds.maxY : button.bounds.minY
         menu.popUp(positioning: nil, at: NSPoint(x: button.bounds.minX, y: y), in: button)
+    }
+
+    /// Opens the panel on its settings page. The panel is hidden while the menu is up, so the page measures itself
+    /// before it appears.
+    @objc private func openSettings() {
+        // Leaving the import page cancels the import, as the panel's own navigation does.
+        if session.route == .settingsImport { model.cancelImport() }
+        session.route = .settings
+        show()
     }
 
     func show() {

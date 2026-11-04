@@ -31,12 +31,17 @@ public enum DeviceInterfaceReport {
                     protocolText = "action \(c.siid).\(c.iid), in=\(c.inputs), out=\(c.outputs)"
                 } else if let legacy = LegacyMiioProfile.forModel(device.model) {
                     if let property = legacy.property(siid: c.siid, piid: c.iid) {
-                        let argument: String = switch property.format {
+                        let argument: String = switch property.write {
                         case .onOff: "on/off 字符串"
-                        case .number: "数字"
+                        case .value, nil: "数字"
+                        case .string: "文本"
+                        case .integer: "整数"
                         case .values(let table): table.sorted { $0.value < $1.value }.map { "\($0.value)→\($0.key)" }.joined(separator: ",")
+                        case .boolChoice(let on, let off): "\(on.compactJSONString)/\(off.compactJSONString)"
+                        case .methodSwitch(let on, let off): "\(on)/\(off)"
                         }
                         protocolText = "get_prop [\(property.name)]; " + (property.setter.map { "\($0) [\(argument)\(property.setterSuffix.isEmpty ? "" : ", " + property.setterSuffix.map(\.compactJSONString).joined(separator: ", "))]" } ?? "只读")
+                            + (legacy.source == .verified ? "" : "（hass-xiaomi-miot 映射）")
                     } else { protocolText = "旧 miIO 映射待确认" }
                 } else if c.prepared && !c.writable && !c.readable {
                     protocolText = "仅作为 action in 参数 \(c.siid).\(c.iid)，不读写属性"

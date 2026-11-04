@@ -73,6 +73,14 @@ public struct DeviceSchema: Codable, Equatable, Sendable {
               let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(Self.self, from: data)
     }
+    /// Bundled schemas pin the reviewed version; newly imported models use the raw spec cached at import.
+    public static func load(model: String, specType: String?) -> DeviceSchema? {
+        if let schema = bundled(model: model) { return schema }
+        guard let specType else { return nil }
+        let url = LocalHomeProvider.specCacheDirectory.appendingPathComponent("instances")
+            .appendingPathComponent(specType.replacingOccurrences(of: ":", with: "_") + ".json")
+        return (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode(Self.self, from: $0) }
+    }
     public static let bundledModels = [
         "dmaker.fan.p28", "zhimi.airpurifier.rma1", "yeelink.light.lamp4", "lumi.acpartner.mcn02",
         "chuangmi.plug.m3", "cuco.plug.v3", "careli.fryer.maf07c", "chunmi.cooker.cmwy3",
@@ -119,13 +127,34 @@ public struct DeviceCapability: Equatable, Sendable, Identifiable {
     public static func propertyID(_ siid: Int, _ piid: Int) -> String { "p:\(siid):\(piid)" }
     public static func actionID(_ siid: Int, _ aiid: Int) -> String { "a:\(siid):\(aiid)" }
 
+    /// Readings retain their precision until the destination (such as HAP) applies its advertised step.
+    /// Command validation below remains strict: read normalization must never weaken device writes.
+    public func validatedReading(_ value: JSONValue) throws -> JSONValue {
+        if format == "bool" {
+            if case .bool = value { return value }
+            if case .number(let n) = value, n == 0 || n == 1 { return .bool(n == 1) }
+            throw DeviceControlError.invalidValue(title)
+        }
+        if isNumeric {
+            guard case .number(let n) = value, n.isFinite else { throw DeviceControlError.invalidValue(title) }
+            if let min, n < min { throw DeviceControlError.invalidValue(title) }
+            if let max, n > max { throw DeviceControlError.invalidValue(title) }
+            if !options.isEmpty, !options.contains(where: { Double($0.value) == n }) { throw DeviceControlError.invalidValue(title) }
+            return value
+        }
+        if format == "string", case .string = value { return value }
+        throw DeviceControlError.invalidValue(title)
+    }
+
     public func validated(_ value: JSONValue) throws -> JSONValue {
         if format == "bool" {
             guard case .bool = value else { throw DeviceControlError.invalidValue(title) }
             return value
         }
         if isNumeric {
-            guard let n = value.doubleValue, n.isFinite else { throw DeviceControlError.invalidValue(title) }
+            // Legacy miIO numeric strings are normalized by LegacyMiioProfile before this boundary.
+            // A native MIoT numeric property must actually contain a JSON number.
+            guard case .number(let n) = value, n.isFinite else { throw DeviceControlError.invalidValue(title) }
             if format != "float", n.rounded() != n { throw DeviceControlError.invalidValue(title) }
             if let min, n < min { throw DeviceControlError.invalidValue(title) }
             if let max, n > max { throw DeviceControlError.invalidValue(title) }
@@ -254,9 +283,13 @@ public enum DeviceCapabilityCatalog {
     public static func capabilities(schema: DeviceSchema, model: String) -> [DeviceCapability] {
         let legacy = LegacyMiioProfile.forModel(model)
         var result: [DeviceCapability] = []
+        var seen: Set<String> = []
         for service in schema.services where !excludedServices.contains(service.name) {
             let argumentIDs = Set(service.actions.filter { actionNames.contains($0.name) }.flatMap(\.inputs))
             for p in service.properties {
+                // A repeated schema entry addresses the same property. Keep its first definition consistently
+                // with DeviceSnapshot.capabilitiesByID, rather than exposing duplicate controls or requests.
+                guard seen.insert(DeviceCapability.propertyID(service.iid, p.iid)).inserted else { continue }
                 let prepared = schema.isCooking && (argumentIDs.contains(p.iid) || (service.name == schema.category && preparedNames.contains(p.name)))
                 var readable = p.access.contains("read")
                 var writable = p.access.contains("write")
@@ -264,7 +297,7 @@ public enum DeviceCapabilityCatalog {
                 if let legacy {
                     let binding = legacy.property(siid: service.iid, piid: p.iid)
                     readable = readable && binding != nil
-                    writable = writable && binding?.setter != nil
+                    writable = writable && binding?.isWritable == true
                     if binding == nil { limitation = "规格存在，尚无经过确认的旧 miIO 映射" }
                 }
                 let numeric = p.format == "float" || p.format.hasPrefix("int") || p.format.hasPrefix("uint")
@@ -313,6 +346,7 @@ public enum DeviceCapabilityCatalog {
                 ))
             }
             for a in service.actions {
+                guard seen.insert(DeviceCapability.actionID(service.iid, a.iid)).inserted else { continue }
                 let supported = legacy == nil && actionNames.contains(a.name) && service.name == schema.category
                 result.append(DeviceCapability(
                     id: DeviceCapability.actionID(service.iid, a.iid), model: model, specification: schema.type, kind: .action, siid: service.iid, iid: a.iid,

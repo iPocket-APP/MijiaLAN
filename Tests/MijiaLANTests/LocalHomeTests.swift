@@ -66,9 +66,13 @@ struct LANMiotAPITests {
         _ = try await api.getProps(keys)
         #expect(await api.currentHealth()["11"]?.state == .offline)
 
-        // Back on the network: the next device-list refresh finds it.
+        // Finish the failed background probe before changing the fixture. Recovery is an explicit
+        // retry: otherwise this assertion depends on whether the 20-second backoff has already begun.
+        _ = try await api.deviceList()
         flaky.offline = false
+        await api.retryDevice(did: "11")
         #expect(try await api.deviceList().map(\.isOnline) == [true, true])
+        await api.shutdown()
     }
 
     @Test("Writes are grouped per device and a rejected write throws")

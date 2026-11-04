@@ -218,7 +218,12 @@ public final class AppleTCPServer: HAPServer, @unchecked Sendable {
     // MARK: - HAPServer
 
     public func start(port: UInt16) async throws {
+        try await start(port: port, loopbackOnly: false)
+    }
+
+    public func start(port: UInt16, loopbackOnly: Bool) async throws {
         let params = NWParameters.tcp
+        if loopbackOnly { params.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: port)!) }
         let listener: NWListener
         if port == 0 {
             listener = try NWListener(using: params)

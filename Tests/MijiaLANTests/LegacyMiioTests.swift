@@ -43,6 +43,70 @@ struct LegacyMiioProfileTests {
     }
 }
 
+/// hass-xiaomi-miot's tables as `scripts/import_hass_xiaomi_miot.py` converts them.
+struct ImportedLegacyTableTests {
+    @Test("Every converted property loads, and the checked tables keep priority")
+    func loadsCompletely() throws {
+        let url = try #require(LegacyMiioProfile.importedTableURL)
+        let document = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let models = try #require(document["models"] as? [String: [String: Any]])
+        #expect(models.count >= 150)
+        for (model, entry) in models where LegacyMiioProfile.profiles[model] == nil {
+            let properties = try #require(entry["properties"] as? [[String: Any]])
+            let profile = try #require(LegacyMiioProfile.forModel(model), "\(model)")
+            #expect(profile.properties.count == properties.count, "\(model)")
+            #expect(profile.properties.filter(\.isWritable).count == properties.filter { $0["write"] != nil }.count, "\(model)")
+        }
+        #expect(LegacyMiioProfile.forModel("chuangmi.plug.m3")?.source == .verified)
+        #expect(LegacyMiioProfile.forModel("yeelink.light.lamp4")?.property(siid: 2, piid: 2)?.setter == "set_bright")
+        #expect(LegacyMiioProfile.forModel("midea.aircondition.xa2")?.source == .hassXiaomiMiot(base: "midea.aircondition.xa1"))
+        #expect(LegacyMiioProfile.forModel("cuco.plug.v3") == nil)
+    }
+
+    @Test("The values hass-xiaomi-miot computes with Jinja templates come out the same")
+    func transforms() {
+        typealias Property = LegacyMiioProfile.Property
+        func make(_ read: Property.Read, _ write: Property.Write? = nil, suffix: [JSONValue] = []) -> Property {
+            Property(siid: 2, piid: 1, name: "x", read: read, setter: write == nil ? nil : "set_x", write: write, suffix: suffix)
+        }
+        #expect(make(.number(ratio: 0.1, offset: 0, strip: nil)).miotValue(.string("253")) == .number(25.3))
+        #expect(make(.number(ratio: 1, offset: 0, strip: "rpm")).miotValue(.string("1200rpm")) == .number(1200))
+        #expect(make(.number(ratio: 1, offset: 1, strip: nil)).miotValue(.number(2)) == .number(3))
+        #expect(make(.nonZero).miotValue(.number(3)) == .bool(true))
+        #expect(make(.nonZero).miotValue(.number(0)) == .bool(false))
+        let angle = make(.ifEquals(.string("off"), then: .number(0), else: .number(180)))
+        #expect(angle.miotValue(.string("off")) == .number(0))
+        #expect(angle.miotValue(.string("on")) == .number(180))
+        #expect(make(.values(["low": 1], fallback: 0)).miotValue(.string("turbo")) == .number(0))
+        #expect(make(.boolean).miotValue(.number(1)) == .bool(true))
+        #expect(make(.boolean).miotValue(.string("off")) == .bool(false))
+
+        #expect(make(.auto, .integer(ratio: 25, offset: 0)).legacyCall(.number(2))?.params == [.number(50)])
+        #expect(make(.auto, .integer(ratio: 1, offset: -1)).legacyCall(.number(3))?.params == [.number(2)])
+        #expect(make(.auto, .boolChoice(on: .string("swing"), off: .string("stop"))).legacyCall(.bool(true))?.params == [.string("swing")])
+        #expect(make(.auto, .onOff, suffix: [.string("smooth"), .number(500)]).legacyCall(.bool(false))?.params
+            == [.string("off"), .string("smooth"), .number(500)])
+        let usb = make(.auto, .methodSwitch(on: "set_usb_on", off: "set_usb_off")).legacyCall(.bool(false))
+        #expect(usb?.method == "set_usb_off")
+        #expect(usb?.params == [])
+    }
+
+    @Test("Readings follow the spec format: 0 / 1 become a bool for a bool property")
+    func resolvesAgainstSpec() throws {
+        let profile = try #require(LegacyMiioProfile.forModel("deerma.humidifier.jsq"))
+        let schema = try JSONDecoder().decode(DeviceSchema.self, from: Data(#"""
+            {"type": "urn:miot-spec-v2:device:humidifier:0000A00E:deerma-jsq:1", "services": [{"iid": 2,
+             "type": "urn:miot-spec-v2:service:humidifier:00007818:deerma-jsq:1", "properties": [
+              {"iid": 1, "type": "urn:miot-spec-v2:property:on:00000006:deerma-jsq:1", "format": "bool", "access": ["read", "write"]},
+              {"iid": 101, "type": "urn:miot-spec-v2:property:target-humidity:00000032:deerma-jsq:1", "format": "uint8", "access": ["read", "write"]}]}]}
+            """#.utf8))
+        #expect(profile.property(siid: 2, piid: 1)?.miotValue(.number(1)) == .number(1))
+        let resolved = profile.resolved(with: schema)
+        #expect(resolved.property(siid: 2, piid: 1)?.miotValue(.number(1)) == .bool(true))
+        #expect(resolved.property(siid: 2, piid: 101)?.miotValue(.string("45")) == .number(45))
+    }
+}
+
 struct LegacyLANTests {
     @Test("A Yeelight lamp is read with get_prop and written with its own setters")
     func yeelight() async throws {
@@ -90,6 +154,32 @@ struct LegacyLANTests {
         let probes = old.receivedMethods.filter { $0 == "miIO.info" }.count
         #expect(try await api.deviceList().first?.isOnline == true)
         #expect(old.receivedMethods.filter { $0 == "miIO.info" }.count == probes + 1)
+    }
+
+    @Test("An imported table reads in its chunk size and writes through a method per value")
+    func importedTable() async throws {
+        let network = FakeMiioNetwork()
+        let humidifier = network.add(host: "192.168.1.40", token: token, deviceID: 40)
+        humidifier.legacyProps = ["OnOff_State": .number(1), "HumiSet_Value": .number(45), "Humidity_Value": .number(52)]
+        let plug = network.add(host: "192.168.1.41", token: token, deviceID: 41)
+        plug.legacyProps = ["on": .bool(true), "usb_on": .bool(false), "temperature": .number(33), "wifi_led": .string("off")]
+        let config = ConfigBox(LocalHomeConfig(devices: [
+            device("40", "deerma.humidifier.jsq", host: "192.168.1.40"), device("41", "chuangmi.plug.v3", host: "192.168.1.41"),
+        ]))
+        let api = LANMiotAPI(config: { config.value }, transport: network)
+        _ = try await api.deviceList()
+
+        let keys = [(2, 101), (3, 1), (5, 1)].map { MiotPropKey(did: "40", siid: $0.0, piid: $0.1) }
+        let before = humidifier.legacyReads.count
+        let values = try await api.getProps(keys)
+        #expect(values[keys[0]] == .number(45))
+        #expect(values[keys[1]] == .number(52))
+        // hass-xiaomi-miot asks this model for one property per get_prop.
+        #expect(Array(humidifier.legacyReads.dropFirst(before)) == [["HumiSet_Value"], ["Humidity_Value"], ["TipSound_State"]])
+        #expect(!humidifier.receivedMethods.contains("get_properties"))
+
+        try await api.setProps([MiotPropWrite(did: "41", siid: 3, piid: 1, value: .bool(true))])
+        #expect(plug.legacyCalls == ["set_usb_on []"])
     }
 
     @Test("An IP with nothing behind it is offline right away, with a plain explanation")

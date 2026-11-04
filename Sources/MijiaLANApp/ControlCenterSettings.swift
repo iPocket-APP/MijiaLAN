@@ -26,6 +26,7 @@ struct ControlCenterSettings: View {
                     SettingsToggleRow(L10n.tr("保持 Mac 唤醒", "Keep Mac Awake"), symbol: "moon", isOn: $bridge.keepsMacAwake,
                                       subtitle: L10n.tr("家庭桥接运行时生效", "While the Home bridge is running"))
                 }
+                HomeKitServiceLimitNotice(warnings: bridge.serviceLimitWarnings)
             }
 
             Divider()
@@ -112,6 +113,7 @@ struct SettingsHomeKitManagement: View {
                 if case .failed(let message) = bridge.status {
                     Text(message).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                 }
+                HomeKitServiceLimitNotice(warnings: bridge.serviceLimitWarnings)
             }
 
             if case .running = bridge.status, !bridge.isPaired,
@@ -166,6 +168,23 @@ struct SettingsHomeKitManagement: View {
             Button(L10n.tr("取消", "Cancel"), role: .cancel) {}
         } message: {
             Text(L10n.tr("「家庭」App 会把这个桥当成新配件：房间、场景和自动化需要重新设置。", "Home will treat this bridge as a new accessory. Rooms, scenes, and automations will need to be set up again."))
+        }
+    }
+}
+
+private struct HomeKitServiceLimitNotice: View {
+    let warnings: [HomeKitBridgeController.ServiceLimitWarning]
+
+    var body: some View {
+        ForEach(warnings) { warning in
+            Label {
+                Text(L10n.tr("\(warning.deviceName)：家庭可显示的功能已达上限，另有 \(warning.omittedServiceCount) 项可在 Mac 中使用。",
+                             "\(warning.deviceName): Home's feature limit was reached. \(warning.omittedServiceCount) additional features remain available on your Mac."))
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle").accessibilityHidden(true)
+            }
+            .font(.caption).foregroundStyle(.secondary)
         }
     }
 }
