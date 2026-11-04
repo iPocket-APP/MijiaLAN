@@ -37,7 +37,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-15
+          - os: macos-15-intel
             platform: macOS
             arch: arm64
             target: aarch64-apple-darwin
@@ -92,7 +92,7 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
 
       - name: Test
         run: cargo test --locked --workspace
@@ -104,6 +104,7 @@ jobs:
           MIJIALAN_BUILD_NUMBER: ${{ github.run_number }}
           MIJIALAN_APP_OUTPUT: ${{ github.workspace }}/build/ci/MijiaLAN Rust.app
           MIJIALAN_SIGNING_IDENTITY: "-"
+          MIJIALAN_MACOS_TARGET: ${{ matrix.target }}
           CI_ARCH: ${{ matrix.arch }}
         run: |
           bash scripts/build-macos.sh release
@@ -119,9 +120,13 @@ jobs:
           (cd artifacts && shasum -a 256 "$name.zip" > "$name.sha256")
           ditto -x -k "artifacts/$name.zip" "$RUNNER_TEMP/package-smoke"
           cli="$RUNNER_TEMP/package-smoke/MijiaLAN Rust.app/Contents/MacOS/mijia-rust"
-          "$cli" --help
-          "$cli" --demo list > "$RUNNER_TEMP/demo-devices.json"
-          python3 -c 'import json, sys; devices = json.load(open(sys.argv[1])); assert isinstance(devices, list) and devices' "$RUNNER_TEMP/demo-devices.json"
+          if [[ "$CI_ARCH" == "$(uname -m)" ]]; then
+            "$cli" --help
+            "$cli" --demo list > "$RUNNER_TEMP/demo-devices.json"
+            python3 -c 'import json, sys; devices = json.load(open(sys.argv[1])); assert isinstance(devices, list) and devices' "$RUNNER_TEMP/demo-devices.json"
+          else
+            echo "Cross-compiled $CI_ARCH binaries verified; runtime smoke requires an Apple Silicon Mac."
+          fi
 
       - name: Package Windows Release
         if: runner.os == 'Windows'

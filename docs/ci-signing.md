@@ -25,6 +25,8 @@
 
 Runner 在 `$RUNNER_TEMP` 创建独立临时钥匙串，导入指定证书，并检查配置的签名身份。公证 P8 文件的权限受 `umask 077` 保护。`package-macos-release.sh` 在 CI 使用 `APPLE_API_KEY_PATH`、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER_ID`；本地仍支持 `MIJIALAN_NOTARY_PROFILE`。
 
+为避开 GitHub 托管 Apple Silicon Runner 的容量限制，CI 使用 `macos-15-intel`，安装 `aarch64-apple-darwin` 标准库，并通过 `MIJIALAN_MACOS_TARGET` 生成 arm64 App。工作区测试在 Intel 宿主机执行，目标产物另做架构、签名和公证校验；arm64 安装包的运行验证需在 Apple Silicon Mac 上完成。
+
 流程依次运行 Release 测试、构建、Developer ID / Hardened Runtime 签名、App 公证与票据附加、DMG 公证与票据附加及 Gatekeeper 检查。只有最终 DMG、ZIP、SHA-256 清单上传到本次运行的 Actions artifact。这些文件在 Runner 上生成，不进入源码 Git 历史。
 
 无论打包结果如何，清理步骤恢复钥匙串搜索列表、删除临时钥匙串和私钥文件。环境、凭据和脚本已配置不等于 CI 已通过，必须另行完成一次真实 workflow 运行。密钥授权和源码提交按用户当前授权范围执行。

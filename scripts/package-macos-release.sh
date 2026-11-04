@@ -3,7 +3,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
-[[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || { echo "Run on an Apple Silicon Mac" >&2; exit 1; }
+[[ "$(uname -s)" == Darwin ]] || { echo "Run on a Mac" >&2; exit 1; }
+if [[ "$(uname -m)" != arm64 && "${MIJIALAN_MACOS_TARGET:-}" != aarch64-apple-darwin ]]; then
+  echo "Set MIJIALAN_MACOS_TARGET=aarch64-apple-darwin to build the Apple Silicon package on Intel" >&2
+  exit 1
+fi
+[[ "${MIJIALAN_MACOS_TARGET:-aarch64-apple-darwin}" == aarch64-apple-darwin ]] || { echo "This package requires the Apple Silicon target" >&2; exit 1; }
 : "${MIJIALAN_SIGNING_IDENTITY:?Set a Developer ID Application signing identity}"
 [[ "$MIJIALAN_SIGNING_IDENTITY" != - ]] || { echo "Distribution requires Developer ID signing" >&2; exit 1; }
 if [[ -n "${APPLE_API_KEY_PATH:-}" ]]; then
@@ -29,7 +34,7 @@ mkdir -p "$staging" "$dist" "$logs"
 case "${1:-}" in
   "")
     cargo fmt --all --check 2>&1 | tee "$logs/format.log"
-    cargo test --locked --release --workspace -j 4 2>&1 | tee "$logs/tests.log"
+    cargo test --locked --release --workspace -j "${CARGO_BUILD_JOBS:-4}" 2>&1 | tee "$logs/tests.log"
     MIJIALAN_BUILD_NUMBER="$build_number" MIJIALAN_APP_OUTPUT="$app" MIJIALAN_APP_NAME=MijiaLAN \
       bash scripts/build-macos.sh release 2>&1 | tee "$logs/bundle.log"
     cargo metadata --locked --format-version 1 --filter-platform aarch64-apple-darwin > "$release/cargo-metadata.json"

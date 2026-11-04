@@ -7,20 +7,31 @@ signing_identity="${MIJIALAN_SIGNING_IDENTITY:--}"
 version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
 build_number="${MIJIALAN_BUILD_NUMBER:-1}"
 [[ "$build_number" =~ ^[1-9][0-9]*$ ]] || { echo "Expected a positive build number" >&2; exit 1; }
+macos_target="${MIJIALAN_MACOS_TARGET:-}"
+binary_root="${CARGO_TARGET_DIR:-target}"
+cargo_args=(build --locked -p mijialan-desktop -p mijialan-cli)
+if [[ -n "$macos_target" ]]; then
+  case "$macos_target" in
+    aarch64-apple-darwin|x86_64-apple-darwin) ;;
+    *) echo "Expected a macOS Rust target" >&2; exit 1 ;;
+  esac
+  cargo_args+=(--target "$macos_target")
+  binary_root="$binary_root/$macos_target"
+fi
 if [[ "$profile" == release ]]; then
-  cargo build --locked --release -p mijialan-desktop -p mijialan-cli
+  cargo_args+=(--release)
 else
-  cargo build --locked -p mijialan-desktop -p mijialan-cli
   profile=debug
 fi
+cargo "${cargo_args[@]}"
 bundle="${MIJIALAN_APP_OUTPUT:-$PWD/build/MijiaLAN Rust.app}"
 if [[ "${2:-}" == preview ]]; then
   bundle="$PWD/build/MijiaLAN Rust Preview.app"
 fi
 [[ "$bundle" == /*.app ]] || { echo "App output must be an absolute .app path" >&2; exit 1; }
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
-cp "target/$profile/mijialan-rust" "$bundle/Contents/MacOS/mijialan-rust"
-cp "target/$profile/mijia-rust" "$bundle/Contents/MacOS/mijia-rust"
+cp "$binary_root/$profile/mijialan-rust" "$bundle/Contents/MacOS/mijialan-rust"
+cp "$binary_root/$profile/mijia-rust" "$bundle/Contents/MacOS/mijia-rust"
 cp LICENSE THIRD_PARTY_NOTICES.md PRIVACY.md "$bundle/Contents/Resources/"
 ditto licenses "$bundle/Contents/Resources/Licenses"
 if [[ -f resources/macos/AppIcon.icns ]]; then
