@@ -27,6 +27,10 @@ Runner 在 `$RUNNER_TEMP` 创建独立临时钥匙串，导入指定证书，并
 
 为避开 GitHub 托管 Apple Silicon Runner 的容量限制，CI 使用 `macos-15-intel`，安装 `aarch64-apple-darwin` 标准库，并通过 `MIJIALAN_MACOS_TARGET` 生成 arm64 App。工作区测试在 Intel 宿主机执行，目标产物另做架构、签名和公证校验；arm64 安装包的运行验证需在 Apple Silicon Mac 上完成。
 
-流程依次运行 Release 测试、构建、Developer ID / Hardened Runtime 签名、App 公证与票据附加、DMG 公证与票据附加及 Gatekeeper 检查。只有最终 DMG、ZIP、SHA-256 清单上传到本次运行的 Actions artifact。这些文件在 Runner 上生成，不进入源码 Git 历史。
+普通矩阵顺序执行，先运行 Windows 检查。所有 macOS 作业与正式打包共享 `mijialan-macos-hosted` concurrency group，在调度层等待，而不同时申请多台 Mac Runner，减少因托管容量不足导致的作业失败。
+
+流程依次运行工作区测试、Release 构建、Developer ID / Hardened Runtime 签名、App 公证与票据附加、DMG 公证与票据附加及 Gatekeeper 检查。CI 的 Intel 宿主机测试使用 Debug 配置，分发二进制使用 arm64 Release 配置；本地脚本默认仍运行 Release 测试。最终 DMG、ZIP、SHA-256 清单上传到本次运行的 Actions artifact。这些文件在 Runner 上生成，不进入源码 Git 历史。
+
+附加和验证公证票据会对临时网络失败做最多六次重试，单次等待不超过 30 秒，最终失败仍使 workflow 失败。Rust 缓存在打包失败后也会保存。如果已完成签名的 App 存在，失败时另保留一个带校验清单的 recovery artifact 三天，便于重试封装；其中不包含钥匙串、公证私钥或日志。
 
 无论打包结果如何，清理步骤恢复钥匙串搜索列表、删除临时钥匙串和私钥文件。环境、凭据和脚本已配置不等于 CI 已通过，必须另行完成一次真实 workflow 运行。密钥授权和源码提交按用户当前授权范围执行。

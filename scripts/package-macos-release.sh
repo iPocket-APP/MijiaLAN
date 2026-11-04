@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
+source scripts/lib/notarization.sh
 [[ "$(uname -s)" == Darwin ]] || { echo "Run on a Mac" >&2; exit 1; }
 if [[ "$(uname -m)" != arm64 && "${MIJIALAN_MACOS_TARGET:-}" != aarch64-apple-darwin ]]; then
   echo "Set MIJIALAN_MACOS_TARGET=aarch64-apple-darwin to build the Apple Silicon package on Intel" >&2
@@ -34,7 +35,13 @@ mkdir -p "$staging" "$dist" "$logs"
 case "${1:-}" in
   "")
     cargo fmt --all --check 2>&1 | tee "$logs/format.log"
-    cargo test --locked --release --workspace -j "${CARGO_BUILD_JOBS:-4}" 2>&1 | tee "$logs/tests.log"
+    test_args=(test --locked --workspace -j "${CARGO_BUILD_JOBS:-4}")
+    case "${MIJIALAN_TEST_PROFILE:-release}" in
+      release) test_args+=(--release) ;;
+      debug) ;;
+      *) echo "Expected release or debug test profile" >&2; exit 1 ;;
+    esac
+    cargo "${test_args[@]}" 2>&1 | tee "$logs/tests.log"
     MIJIALAN_BUILD_NUMBER="$build_number" MIJIALAN_APP_OUTPUT="$app" MIJIALAN_APP_NAME=MijiaLAN \
       bash scripts/build-macos.sh release 2>&1 | tee "$logs/bundle.log"
     cargo metadata --locked --format-version 1 --filter-platform aarch64-apple-darwin > "$release/cargo-metadata.json"
@@ -63,8 +70,8 @@ ditto -c -k --sequesterRsrc --keepParent "$app" "$release/notarization.zip"
 xcrun notarytool submit "$release/notarization.zip" "${notary_auth[@]}" \
   --wait --timeout 20m --output-format json > "$logs/notarization-app.json"
 [[ "$(plutil -extract status raw "$logs/notarization-app.json")" == Accepted ]]
-xcrun stapler staple "$app"
-xcrun stapler validate "$app"
+retry_notarization_ticket xcrun stapler staple "$app"
+retry_notarization_ticket xcrun stapler validate "$app"
 spctl --assess --type execute --verbose=4 "$app" 2> "$logs/gatekeeper-app.txt"
 ditto -c -k --sequesterRsrc --keepParent "$app" "$dist/$name.zip"
 
@@ -87,8 +94,8 @@ codesign --verify --strict "$dist/$name.dmg"
 xcrun notarytool submit "$dist/$name.dmg" "${notary_auth[@]}" \
   --wait --timeout 20m --output-format json > "$logs/notarization-dmg.json"
 [[ "$(plutil -extract status raw "$logs/notarization-dmg.json")" == Accepted ]]
-xcrun stapler staple "$dist/$name.dmg"
-xcrun stapler validate "$dist/$name.dmg"
+retry_notarization_ticket xcrun stapler staple "$dist/$name.dmg"
+retry_notarization_ticket xcrun stapler validate "$dist/$name.dmg"
 spctl --assess --type open --context context:primary-signature --verbose=4 "$dist/$name.dmg" 2> "$logs/gatekeeper-dmg.txt"
 (cd "$dist" && shasum -a 256 "$name.dmg" "$name.zip" > SHA256SUMS.txt)
 echo "Signed and notarized packages: $dist"

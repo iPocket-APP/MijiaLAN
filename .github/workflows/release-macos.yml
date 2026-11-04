@@ -6,7 +6,7 @@ on:
       build_number:
         description: Positive build number for this experience package
         required: true
-        default: '6'
+        default: '7'
         type: string
   push:
     tags:
@@ -25,6 +25,9 @@ jobs:
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/MijiaLAN-rs') ||
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rs-v'))
     runs-on: macos-15-intel
+    concurrency:
+      group: mijialan-macos-hosted
+      cancel-in-progress: false
     environment: macos-release
     timeout-minutes: 90
     defaults:
@@ -34,8 +37,11 @@ jobs:
       CARGO_TERM_COLOR: always
       CARGO_BUILD_JOBS: '2'
       CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
       MACOSX_DEPLOYMENT_TARGET: '11.0'
       MIJIALAN_MACOS_TARGET: aarch64-apple-darwin
+      MIJIALAN_TEST_PROFILE: debug
       MIJIALAN_SIGNING_IDENTITY: ${{ vars.MIJIALAN_SIGNING_IDENTITY }}
       APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
       APPLE_API_ISSUER_ID: ${{ vars.APPLE_API_ISSUER_ID }}
@@ -74,6 +80,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: signed-macos-aarch64-apple-darwin
+          cache-on-failure: true
 
       - name: Set up Xcode and Metal
         run: |
@@ -108,3 +115,27 @@ jobs:
       - name: Clean up signing materials
         if: always()
         run: bash scripts/ci/cleanup-macos-signing.sh
+
+      - name: Preserve signed app after packaging failure
+        if: failure()
+        run: |
+          [[ -n "${MIJIALAN_RELEASE_VERSION:-}" && -n "${MIJIALAN_BUILD_NUMBER:-}" ]] || exit 0
+          release="build/releases/v${MIJIALAN_RELEASE_VERSION}-rs.${MIJIALAN_BUILD_NUMBER}"
+          app="$release/staging/MijiaLAN.app"
+          if [[ -d "$app" ]] && codesign --verify --deep --strict "$app"; then
+            mkdir -p "$release/recovery"
+            ditto -c -k --sequesterRsrc --keepParent "$app" "$release/recovery/MijiaLAN-signed-app.zip"
+            (cd "$release/recovery" && shasum -a 256 MijiaLAN-signed-app.zip > SHA256SUMS.txt)
+          fi
+
+      - name: Upload packaging recovery
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: MijiaLAN-rs-${{ env.MIJIALAN_RELEASE_VERSION }}-b${{ env.MIJIALAN_BUILD_NUMBER }}-recovery
+          path: |
+            build/releases/v${{ env.MIJIALAN_RELEASE_VERSION }}-rs.${{ env.MIJIALAN_BUILD_NUMBER }}/recovery/*.zip
+            build/releases/v${{ env.MIJIALAN_RELEASE_VERSION }}-rs.${{ env.MIJIALAN_BUILD_NUMBER }}/recovery/SHA256SUMS.txt
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 3

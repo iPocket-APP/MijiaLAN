@@ -29,14 +29,23 @@ jobs:
   build:
     name: ${{ matrix.platform }} (${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
+    concurrency:
+      group: ${{ matrix.platform == 'macOS' && 'mijialan-macos-hosted' || format('mijialan-windows-{0}', github.run_id) }}
+      cancel-in-progress: false
     defaults:
       run:
         shell: ${{ matrix.shell }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
+          - os: windows-2022
+            platform: Windows
+            arch: x86_64
+            target: x86_64-pc-windows-msvc
+            shell: pwsh
           - os: macos-15-intel
             platform: macOS
             arch: arm64
@@ -47,11 +56,6 @@ jobs:
             arch: x86_64
             target: x86_64-apple-darwin
             shell: bash
-          - os: windows-2022
-            platform: Windows
-            arch: x86_64
-            target: x86_64-pc-windows-msvc
-            shell: pwsh
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
