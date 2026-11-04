@@ -46,12 +46,17 @@ case "${1:-}" in
       bash scripts/build-macos.sh release 2>&1 | tee "$logs/bundle.log"
     cargo metadata --locked --format-version 1 --filter-platform aarch64-apple-darwin > "$release/cargo-metadata.json"
     python3 scripts/collect-cargo-licenses.py "$release/cargo-metadata.json" "$app/Contents/Resources/Licenses/Cargo"
-    # Notices are part of the sealed resources; sign again after adding them.
-    codesign --force --sign "$MIJIALAN_SIGNING_IDENTITY" --options runtime --timestamp "$app"
     ;;
   --package-existing) echo "Packaging the existing signed app: $app" ;;
   *) echo "Usage: $0 [--package-existing]" >&2; exit 1 ;;
 esac
+
+# A private runner umask must not make the distributed app owner-only.
+# find does not follow symlinks, so linked files outside the bundle stay intact.
+find "$app" -type d -exec chmod 755 {} +
+find "$app" -type f -exec chmod u=rwX,go=rX {} +
+# Notices are part of the sealed resources; sign again after adding them.
+codesign --force --sign "$MIJIALAN_SIGNING_IDENTITY" --options runtime --timestamp "$app"
 
 [[ "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" == xyz.ipocket.MijiaLAN.Rust ]]
 [[ "$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")" == "$version" ]]
@@ -88,6 +93,8 @@ MijiaLAN · Rust 版 · Apple Silicon
 请避免同时运行两个使用同一 Rust 数据目录的桥接实例。
 首次使用 Developer ID 签名版本时，macOS 可能要求重新允许读取已有钥匙串凭据。
 NOTE
+chmod 755 "$image_root"
+chmod 644 "$image_root/LICENSE" "$image_root/THIRD_PARTY_NOTICES.md" "$image_root/PRIVACY.md" "$image_root/体验说明.txt"
 hdiutil create -volname "MijiaLAN rs $version" -srcfolder "$image_root" -format UDZO -ov "$dist/$name.dmg"
 codesign --force --sign "$MIJIALAN_SIGNING_IDENTITY" --timestamp "$dist/$name.dmg"
 codesign --verify --strict "$dist/$name.dmg"

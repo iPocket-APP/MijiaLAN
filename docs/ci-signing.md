@@ -29,6 +29,8 @@ Runner 在 `$RUNNER_TEMP` 创建独立临时钥匙串，导入指定证书，并
 
 正式签名 workflow 也支持本机 Apple Silicon Runner：在仓库级 Actions variable `MIJIALAN_MACOS_RUNNER` 中填写专用 Runner label；未设置时仍使用上述托管镜像。该变量需要在触发构建前配置，不能放在 Environment variables 中。可使用带独立 label、`--no-default-labels` 和 `--ephemeral` 的临时 Runner，只执行一次任务后自动注销。构建结束后删除临时变量，恢复托管机器默认值；不需要安装常驻服务。本机需预装 Rust 1.98.1、rustfmt、clippy 和可用的 Xcode / Metal 工具链；workflow 使用当前选中的 Xcode，通过 `DEVELOPER_DIR` 指定，不修改系统 Xcode 选择，也不安装或切换本机 Rust。已有 Cargo 缓存可以通过 Runner 进程的 `CARGO_TARGET_DIR` 复用，目录应位于 Git 忽略范围内。
 
+Runner 的安装路径和工作目录应不含空格，避免 shell 脚本路径解析失败。正式封装会在签名前将 App 目录和可执行文件规范为 `755`、普通资源文件规范为 `644`，并设置 DMG 根目录和说明文件的读取权限；Runner 的私有 `umask` 不会进入分发包。签名私钥所在的临时目录仍使用独立的严格权限。
+
 普通矩阵顺序执行，先运行 Windows 检查。托管 macOS 作业与正式打包共享 `mijialan-macos-hosted` concurrency group，在调度层等待，而不同时申请多台 Mac Runner。使用本机专用 label 时，正式打包使用该 label 作为独立 concurrency group，避免等待托管机器。
 
 流程依次运行工作区测试、Release 构建、Developer ID / Hardened Runtime 签名、App 公证与票据附加、DMG 公证与票据附加及 Gatekeeper 检查。托管 Intel 宿主机测试使用 Debug 配置，本机 Apple Silicon Runner 使用 Release 配置；分发二进制均使用 arm64 Release 配置。最终 DMG、ZIP、SHA-256 清单上传到本次运行的 Actions artifact。这些文件在 Runner 上生成，不进入源码 Git 历史。
