@@ -1,131 +1,155 @@
-# MijiaLAN · 米家局域网桥
+# MijiaLAN
 
-**简体中文** · [English](README.en.md)
+米家局域网客户端与 HomeKit 桥。此为 `MijiaLAN-rs` 分支，使用 Rust、GPUI 和 GPUI Component；仓库与产品名称仍为 MijiaLAN。Swift 版本保留在 `main` 分支，Rust 工程可直接从当前分支根目录构建。
 
-通过 Mac 菜单栏控制米家 Wi-Fi 设备，并把设备接入 Apple「家庭」。
+macOS 使用顶部菜单栏，Windows 使用右下角系统托盘，两者共享紧凑设备面板：左键切换面板，点击面板外部或按 Escape 收起，右键打开设置或退出。面板收起后仍保持设备轮询与 HomeKit 服务。Windows 面板按托盘所在显示器的工作区和 DPI 定位，并使用独立的房屋应用图标。Linux 使用系统托盘和桌面窗口；托盘采用 StatusNotifierItem，无需 GTK。
 
-MijiaLAN 使用 miIO / MIoT 协议直接与局域网设备通信。已有设备 token 时可手动添加，也可以用米家 App 扫码，一次性从小米云导入凭据。导入后的日常控制走局域网，Mac 同时充当 HomeKit 桥，让 iPhone、Apple Watch、HomePod 和 Siri 访问这些设备。
+Mac 界面沿用原 Swift 客户端的布局：360 pt 宽菜单栏面板，在线设备双列磁贴、离线设备三列网格，台灯亮度条、空调温控和分组设置。窗口按页面内容调整高度，长列表可滚动；外观可选择自动、浅色或深色。语言可在原生应用菜单「语言 / Language」中切换。控件由 GPUI 绘制，字体细节和转场与 SwiftUI 仍有差异。
+
+Mac 的服务器选择使用 AppKit 原生 `NSMenu`，在 macOS 26 及更新版本随系统呈现 Liquid Glass，旧系统使用对应的原生菜单外观。支持选中勾选、键盘操作及 Escape 取消；关闭菜单会保留设置面板，再按 Escape 可收起面板。地区选择在本次运行中随面板重开保留。
+
+## 运行
+
+需要 Rust stable 与对应平台的编译工具。本机使用 Rust 1.98.1、macOS 和 Xcode 验证。
+
+```sh
+# 正常运行：首次扫码导入或手动添加设备
+cargo run --bin mijialan-rust
+
+# 演示：内存中的模拟设备，不读取真实凭据、不控制真实设备
+cargo run --bin mijialan-rust -- --demo
+```
+
+macOS 打包：
+
+```sh
+./scripts/build-macos.sh debug
+open "build/MijiaLAN Rust.app"
+```
+
+首次编译 GPUI 需要完整的 Xcode 与 Metal Toolchain。若提示缺少 Metal 编译工具，执行 `xcodebuild -downloadComponent MetalToolchain`。本地包使用临时签名，尚未进行 Developer ID 签名或 Apple 公证。
+
+临时签名的代码身份会随重新构建变化，macOS 可能再次要求允许本应用访问自己的钥匙串凭据；这时无需重新扫码导入。需要反复更新本地构建时，可以指定本机已有的固定签名身份：`MIJIALAN_SIGNING_IDENTITY="Apple Development: …" ./scripts/build-macos.sh debug`。脚本会分别签名 CLI 和 App；这两个可执行文件首次读取凭据时可能分别需要系统授权。
+
+Apple Silicon 的正式体验包使用 Release 优化、Developer ID 签名及 Hardened Runtime，App 和 DMG 分别公证并附加票据。生成 DMG、ZIP 和 SHA-256 清单：
+
+```sh
+MIJIALAN_SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
+MIJIALAN_NOTARY_PROFILE='your-existing-notary-profile' \
+bash scripts/package-macos-release.sh
+```
+
+安装包内 App 显示名为 MijiaLAN，保留 `xyz.ipocket.MijiaLAN.Rust` 标识及已有 Rust 数据目录。打包不会发布 GitHub Release；复现步骤和验收边界见 [macOS 打包说明](docs/packaging.md#macos-release)。
+
+Windows 需要 Visual Studio C++ Build Tools、Windows SDK 与 CMake。Linux 需要 C/C++ 编译工具、Clang、字体、X11 / Wayland 和 Vulkan 开发包，依赖清单见 [scripts/docker/Dockerfile](scripts/docker/Dockerfile)。GNOME 显示托盘图标通常还需要 StatusNotifierItem / AppIndicator 扩展。
+
+Windows / Linux 打包入口：
+
+```powershell
+# 在 Windows 的 Visual Studio Developer PowerShell 中运行，生成便携 ZIP
+./scripts/build-windows.ps1 -Profile release
+```
+
+```sh
+# 在 Linux 开发环境中运行，生成 DEB 与 tar.gz
+bash scripts/build-linux.sh release
+```
+
+Windows / Linux 产物位于 `artifacts/`，包含 SHA-256 清单。Linux x64 构建容器生成 Windows GNU Debug MSI / ZIP 和 Linux Debug DEB / tar.gz；这些是未签名的测试候选包。群晖 Windows 11 已验证紧凑托盘、扫码导入、凭据重读及台灯 GUI 调光和独立 LAN 读回；Windows 的 iPhone 家庭配对尚未验收。Linux 已完成干净 Debian 容器安装、CLI 运行及 33 项核心 / HomeKit 测试，Linux 桌面尚未验收。原生 Release 构建、容器复现与验证边界见 [打包说明](docs/packaging.md)。
+
+GPUI 0.2.2 没有 tvOS 后端，不能将当前桌面项目直接打成 Apple TV 安装包。电视端需要单独的 tvOS 界面、遥控器焦点交互和平台适配；共享 Rust 协议核心可作为移植基础。
 
 ## 功能
 
-- **控制中心式面板**：设备磁贴、电源开关、详情页和离线原因都在菜单栏里。左键显示或隐藏面板，右键打开退出菜单。
-- **Apple 家庭桥接**：按设备类型提供灯、插座、风扇、空气净化器、空调及传感器服务，可单独选择要桥接的设备。
-- **详细控制与共享状态**：Mac 与 HomeKit 共用能力目录、轮询和命令执行入口，支持机型对应的模式、亮度、色温、温度、风速、摆动、读数和厨房设备菜单。
-- **本地凭据存储**：设备 token、设备清单和 HomeKit 配对信息保存在 macOS 钥匙串，不持久化小米云登录会话。
-- **中英文界面**：跟随系统或单独 App 语言设置，支持系统、浅色和深色外观。
-- **自动找回 IP**：定期广播发现设备，在 DHCP 地址变化后按设备 ID 更新地址。
-- **后台性能优化**：离线重试逐步退避，最长间隔 24 小时；面板隐藏 30 秒后释放界面，并保留页面、滚动位置和输入草稿。详见[性能与后台运行说明](docs/performance.md)。
+- miIO UDP 54321 通信、设备时钟同步、请求 ID 匹配、AES-CBC 与 MD5 数据包校验。
+- 广播发现与按设备 ID 自动更新 IP；在线轮询与离线指数退避。
+- 手动添加设备：先通过握手和 `miIO.info` 验证，再保存凭据。
+- 米家扫码导入，支持 cn、de、us、sg、ru、i2 地区；导入完成后丢弃登录会话。扫码任务独立于面板，收起后可继续等待手机确认。
+- 内置 10 个型号的 MIoT 规格，其他型号可从 miot-spec.org 下载并缓存。
+- 早期 miIO 型号沿用转换后的 hass-xiaomi-miot 属性表，并保留原项目手工核对的台灯、插座与空调伴侣映射。
+- 根据规格生成开关、选项、滑块和读数。写入前验证访问权限、数值范围和步长；无参数定义的属性只读。
+- Mac 设备信息提供与原版一致的「兼容性说明」折叠列表；按设备规格列出尚未适配、参数不完整及可通过现有控件替代的能力，支持中英文。
+- 厨房设备参数可先选择为草稿，再单独执行规格中已确认的烹饪动作；不会因为选择菜单而自动开始烹饪。
+- HomeKit：SRP Pair Setup、Ed25519 / X25519 Pair Verify、ChaCha20-Poly1305 连接、mDNS 广播、控制器权限和状态通知。
+- HomeKit 的数据库、读取与事件共用类型、范围和步长校验；异常读数标为不可用，写入请求在设备单位转换前验证。按实际支持模式提供必需特征，复杂规格超出桥接上限时保留主功能并在家庭桥信息中提示。
+- HomeKit 原生服务覆盖灯、插座、风扇、净化器、加湿器、除湿机、取暖器、空调、窗帘及传感器；剩余能力使用具名开关和预设表达。
+- 桥接身份、配对、AID / IID 和配置编号持久化；设备离线不移除配件；逐台选择是否桥接，支持 Configured Name。
+- 桥接时可阻止闲置休眠，不阻止显示器关闭；可单独关闭此选项。
+- 中英文界面、浅色 / 深色外观、房间筛选和键盘快捷键。关闭面板后释放视图，保留页面、滚动位置和参数草稿。
+- Mac 滑块连续调节并合并快速拖动中的数值；手动数值输入保留独立的「应用」操作。设备菜单支持重连及选择是否显示在家庭中，重置家庭配对需要再次确认。
 
-## 环境要求
+暂不支持蓝牙、Zigbee / Mesh 网关子设备、云灯组，以及没有已确认 LAN 命令映射的设备；与原项目的局域网边界一致。原 Swift 客户端的数据和 HomeKit 身份不会自动读入，新客户端需要重新导入和配对。
 
-- macOS 15 或更高版本。
-- Apple Silicon 或 Intel Mac，发行包同时包含两种架构。
-- Mac 与设备网络互通，并允许 App 访问「本地网络」；HomeKit 发现还需要 Bonjour / mDNS 可达。
-- 扫码导入及获取尚未缓存的设备规格需要联网。
+## 凭据与隐私
 
-## 下载与安装
+本项目使用独立的服务标识 `xyz.ipocket.MijiaLAN.Rust`。
 
-在 [GitHub Releases](https://github.com/iPocket-APP/MijiaLAN/releases/latest) 下载 `MijiaLAN-<版本号>-universal.dmg`，打开后将 `MijiaLAN.app` 拖入「应用程序」并启动。也提供 ZIP 包和 `SHA256SUMS.txt` 校验值。
+- 普通设备清单不含 Token；设备 Token、HomeKit 私钥和配对信息写入带随机 nonce 的 ChaCha20-Poly1305 加密文件。
+- 32 字节主密钥保存在 macOS Keychain、Windows Credential Manager 或 Linux Secret Service。这样不会受到 Windows 单个凭据项大小限制。
+- 凭据存储不可用、密钥丢失或认证失败时报告错误，不回退到明文，不覆盖已有数据。
+- 小米云登录会话只存在内存中；日常控制使用 LAN，不提供自建云、遥测或广告服务。
+- `--demo` 完全使用内存凭据。示例 Token 均为测试数据。
 
-正式发行包使用 Developer ID 签名、启用 Hardened Runtime，并经过 Apple 公证，App 与 DMG 均附有公证票据。macOS 询问「本地网络」权限时请选择允许。
+Linux 真实使用需要可用且已解锁的 Secret Service。无桌面的服务环境也需要为运行用户配置相应凭据服务。
 
-## 构建与启动
+首次联网可能触发 macOS「本地网络」、LuLu 或 Windows 防火墙提示。设备发现需要 UDP 广播；HomeKit 需要 TCP 与 mDNS。请按实际用途允许此应用，不需要关闭系统防火墙。详情见 [PRIVACY.md](PRIVACY.md)。
 
-源码构建需要提供 **Swift 6.4 或更高版本**的 Xcode / 命令行工具，首次下载 SwiftPM 依赖需要联网。
+## CLI / 后台运行
 
-```bash
-git clone https://github.com/iPocket-APP/MijiaLAN.git
-cd MijiaLAN
-./scripts/build_app.sh
-open build/MijiaLAN.app
+```sh
+cargo run -p mijialan-cli -- discover
+cargo run -p mijialan-cli -- list
+cargo run -p mijialan-cli -- add 192.168.31.20 --name "书桌台灯"
+cargo run -p mijialan-cli -- login --region cn
+cargo run -p mijialan-cli -- refresh
+cargo run -p mijialan-cli -- set <did> 2.1 true
+cargo run -p mijialan-cli -- bridge
 ```
 
-默认脚本会生成并临时签名 `build/MijiaLAN.app`，用于本机运行；自行构建不会自动进行 Apple 公证。正式发行打包流程见[发行说明](docs/releasing.md)。
+`add` 交互式读取 Token，不将其放在命令行参数中。`list` 不输出凭据。`bridge` 常驻运行，Ctrl+C 停止。GUI 与 CLI 使用同一个数据目录；避免同时启动两个桥接实例。
 
-## 使用
+## 结构
 
-1. 打开菜单栏面板，进入设置。
-2. 选择服务器地区，点击「扫码导入设备」，用手机的米家 App 扫码确认。已有凭据时，也可以手动填写设备 IP 和 32 位十六进制 token。
-3. 在 HomeKit 设置里选择要放进「家庭」的设备。已经原生接入 HomeKit 的设备可取消桥接，避免重复。
-4. 在 iPhone「家庭」中选择 **+ → 添加配件**，扫描桥的二维码。HomeKit 会提示这是未认证配件，确认后继续添加。
-
-Mac 需要持续运行此 App。默认启用防止闲置休眠，可在设置中关闭；Mac 休眠、关机或 App 退出时，桥接设备可能显示「无响应」。家庭外的远程访问和自动化还需要 HomePod 或 Apple TV 等家居中枢。
-
-设备重新配网可能改变 token，此时需要重新导入。云端未返回有效 token / IP，或固件未开放局域网接口的设备，无法仅凭设备名称实现控制。
-
-## 设备支持与边界
-
-当前内置以下 **10 个型号**的 MIoT 规格与能力适配。规格、协议映射和自动化测试并不代表所有固件都已完成实机控制验收。
-
-| 类别 | 型号 |
+| 路径 | 职责 |
 | --- | --- |
-| 插座 | `chuangmi.plug.m3`、`cuco.plug.v3` |
-| 空气净化器 | `zhimi.airpurifier.rma1` |
-| 台灯 | `yeelink.light.lamp4` |
-| 空调伴侣 | `lumi.acpartner.mcn02` |
-| 循环扇 | `dmaker.fan.p28` |
-| 破壁料理机 | `chunmi.juicer.a1` |
-| 养生壶 | `chunmi.health_pot.a1` |
-| 空气炸锅 | `careli.fryer.maf07c` |
-| 电饭煲 | `chunmi.cooker.cmwy3` |
+| `crates/core` | 协议、发现、规格、旧型号适配、扫码导入、凭据与共享设备状态 |
+| `crates/homekit` | 配对、加密 TCP、mDNS、权限、能力映射和事件通知 |
+| `crates/desktop` | GPUI 界面、系统托盘、macOS 原生面板与视图状态 |
+| `crates/cli` | 探测、导入、控制与无界面桥接 |
+| `resources` | 内置规格和旧型号映射 |
 
-蓝牙设备、Zigbee / 蓝牙 Mesh 网关子设备和云端灯组不在当前直接控制范围内。其他 Wi-Fi 型号是否可用，取决于有效凭据、固件的局域网支持和已有协议映射。
+GPUI 固定为 0.2.2，GPUI Component / Assets 固定为与其兼容的 0.5.1，避免框架 API 漂移。HAP 的 SRP 部分使用 hap-crypto 1.4.0，其余配对状态机、连接、桥接和设备映射在本项目中实现。
 
-厨房设备选择菜单只设置待应用参数，仍需单独执行开始动作。没有确认参数语义的接口不会发送猜测命令。HomeKit 无适合原生控件的项目通过具名开关或预设表达，部分读数仅在 Mac 展示。空调的「当前温度」目前使用设定温度占位，不能当作实测室温。
+## 验证
 
-逐项权限、参数和验证边界见 [设备接口矩阵](docs/device-interface-matrix-2026-10-31.md)。
+### GitHub 自动构建
 
-## 隐私
+[Build 工作流](.github/workflows/ci.yml) 在 push、Pull Request 和手动运行时执行格式检查、Clippy、完整工作区测试，并构建桌面 App 与 CLI 的 Release 包：
 
-MijiaLAN 没有自建云服务、广告或分析 SDK。扫码导入会连接小米服务；导入或手动添加时，规格服务可能访问 `miot-spec.org`。设备控制使用 UDP 54321，Apple「家庭」通过局域网 HAP 桥访问设备。
+| 平台 | 架构 | 下载产物 |
+| --- | --- | --- |
+| macOS | Apple Silicon / arm64 | 含 `.app` 的 ZIP 和 SHA-256 清单 |
+| macOS | Intel / x86_64 | 含 `.app` 的 ZIP 和 SHA-256 清单 |
+| Windows | x86_64 / MSVC | 便携 ZIP 和 SHA-256 清单 |
 
-源码中的测试 token 和预览数据是示例。真实设备清单、钥匙串数据、配对码、诊断记录及本机截图不属于仓库发布内容。诊断导出虽然不包含 token 或配对密钥，仍可能含设备名称、ID、状态和时间，分享前需要检查。
+在仓库 **Actions → Build → 对应运行 → Artifacts** 下载，保留 14 天。手动构建使用 **Run workflow**；该入口需要工作流先进入仓库默认分支。macOS 两种架构分别打包，CLI 包含在 `.app/Contents/MacOS/` 中。
 
-完整数据流、命令行注意事项和本次开源检查范围见 [隐私说明](PRIVACY.md)。
+CI 固定 Rust 1.98.1 和锁文件依赖，不需要签名密钥。macOS 包使用临时签名、未公证，Windows 包未签名；工作流仅上传 Actions 产物，不自动发布 GitHub Release。Linux 暂不进入此构建矩阵。更多细节见 [打包说明](docs/packaging.md#github-actions-自动构建)。
 
-## 开发
+### 本地检查
 
-```bash
-swift test
-swift build --product mijia-lan
-swift run mijia-lan discover
-swift run mijia-lan matrix
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
-CLI 还提供 `info`、`get`、`set`、`call`、`spec` 和从标准输入读取设备清单的 `status`。不带参数运行 `swift run mijia-lan` 可查看用法。`discover` 默认不打印 token；只有明确传入 `--show-tokens` 才输出旧固件可能暴露的 token。其他命令的 token 参数可能进入终端历史和进程参数，请优先使用 App 导入凭据。
+测试包含独立 python-miio 数据包向量、真实 UDP 回环、过期响应过滤、访问权限、HomeKit 独立控制器互操作、真实 TCP 配对、超过 1024 字节的配件数据库、事件通知及管理员权限。
 
-构建 Debug App：`./scripts/build_app.sh debug`。构建后，可使用模拟设备直接运行 Debug 可执行文件：
+自动化协议验证不等于每个型号的固件或 iPhone「家庭」实机验收。macOS 已实际检查界面、导入及家庭控制；Windows 已通过真实导入和台灯控制，iPhone 家庭配对尚未验收；Linux 桌面交互未验收。GPUI 0.2.2 的辅助功能支持也有限，后续升级框架时需单独检查 VoiceOver / 屏幕阅读器。
 
-```bash
-MIJIALAN_UI_PREVIEW=1 "$(swift build --show-bin-path)/MijiaLANApp"
-```
+本次构建、交互与实机验证的具体边界见 [本地验证记录](docs/verification.md)。
 
-| 环境变量 | 用途 |
-| --- | --- |
-| `MIJIALAN_UI_PREVIEW=1` | 仅 Debug：使用模拟设备和内存凭据，关闭 HomeKit 桥及真实设备发现 |
-| `MIJIALAN_EPHEMERAL=1` | 使用内存凭据及单独的偏好设置域，不读取真实钥匙串；仍可能发送网络请求 |
-| `MIJIALAN_SEED_CONFIG=<path>` | 配合临时模式，从本地 JSON 载入测试设备；文件可能包含凭据 |
-| `MIJIALAN_DIAGNOSTICS_OUTPUT=<path>` | 导出读数和错误；文件仍属于私密诊断数据 |
-| `MIJIALAN_SNAPSHOT=<path>` | 渲染面板截图；可用 `MIJIALAN_SNAPSHOT_DELAY` 指定等待秒数 |
-| `MIJIALAN_UI_THEME=dark/light` | 配合截图选择外观 |
-| `MIJIALAN_UI_PAGE=<did>/settings` | 选择截图初始页面，默认首页 |
-| `MIJIALAN_SNAPSHOT_WINDOW=<seconds>` | 打开原生交互预览窗口 |
+## 许可
 
-| 目录 | 内容 |
-| --- | --- |
-| `Sources/MijiaLAN` | miIO 协议、发现、设备导入、凭据存储、能力目录和共享控制器 |
-| `Sources/MijiaHomeKitBridge` | HomeKit 配件映射、桥接和配对状态 |
-| `Sources/MijiaLANApp` | SwiftUI / AppKit 菜单栏界面 |
-| `Sources/mijia-lan` | 命令行工具 |
-| `Tests` | 协议、能力、安全边界、HomeKit 和本地化测试 |
-| `Vendor/hap-swift` | 保留原协议的 HAP 实现及本地修复 |
-
-## 协议与致谢
-
-本项目的原创代码使用 [MIT License](LICENSE)，版权归 iPocket-APP。第三方组件保留各自许可证：
-
-- [MenuBarMijia](https://github.com/jryang1997/MenuBarMijia) 的 `MijiaCore`（MIT）：扫码登录、MIoT 规格解析、设备合成和 HomeStore。
-- [hap-swift](https://github.com/acumen-dev/hap-swift)（Apache-2.0）：HomeKit Accessory Protocol 实现，内置副本包含本地修复。
-- Apple Swift 开源库及其他间接依赖：详见 [第三方声明](THIRD_PARTY_NOTICES.md)。
-
-本项目为社区项目，与小米、米家或 Apple 无隶属关系，也未获得 HomeKit / MFi 认证。第三方协议、服务及商标的权利不由本项目的 MIT 许可证授予。
+原创代码使用 MIT。第三方组件及移植来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和 `licenses/`。本项目与小米、米家、Apple 无隶属关系，未获得 HomeKit / MFi 认证。

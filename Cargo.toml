@@ -1,0 +1,32 @@
+[workspace]
+members = ["crates/core", "crates/homekit", "crates/desktop", "crates/cli"]
+exclude = ["vendor/xattr", "vendor/gpui"]
+default-members = ["crates/desktop"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+authors = ["iPocket-APP"]
+
+[workspace.dependencies]
+mijialan-core = { path = "crates/core" }
+mijialan-homekit = { path = "crates/homekit" }
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[profile.dev]
+debug = 1
+
+[profile.release]
+lto = "thin"
+strip = "debuginfo"
+
+[patch.crates-io]
+# GPUI's legacy xattr dependency predates libc removing Linux's ENOATTR alias.
+xattr = { path = "vendor/xattr" }
+# Make Windows Debug builds independent of the build machine's shader paths.
+gpui = { path = "vendor/gpui" }

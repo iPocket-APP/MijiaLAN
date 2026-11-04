@@ -1,0 +1,143 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_BUILD_JOBS: "2"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: ${{ matrix.platform }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            platform: macOS
+            arch: arm64
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            platform: macOS
+            arch: x86_64
+            target: x86_64-apple-darwin
+          - os: windows-2022
+            platform: Windows
+            arch: x86_64
+            target: x86_64-pc-windows-msvc
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: "1.98.1"
+          components: rustfmt, clippy
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ${{ matrix.target }}
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Set up Xcode and Metal
+        if: runner.os == 'macOS'
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
+          xcodebuild -version
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --sdk macosx metal --version
+          echo "LIBCLANG_PATH=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib" >> "$GITHUB_ENV"
+
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked --workspace
+
+      - name: Package macOS Release
+        if: runner.os == 'macOS'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+          MIJIALAN_BUILD_NUMBER: ${{ github.run_number }}
+          MIJIALAN_APP_OUTPUT: ${{ github.workspace }}/build/ci/MijiaLAN Rust.app
+          MIJIALAN_SIGNING_IDENTITY: "-"
+          CI_ARCH: ${{ matrix.arch }}
+        run: |
+          bash scripts/build-macos.sh release
+          app="$MIJIALAN_APP_OUTPUT"
+          for binary in mijialan-rust mijia-rust; do
+            lipo "$app/Contents/MacOS/$binary" -verify_arch "$CI_ARCH"
+          done
+          codesign --verify --deep --strict "$app"
+          version="$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")"
+          name="MijiaLAN-Rust-$version-macos-$CI_ARCH"
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc --keepParent "$app" "artifacts/$name.zip"
+          (cd artifacts && shasum -a 256 "$name.zip" > "$name.sha256")
+          ditto -x -k "artifacts/$name.zip" "$RUNNER_TEMP/package-smoke"
+          cli="$RUNNER_TEMP/package-smoke/MijiaLAN Rust.app/Contents/MacOS/mijia-rust"
+          "$cli" --help
+          "$cli" --demo list > "$RUNNER_TEMP/demo-devices.json"
+          python3 -c 'import json, sys; devices = json.load(open(sys.argv[1])); assert isinstance(devices, list) and devices' "$RUNNER_TEMP/demo-devices.json"
+
+      - name: Package Windows Release
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/build-windows.ps1 -Profile release -Target x86_64-pc-windows-msvc
+          $zip = Get-Item artifacts/*-windows-x86_64.zip
+          $smoke = Join-Path $env:RUNNER_TEMP 'package-smoke'
+          Expand-Archive -Path $zip.FullName -DestinationPath $smoke
+          $cli = Join-Path $smoke "$($zip.BaseName)/mijia-rust.exe"
+          & $cli --help
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged CLI help failed' }
+          $output = & $cli --demo list
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged CLI demo failed' }
+          $devices = ConvertFrom-Json -InputObject ($output -join "`n")
+          if (-not $devices -or $devices.Count -eq 0) { throw 'Demo returned no devices' }
+
+      - name: Upload packages
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: MijiaLAN-Rust-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            artifacts/*.zip
+            artifacts/*.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

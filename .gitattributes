@@ -1,0 +1,4 @@
+# Preserve formatting from the upstream crates.io source archives.
+vendor/** -whitespace
+# An empty final paragraph is allowed in Markdown documents.
+*.md whitespace=-blank-at-eof
