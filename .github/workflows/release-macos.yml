@@ -6,7 +6,7 @@ on:
       build_number:
         description: Positive build number for this experience package
         required: true
-        default: '8'
+        default: '9'
         type: string
   push:
     tags:
@@ -24,9 +24,9 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/MijiaLAN-rs') ||
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rs-v'))
-    runs-on: macos-26-intel
+    runs-on: ${{ vars.MIJIALAN_MACOS_RUNNER || 'macos-26-intel' }}
     concurrency:
-      group: mijialan-macos-hosted
+      group: ${{ vars.MIJIALAN_MACOS_RUNNER || 'mijialan-macos-hosted' }}
       cancel-in-progress: false
     environment: macos-release
     timeout-minutes: 90
@@ -70,13 +70,26 @@ jobs:
           echo "MIJIALAN_RELEASE_VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Install Rust
+        if: runner.environment == 'github-hosted'
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: '1.98.1'
           components: rustfmt, clippy
           targets: aarch64-apple-darwin
 
+      - name: Verify local Rust toolchain
+        if: runner.environment == 'self-hosted'
+        run: |
+          [[ "$(uname -m)" == arm64 ]] || { echo 'Use an Apple Silicon Mac for the local runner' >&2; exit 1; }
+          [[ "$(rustc --version)" == 'rustc 1.98.1 '* ]] || { echo 'Install Rust 1.98.1 before starting the local runner' >&2; exit 1; }
+          cargo --version
+          cargo fmt --version
+          cargo clippy --version
+          echo 'CARGO_BUILD_JOBS=4' >> "$GITHUB_ENV"
+          echo 'MIJIALAN_TEST_PROFILE=release' >> "$GITHUB_ENV"
+
       - name: Cache Rust dependencies
+        if: runner.environment == 'github-hosted'
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: signed-macos-aarch64-apple-darwin
@@ -84,11 +97,17 @@ jobs:
 
       - name: Set up Xcode and Metal
         run: |
-          sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
+          if [[ "$RUNNER_ENVIRONMENT" == github-hosted ]]; then
+            export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
+          else
+            export DEVELOPER_DIR="$(xcode-select -p)"
+          fi
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          xcodebuild -version
           if ! xcrun --sdk macosx metal --version; then
             xcodebuild -downloadComponent MetalToolchain
           fi
-          echo "LIBCLANG_PATH=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/lib" >> "$GITHUB_ENV"
 
       - name: Import temporary signing materials
         env:

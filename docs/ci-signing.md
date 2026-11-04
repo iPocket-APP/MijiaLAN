@@ -27,9 +27,11 @@ Runner 在 `$RUNNER_TEMP` 创建独立临时钥匙串，导入指定证书，并
 
 为避开 GitHub 托管 Apple Silicon Runner 的容量限制，CI 使用 `macos-26-intel` 和 Xcode 26.3，安装 `aarch64-apple-darwin` 标准库，并通过 `MIJIALAN_MACOS_TARGET` 生成 arm64 App。工作区测试在 Intel 宿主机执行，目标产物另做架构、签名和公证校验；arm64 安装包的运行验证需在 Apple Silicon Mac 上完成。
 
-普通矩阵顺序执行，先运行 Windows 检查。所有 macOS 作业与正式打包共享 `mijialan-macos-hosted` concurrency group，在调度层等待，而不同时申请多台 Mac Runner，减少因托管容量不足导致的作业失败。
+正式签名 workflow 也支持本机 Apple Silicon Runner：在仓库级 Actions variable `MIJIALAN_MACOS_RUNNER` 中填写专用 Runner label；未设置时仍使用上述托管镜像。该变量需要在触发构建前配置，不能放在 Environment variables 中。可使用带独立 label、`--no-default-labels` 和 `--ephemeral` 的临时 Runner，只执行一次任务后自动注销。构建结束后删除临时变量，恢复托管机器默认值；不需要安装常驻服务。本机需预装 Rust 1.98.1、rustfmt、clippy 和可用的 Xcode / Metal 工具链；workflow 使用当前选中的 Xcode，通过 `DEVELOPER_DIR` 指定，不修改系统 Xcode 选择，也不安装或切换本机 Rust。已有 Cargo 缓存可以通过 Runner 进程的 `CARGO_TARGET_DIR` 复用，目录应位于 Git 忽略范围内。
 
-流程依次运行工作区测试、Release 构建、Developer ID / Hardened Runtime 签名、App 公证与票据附加、DMG 公证与票据附加及 Gatekeeper 检查。CI 的 Intel 宿主机测试使用 Debug 配置，分发二进制使用 arm64 Release 配置；本地脚本默认仍运行 Release 测试。最终 DMG、ZIP、SHA-256 清单上传到本次运行的 Actions artifact。这些文件在 Runner 上生成，不进入源码 Git 历史。
+普通矩阵顺序执行，先运行 Windows 检查。托管 macOS 作业与正式打包共享 `mijialan-macos-hosted` concurrency group，在调度层等待，而不同时申请多台 Mac Runner。使用本机专用 label 时，正式打包使用该 label 作为独立 concurrency group，避免等待托管机器。
+
+流程依次运行工作区测试、Release 构建、Developer ID / Hardened Runtime 签名、App 公证与票据附加、DMG 公证与票据附加及 Gatekeeper 检查。托管 Intel 宿主机测试使用 Debug 配置，本机 Apple Silicon Runner 使用 Release 配置；分发二进制均使用 arm64 Release 配置。最终 DMG、ZIP、SHA-256 清单上传到本次运行的 Actions artifact。这些文件在 Runner 上生成，不进入源码 Git 历史。
 
 附加和验证公证票据会对临时网络失败做最多六次重试，单次等待不超过 30 秒，最终失败仍使 workflow 失败。Rust 缓存在打包失败后也会保存。如果已完成签名的 App 存在，失败时另保留一个带校验清单的 recovery artifact 三天，便于重试封装；其中不包含钥匙串、公证私钥或日志。
 
