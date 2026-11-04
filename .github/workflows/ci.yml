@@ -46,12 +46,12 @@ jobs:
             arch: x86_64
             target: x86_64-pc-windows-msvc
             shell: pwsh
-          - os: macos-15-intel
+          - os: macos-26-intel
             platform: macOS
             arch: arm64
             target: aarch64-apple-darwin
             shell: bash
-          - os: macos-15-intel
+          - os: macos-26-intel
             platform: macOS
             arch: x86_64
             target: x86_64-apple-darwin

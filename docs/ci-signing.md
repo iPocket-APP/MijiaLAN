@@ -25,7 +25,7 @@
 
 Runner 在 `$RUNNER_TEMP` 创建独立临时钥匙串，导入指定证书，并检查配置的签名身份。公证 P8 文件的权限受 `umask 077` 保护。`package-macos-release.sh` 在 CI 使用 `APPLE_API_KEY_PATH`、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER_ID`；本地仍支持 `MIJIALAN_NOTARY_PROFILE`。
 
-为避开 GitHub 托管 Apple Silicon Runner 的容量限制，CI 使用 `macos-15-intel`，安装 `aarch64-apple-darwin` 标准库，并通过 `MIJIALAN_MACOS_TARGET` 生成 arm64 App。工作区测试在 Intel 宿主机执行，目标产物另做架构、签名和公证校验；arm64 安装包的运行验证需在 Apple Silicon Mac 上完成。
+为避开 GitHub 托管 Apple Silicon Runner 的容量限制，CI 使用 `macos-26-intel` 和 Xcode 26.3，安装 `aarch64-apple-darwin` 标准库，并通过 `MIJIALAN_MACOS_TARGET` 生成 arm64 App。工作区测试在 Intel 宿主机执行，目标产物另做架构、签名和公证校验；arm64 安装包的运行验证需在 Apple Silicon Mac 上完成。
 
 普通矩阵顺序执行，先运行 Windows 检查。所有 macOS 作业与正式打包共享 `mijialan-macos-hosted` concurrency group，在调度层等待，而不同时申请多台 Mac Runner，减少因托管容量不足导致的作业失败。
 
