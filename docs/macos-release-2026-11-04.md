@@ -1,5 +1,7 @@
 # macOS Rust 正式体验包 · 2026-11-04
 
+此记录对应 Build 2。其面板外层矩形背景已在 [Build 3](macos-panel-surface-2026-11-04.md) 修复，后续体验应使用 Build 3。
+
 - 产品：MijiaLAN；源码分支：`MijiaLAN-rs`。
 - 版本：0.1.0，Build 2；Apple Silicon / arm64，Release 优化。
 - App / 内置 CLI：Developer ID、Hardened Runtime、安全时间戳。

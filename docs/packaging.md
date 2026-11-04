@@ -23,11 +23,11 @@ macOS 复用 `scripts/build-macos.sh release`，包含桌面 App、CLI、图标�
 ```sh
 MIJIALAN_SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
 MIJIALAN_NOTARY_PROFILE='your-existing-notary-profile' \
-MIJIALAN_BUILD_NUMBER=2 \
+MIJIALAN_BUILD_NUMBER=3 \
 bash scripts/package-macos-release.sh
 ```
 
-脚本对 CLI 和 App 使用 Developer ID、Hardened Runtime 和安全时间戳，分别公证 App 与 DMG、附加并验证公证票据，再检查 Gatekeeper。输出位于 `build/releases/v<version>-rs.1/dist/`，包含 `MijiaLAN-rs-<version>-macos-arm64.dmg`、ZIP 和 `SHA256SUMS.txt`。DMG 支持拖到 Applications；ZIP 中也保留已附加票据的 App。
+脚本对 CLI 和 App 使用 Developer ID、Hardened Runtime 和安全时间戳，分别公证 App 与 DMG、附加并验证公证票据，再检查 Gatekeeper。输出位于 `build/releases/v<version>-rs.<build>/dist/`，包含 `MijiaLAN-rs-<version>-b<build>-macos-arm64.dmg`、ZIP 和 `SHA256SUMS.txt`；不同 build 不覆盖已有体验包。DMG 支持拖到 Applications；ZIP 中也保留已附加票据的 App。
 
 日志保存在相邻的 `logs/`。若已签名的 staging App 不变，可以用同一环境变量加 `--package-existing` 重试公证与封装；不会重新编译。打包脚本不安装或替换当前客户端，也不会上传 GitHub Release。已有本地 Rust 用户首次改用 Developer ID 版本时，系统可能要求重新允许该签名读取凭据。
 

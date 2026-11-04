@@ -5,24 +5,33 @@ cd "$(dirname "$0")/.."
 root="$PWD"
 [[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || { echo "Run on an Apple Silicon Mac" >&2; exit 1; }
 : "${MIJIALAN_SIGNING_IDENTITY:?Set a Developer ID Application signing identity}"
-: "${MIJIALAN_NOTARY_PROFILE:?Set an existing notarytool Keychain profile}"
 [[ "$MIJIALAN_SIGNING_IDENTITY" != - ]] || { echo "Distribution requires Developer ID signing" >&2; exit 1; }
+if [[ -n "${APPLE_API_KEY_PATH:-}" ]]; then
+  : "${APPLE_API_KEY_ID:?Set the notarization team API key ID}"
+  : "${APPLE_API_ISSUER_ID:?Set the notarization team API issuer ID}"
+  [[ -r "$APPLE_API_KEY_PATH" ]] || { echo "Notarization key file is not readable" >&2; exit 1; }
+  notary_auth=(--key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID")
+else
+  : "${MIJIALAN_NOTARY_PROFILE:?Set an existing notarytool Keychain profile or APPLE_API_KEY_PATH}"
+  notary_auth=(--keychain-profile "$MIJIALAN_NOTARY_PROFILE")
+fi
 version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
-build_number="${MIJIALAN_BUILD_NUMBER:-2}"
-release="$root/build/releases/v$version-rs.1"
+build_number="${MIJIALAN_BUILD_NUMBER:-3}"
+[[ "$build_number" =~ ^[1-9][0-9]*$ ]] || { echo "Expected a positive build number" >&2; exit 1; }
+release="$root/build/releases/v$version-rs.$build_number"
 staging="$release/staging"
 dist="$release/dist"
 logs="$release/logs"
 app="$staging/MijiaLAN.app"
-name="MijiaLAN-rs-$version-macos-arm64"
+name="MijiaLAN-rs-$version-b$build_number-macos-arm64"
 mkdir -p "$staging" "$dist" "$logs"
 
 case "${1:-}" in
   "")
-    cargo fmt --all --check > "$logs/format.log" 2>&1
-    cargo test --locked --release --workspace -j 4 > "$logs/tests.log" 2>&1
+    cargo fmt --all --check 2>&1 | tee "$logs/format.log"
+    cargo test --locked --release --workspace -j 4 2>&1 | tee "$logs/tests.log"
     MIJIALAN_BUILD_NUMBER="$build_number" MIJIALAN_APP_OUTPUT="$app" MIJIALAN_APP_NAME=MijiaLAN \
-      bash scripts/build-macos.sh release > "$logs/bundle.log" 2>&1
+      bash scripts/build-macos.sh release 2>&1 | tee "$logs/bundle.log"
     cargo metadata --locked --format-version 1 --filter-platform aarch64-apple-darwin > "$release/cargo-metadata.json"
     python3 scripts/collect-cargo-licenses.py "$release/cargo-metadata.json" "$app/Contents/Resources/Licenses/Cargo"
     # Notices are part of the sealed resources; sign again after adding them.
@@ -46,7 +55,7 @@ grep -q 'flags=.*runtime' "$logs/signature.txt"
 grep -q '^Timestamp=' "$logs/signature.txt"
 
 ditto -c -k --sequesterRsrc --keepParent "$app" "$release/notarization.zip"
-xcrun notarytool submit "$release/notarization.zip" --keychain-profile "$MIJIALAN_NOTARY_PROFILE" \
+xcrun notarytool submit "$release/notarization.zip" "${notary_auth[@]}" \
   --wait --timeout 20m --output-format json > "$logs/notarization-app.json"
 [[ "$(plutil -extract status raw "$logs/notarization-app.json")" == Accepted ]]
 xcrun stapler staple "$app"
@@ -70,7 +79,7 @@ NOTE
 hdiutil create -volname "MijiaLAN rs $version" -srcfolder "$image_root" -format UDZO -ov "$dist/$name.dmg"
 codesign --force --sign "$MIJIALAN_SIGNING_IDENTITY" --timestamp "$dist/$name.dmg"
 codesign --verify --strict "$dist/$name.dmg"
-xcrun notarytool submit "$dist/$name.dmg" --keychain-profile "$MIJIALAN_NOTARY_PROFILE" \
+xcrun notarytool submit "$dist/$name.dmg" "${notary_auth[@]}" \
   --wait --timeout 20m --output-format json > "$logs/notarization-dmg.json"
 [[ "$(plutil -extract status raw "$logs/notarization-dmg.json")" == Accepted ]]
 xcrun stapler staple "$dist/$name.dmg"

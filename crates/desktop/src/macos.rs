@@ -5,8 +5,8 @@ pub use menu::{defer_panel_dismiss, is_tracking_menu, show_popup_menu};
 use gpui::Window;
 use objc2::{MainThreadMarker, msg_send, rc::Retained, runtime::AnyObject, sel};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSEvent, NSEventMask, NSScreen, NSView, NSWindow,
-    NSWindowStyleMask,
+    NSApplication, NSApplicationActivationPolicy, NSColor, NSEvent, NSEventMask, NSScreen, NSView,
+    NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSSize};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -140,12 +140,38 @@ fn anchor(tray: Option<&tray_icon::TrayIcon>) -> Option<(NSRect, NSRect)> {
 pub fn tray_ready(tray: &tray_icon::TrayIcon) -> bool {
     anchor(Some(tray)).is_some()
 }
+
+fn configure_panel_surface(window: &NSWindow) {
+    window.setOpaque(false);
+    window.setBackgroundColor(Some(&NSColor::clearColor()));
+    window.setHasShadow(true);
+    if let Some(content) = window.contentView() {
+        content.setWantsLayer(true);
+        if let Some(layer) = content.layer() {
+            // GPUI Component's Root paints a rectangular theme background;
+            // GPUI overflow clipping is rectangular too. Clip the entire
+            // native content tree, including the Metal backing layer, to the
+            // same 18 pt radius as the compact panel, on every page.
+            layer.setOpaque(false);
+            layer.setCornerRadius(18.);
+            layer.setMasksToBounds(true);
+            crate::trace_panel(&format!(
+                "surface opaque={} radius={} clipped={}",
+                window.isOpaque(),
+                layer.cornerRadius(),
+                layer.masksToBounds()
+            ));
+        }
+    }
+    window.invalidateShadow();
+}
+
 pub fn position(window: &Window, tray: Option<&tray_icon::TrayIcon>) -> bool {
     let Some(window) = native(window) else {
         return false;
     };
     window.setStyleMask(NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel);
-    window.setHasShadow(true);
+    configure_panel_surface(&window);
     let Some((icon, visible)) = anchor(tray) else {
         return false;
     };
@@ -217,6 +243,7 @@ pub fn resize_panel(window: &Window, height: f32, cx: &gpui::App) {
             // GPUI 0.2 may receive the child resize before AppKit updates its
             // content container. Refresh the final viewport/backing metrics.
             view.viewDidChangeBackingProperties();
+            configure_panel_surface(&native_window);
             crate::trace_panel(&format!(
                 "resize frame={:?} content={:?} bounds={:?} visible={visible:?}",
                 native_window.frame(),

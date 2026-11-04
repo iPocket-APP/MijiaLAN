@@ -1,6 +1,6 @@
 /target/
 /build/
-/.DS_Store
+.DS_Store
 *.log
 *.local.json
 __pycache__/
@@ -10,3 +10,17 @@ __pycache__/
 *.p8
 *.p12
 *.mobileprovision
+/dist/
+.cache/
+.idea/
+.vscode/
+*.dSYM/
+*.app/
+*.dmg
+*.pkg
+*.msi
+*.deb
+*.zip
+*.tar.gz
+*.swp
+*.swo
