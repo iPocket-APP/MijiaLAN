@@ -242,6 +242,7 @@ jobs:
 
   deploy-updates:
     needs: publish
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
