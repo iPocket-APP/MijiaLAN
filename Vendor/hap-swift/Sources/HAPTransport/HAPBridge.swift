@@ -98,6 +98,7 @@ public actor HAPBridge {
     /// Parameters: set of connection IDs, serialised EVENT/1.0 payload (pre-JSON,
     /// needs encryption per-connection).
     private var onCharacteristicChange: (@Sendable (_ subscribers: Set<Int>, _ eventData: Data) async -> Void)?
+    private var notificationTail: Task<Void, Never>?
 
     /// Set the handler called when a subscribed characteristic value changes.
     public func setCharacteristicChangeHandler(
@@ -363,11 +364,9 @@ public actor HAPBridge {
         guard subscriptions[key, default: []].insert(connectionID).inserted else { return }
         logger.debug("Event subscribe: connection \(connectionID) → aid=\(aid) iid=\(iid)")
         let status = readStatus(aid: aid, iid: iid)
-        if let handler = onCharacteristicChange {
-            let event = Self.buildEventPayload(aid: aid, iid: iid,
-                value: status == .success ? readCharacteristic(aid: aid, iid: iid) : nil, status: status)
-            Task { await handler([connectionID], event) }
-        }
+        let event = Self.buildEventPayload(aid: aid, iid: iid,
+            value: status == .success ? readCharacteristic(aid: aid, iid: iid) : nil, status: status)
+        enqueueNotification(subscribers: [connectionID], eventData: event)
     }
 
     public func subscriptionStatus(aid: UInt64, iid: UInt64) -> HAPStatus {
@@ -395,15 +394,26 @@ public actor HAPBridge {
             logger.debug("Event notify: aid=\(aid) iid=\(iid) — no subscribers")
             return
         }
-        guard let handler = onCharacteristicChange else {
+        guard onCharacteristicChange != nil else {
             logger.warning("Event notify: aid=\(aid) iid=\(iid) — no handler set")
             return
         }
 
         logger.debug("Event notify: aid=\(aid) iid=\(iid) status=\(status.rawValue) → \(subscribers.count) subscriber(s)")
         let eventData = Self.buildEventPayload(aid: aid, iid: iid, value: value, status: status)
-        let subs = subscribers
-        Task { await handler(subs, eventData) }
+        enqueueNotification(subscribers: subscribers, eventData: eventData)
+    }
+
+    private func enqueueNotification(subscribers: Set<Int>, eventData: Data) {
+        guard let handler = onCharacteristicChange else { return }
+        // Actor isolation orders cache mutations, but separate tasks can overtake
+        // one another when a send suspends. Include subscription snapshots in the
+        // same FIFO so an older error cannot replace a newer recovery in Home.
+        let previous = notificationTail
+        notificationTail = Task {
+            await previous?.value
+            await handler(subscribers, eventData)
+        }
     }
 
     /// Build the raw HTTP bytes for a HAP EVENT/1.0 message.

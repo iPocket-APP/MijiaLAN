@@ -154,6 +154,42 @@ struct IncrementalSyncTests {
         await fixture.stop()
     }
 
+    @Test("A delayed unavailable notification cannot overtake its same-value recovery", arguments: [false, true])
+    func notificationRecoveryOrder(_ subscribingWhileUnavailable: Bool) async throws {
+        let fixture = try await Fixture.make()
+        do {
+            let iid = try #require(await fixture.hap.accessoryDatabase().first { $0.aid == 2 }?.services.flatMap(\.characteristics).first { $0.type == .rotationSpeed }?.iid)
+            let events = CapturedEvents()
+            if !subscribingWhileUnavailable { await fixture.hap.subscribe(connectionID: 7, aid: 2, iid: iid) }
+            await fixture.hap.setCharacteristicChangeHandler { _, data in
+                // A suspended send exposes whether a newer notification can pass it.
+                if String(decoding: data, as: UTF8.self).contains("-70402") {
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+                await events.append(data)
+            }
+            await fixture.hap.setReadStatus(aid: 2, iid: iid, status: .communicationFailure)
+            if subscribingWhileUnavailable { await fixture.hap.subscribe(connectionID: 7, aid: 2, iid: iid) }
+            await fixture.hap.updateCharacteristic(aid: 2, iid: iid, value: .float(50))
+            for _ in 0..<200 where await events.count < 2 { try await Task.sleep(for: .milliseconds(2)) }
+            let payloads = await events.captured()
+            let changes = try payloads.map { raw -> JSONValue in
+                let separator = try #require(raw.range(of: Data("\r\n\r\n".utf8)))
+                let json = try JSONDecoder().decode(JSONValue.self, from: Data(raw[separator.upperBound...]))
+                return try #require(json["characteristics"]?.arrayValue?.first)
+            }
+            #expect(changes.count == 2)
+            #expect(changes.first?["status"]?.intValue == -70402)
+            #expect(changes.last?["value"]?.doubleValue == 50)
+            #expect(changes.last?["status"] == nil)
+            #expect(await fixture.hap.readStatus(aid: 2, iid: iid) == .success)
+        } catch {
+            await fixture.stop()
+            throw error
+        }
+        await fixture.stop()
+    }
+
     @Test("Same-value HomeKit writes still force a confirmation event after delta suppression")
     func forcedConfirmation() async throws {
         let fixture = try await Fixture.make()
@@ -247,6 +283,7 @@ private actor CapturedEvents {
     private var values: [Data] = []
     var count: Int { values.count }
     func append(_ data: Data) { values.append(data) }
+    func captured() -> [Data] { values }
 }
 
 private actor SyncTestTransport: MiioTransport {

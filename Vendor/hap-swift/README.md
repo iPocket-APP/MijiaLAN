@@ -58,3 +58,9 @@ causing intermittent authentication failures. The Apple receive loop also waits
 for processing before scheduling its next read, preserving byte order across
 actor suspensions. Regressions cover 128 concurrent encrypted writers and eight
 independent real UDP/TCP pairing, subscription and re-pairing sessions.
+
+Characteristic event delivery also uses a FIFO task chain, including the initial
+subscription snapshot. Cache mutation order alone does not preserve delivery order
+when an asynchronous send suspends. A delayed unavailable event could previously
+arrive after a same-value recovery event and leave Home displaying an old error.
+Regression cases cover both existing subscribers and subscribing while unavailable.

@@ -36,6 +36,7 @@ public final class DeviceController {
     @ObservationIgnored private let api: LANMiotAPI
     @ObservationIgnored private let config: @Sendable () -> LocalHomeConfig
     @ObservationIgnored private var pollTask: Task<Void, Never>?
+    @ObservationIgnored private var publicationTask: Task<Void, Never>?
     @ObservationIgnored private var context = PollingContext()
     @ObservationIgnored private var healthTask: Task<Void, Never>?
     @ObservationIgnored private var startedProbing = false
@@ -70,6 +71,7 @@ public final class DeviceController {
 
     deinit {
         pollTask?.cancel()
+        publicationTask?.cancel()
         healthTask?.cancel()
         for read in readTasks.values { read.task.cancel() }
     }
@@ -156,6 +158,7 @@ public final class DeviceController {
     }
     public func shutdown() {
         pollTask?.cancel(); pollTask = nil
+        publicationTask?.cancel(); publicationTask = nil
         healthTask?.cancel(); healthTask = nil
         for read in readTasks.values { read.task.cancel() }; readTasks = [:]
         for c in continuations.values { c.finish() }; continuations = [:]
@@ -179,7 +182,11 @@ public final class DeviceController {
     public func refreshNow() async {
         guard !refreshing else { return }
         refreshing = true
-        defer { refreshing = false; publish() }
+        defer {
+            refreshing = false
+            publicationTask?.cancel(); publicationTask = nil
+            publish()
+        }
         reconcileConfiguration()
         observeHealthIfNeeded()
         await api.startProbing()
@@ -197,6 +204,19 @@ public final class DeviceController {
                 let caps = snapshot.capabilities.filter { $0.readable && (slow || !$0.lowFrequency) }
                 group.addTask { await self.refresh(did: did, capabilities: caps, joinExisting: true) }
             }
+            // Publish completed devices without waiting for an unrelated slow
+            // request. Nearby completions share one coherent HomeKit/UI update.
+            for await _ in group { schedulePublication() }
+        }
+    }
+
+    private func schedulePublication() {
+        guard publicationTask == nil, !Task.isCancelled else { return }
+        publicationTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(25))
+            guard !Task.isCancelled, let self else { return }
+            self.publicationTask = nil
+            self.publish()
         }
     }
 
