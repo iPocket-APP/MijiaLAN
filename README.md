@@ -41,7 +41,7 @@ bash scripts/package-macos-release.sh
 
 安装包内 App 显示名为 MijiaLAN，保留 `xyz.ipocket.MijiaLAN.Rust` 标识及已有 Rust 数据目录。打包不会发布 GitHub Release；复现步骤和验收边界见 [macOS 打包说明](docs/packaging.md#macos-release)。
 
-Windows 需要 Visual Studio C++ Build Tools、Windows SDK 与 CMake。Linux 需要 C/C++ 编译工具、Clang、字体、X11 / Wayland 和 Vulkan 开发包，依赖清单见 [scripts/docker/Dockerfile](scripts/docker/Dockerfile)。GNOME 显示托盘图标通常还需要 StatusNotifierItem / AppIndicator 扩展。
+Windows 构建需要 Visual Studio C++ Build Tools、Windows SDK、CMake，以及用于收集分发许可的 Python 3.11+；CI 自动配置 Python 3.12。Linux 需要 C/C++ 编译工具、Clang、字体、X11 / Wayland 和 Vulkan 开发包，依赖清单见 [scripts/docker/Dockerfile](scripts/docker/Dockerfile)。GNOME 显示托盘图标通常还需要 StatusNotifierItem / AppIndicator 扩展。
 
 Windows / Linux 打包入口：
 

@@ -50,3 +50,28 @@ class PackageProvenanceTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.verify()
         self.info['files'] = {}
         with self.assertRaises(ValueError): self.verify()
+
+
+class CacheFreshnessTests(unittest.TestCase):
+    def test_only_exact_compiler_content_match_restores_timestamps(self):
+        import os
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            previous = Path.cwd()
+            try:
+                os.chdir(directory)
+                Path('target').mkdir()
+                Path('crates').mkdir()
+                source = Path('crates/main.rs')
+                source.write_text('fn main() {}')
+                before = source.stat().st_mtime_ns
+                with patch.object(module, 'program_hash', return_value='current'), patch.object(module, 'tracked', return_value=['crates/main.rs']):
+                    Path('target/ci-source.json').write_text(json.dumps({'program': 'older'}))
+                    module.freshness()
+                    self.assertEqual(source.stat().st_mtime_ns, before)
+                    Path('target/ci-source.json').write_text(json.dumps({'program': 'current'}))
+                    module.freshness()
+                    self.assertEqual(source.stat().st_mtime, 946684800)
+                    self.assertEqual(Path('crates').stat().st_mtime, 946684800)
+            finally:
+                os.chdir(previous)

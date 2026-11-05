@@ -46,6 +46,7 @@ def record(args):
     if count <= 0 or not any(n.endswith('.zip') for n in info['files']):
         raise ValueError('Missing tests or package')
     (args.folder / 'build-info.json').write_text(json.dumps(info, indent=2) + '\n')
+    Path('target/ci-source.json').write_text(json.dumps({'program': program_hash()}))
     summary = os.environ.get('GITHUB_STEP_SUMMARY')
     if summary:
         with open(summary, 'a') as f:
@@ -77,17 +78,56 @@ def prepare_mac(args):
     print('Prepared verified CI payload for signing; no Rust compilation required')
 
 
-def vendor():
-    # Cargo checks local dependency mtimes. These files may only share a cache
-    # when their full Git tree hash is identical (included in shared-key).
-    tree = subprocess.check_output(['git', 'rev-parse', 'HEAD:vendor'], text=True).strip()
-    names = subprocess.check_output(['git', 'ls-files', '-z', 'vendor'], text=True).split('\0')
-    for name in filter(None, names):
+def program_hash():
+    paths = ['crates', 'vendor', 'resources', 'Cargo.toml', 'Cargo.lock']
+    paths += [p for p in ['.cargo/config', '.cargo/config.toml'] if Path(p).exists()]
+    identities = [subprocess.check_output(['git', 'rev-parse', 'HEAD:' + p], text=True).strip() for p in paths]
+    return hashlib.sha256('\n'.join(identities).encode()).hexdigest()
+
+
+def normalize(paths):
+    directories = set()
+    for name in paths:
         p = Path(name)
         if p.is_file() and not p.is_symlink():
             os.utime(p, (946684800, 946684800))
+            directories.update(parent for parent in p.parents if parent != Path('.'))
+    for p in sorted(directories, key=lambda p: len(p.parts), reverse=True):
+        if p.is_dir() and not p.is_symlink():
+            os.utime(p, (946684800, 946684800))
+
+
+def tracked(*paths):
+    return filter(None, subprocess.check_output(['git', 'ls-files', '-z', '--', *paths], encoding='utf-8').split('\0'))
+
+
+def vendor():
+    tree = subprocess.check_output(['git', 'rev-parse', 'HEAD:vendor'], text=True).strip()
+    normalize(tracked('vendor'))
     with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
         f.write(f'tree={tree}\n')
+
+
+def cache_keys(args):
+    # Compiler/SDK/profile are isolated even for a dependency-only fallback.
+    prefixes = ('CARGO', 'CC', 'CFLAGS', 'CXX', 'CMAKE', 'RUST', 'MACOSX_DEPLOYMENT_TARGET',
+                'DEVELOPER_DIR', 'VCToolsVersion', 'WindowsSDKVersion', 'GPUI_FXC_PATH')
+    environment = '\n'.join(f'{k}={v}' for k, v in sorted(os.environ.items()) if k.startswith(prefixes))
+    config = hashlib.sha256(environment.encode()).hexdigest()[:20]
+    vendor_tree = subprocess.check_output(['git', 'rev-parse', 'HEAD:vendor'], text=True).strip()
+    prefix = f'release-v4-{os.environ["RUNNER_OS"]}-{os.environ["RUNNER_ARCH"]}-{args.target}-{args.compiler}-{config}-{vendor_tree}-'
+    with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+        f.write(f'prefix={prefix}\nkey={prefix}{program_hash()}\n')
+
+
+def freshness():
+    marker = Path('target/ci-source.json')
+    cached = json.loads(marker.read_text()) if marker.exists() else {}
+    if cached.get('program') == program_hash():
+        normalize(tracked('crates', 'vendor', 'resources', 'Cargo.toml', 'Cargo.lock', '.cargo'))
+        print('Exact compiler-input content match; preserving Cargo freshness for unchanged sources')
+    else:
+        print('Compiler inputs changed or no source marker; normal Cargo rebuilds remain enabled')
 
 
 def matrix(platform):
@@ -107,6 +147,8 @@ if __name__ == '__main__':
     p = sub.add_parser('record'); p.add_argument('--folder', type=Path, default=Path('artifacts')); p.add_argument('--target', required=True); p.add_argument('--tests', type=Path, required=True)
     p = sub.add_parser('prepare-mac'); p.add_argument('--folder', type=Path, required=True); p.add_argument('--source', required=True); p.add_argument('--build', type=int, required=True)
     sub.add_parser('vendor')
+    p = sub.add_parser('cache-keys'); p.add_argument('--target', required=True); p.add_argument('--compiler', required=True)
+    sub.add_parser('freshness')
     p = sub.add_parser('matrix'); p.add_argument('platform', choices=['all', 'release', 'windows', 'macos-arm64', 'macos-intel'])
     args = parser.parse_args()
-    {'record': lambda: record(args), 'prepare-mac': lambda: prepare_mac(args), 'vendor': vendor, 'matrix': lambda: matrix(args.platform)}[args.command]()
+    {'record': lambda: record(args), 'prepare-mac': lambda: prepare_mac(args), 'vendor': vendor, 'cache-keys': lambda: cache_keys(args), 'freshness': freshness, 'matrix': lambda: matrix(args.platform)}[args.command]()

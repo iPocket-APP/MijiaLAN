@@ -10,7 +10,7 @@
 
 1. **Build** 在 `MijiaLAN-rs` push / PR 时运行。Windows x64、Mac ARM64、Mac Intel 并行；Mac ARM64 使用原生 `macos-26`，采用单编译任务以适应标准 M1 runner 的 7 GB 内存。Intel 与 Windows 使用两个任务。
 2. Clippy、测试及打包使用同一个明确的 native target 和 Release profile。首次预热仍要编译依赖；后续在同一分支复用依赖缓存。
-3. 缓存包含 vendored GPUI。仅对未改动的 vendor 文件固定 mtime，并把完整 vendor Git tree hash 放入缓存前缀；vendor 改动会强制换缓存，避免复用旧源码。Rust、锁文件、SDK、架构及编译环境仍参与缓存区分。PR 只读缓存。
+3. 完整缓存保留 Cargo 的程序、测试二进制及 GPUI，避免依赖缓存的清理逻辑删除工作区产物。缓存键包含编译器、SDK、架构、编译环境、vendor Git tree 和完整编译输入内容哈希。只有已缓存的编译输入内容完全相同时才恢复源文件 freshness；源码或锁文件变化时保留正常重编译，并仅借用兼容的依赖缓存。PR 只读缓存。旧依赖缓存作为迁移预热种子，不额外重复保存。
 4. 每个平台产出 ZIP、校验文件和 `build-info.json`，记录准确源码 SHA、架构、Release profile、测试数及载荷哈希。包内已经包含依赖许可；Windows 包含 VC++ 运行库安装说明。
 5. **Signed desktop release** 等待该提交的 Windows / Mac ARM 构建成功，直接下载并核对这些程序。Mac 仅更新发行元数据、Developer ID 签名、公证和封装，不安装 Rust、不重复编译、不重复运行全工作区测试；会验证包内 CLI。临时签名材料始终清理，不参与缓存。
 6. 汇总 macOS DMG / ZIP、Windows ZIP 和 SHA-256 清单。默认手动运行只生成预览 Artifact；显式选择发布或推送 rs tag 后，先创建 Release 草稿、上传及核对服务端哈希，再公开为 Rust prerelease，保留 Swift 的 Latest 标记。已公开的同名 Release 不会被覆盖。
