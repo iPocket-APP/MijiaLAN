@@ -14,6 +14,7 @@ let package = Package(
         .executable(name: "mijia-lan", targets: ["mijia-lan"])
     ],
     dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle.git", exact: "2.10.1"),
         // MIoT spec parsing, device synthesis, command mapping, the one-time QR login and `HomeStore`
         // (optimistic updates, rollback). Pinned to the 1.1.4 release commit.
         .package(url: "https://github.com/jryang1997/MenuBarMijia.git", revision: "c6a9db1c84fa30125ed4b642b6745487dec94e89"),
@@ -44,6 +45,7 @@ let package = Package(
             dependencies: [
                 "MijiaLAN",
                 "MijiaHomeKitBridge",
+                .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "MijiaCore", package: "MenuBarMijia"),
                 .product(name: "Logging", package: "swift-log")
             ],

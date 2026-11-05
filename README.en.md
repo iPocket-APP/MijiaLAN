@@ -15,17 +15,20 @@ MijiaLAN talks to devices directly on your LAN using miIO / MIoT. You import cre
 - **One shared state**: the Mac and Apple Home share capabilities, polling and command execution. Modes, brightness, color temperature, temperature, fan speed, swing, readings and cooking presets follow each model.
 - **Credentials stay on your Mac**: device tokens, the registry and HomeKit pairing material live in macOS Keychain. Xiaomi cloud login sessions are not kept.
 - **IP rediscovery**: periodic discovery broadcasts update addresses by device ID after your router reassigns them.
+- **In-app updates**: check from Settings or the menu-bar context menu. Checks run daily by default; automatic downloads and installation on quit are optional.
 - **Light in the background**: retries for offline devices back off to at most once every 24 hours. The panel releases its views after 30 seconds hidden and keeps the page, scroll position and input drafts. See [performance and background operation](docs/performance.md).
 - **Chinese and English UI**, following the system or a per-app language, with light and dark appearances.
 
 ## Download and install
 
-Current native Swift release: **0.1.1 (build 2)**. The Rust version uses a separate branch and `rs-` tags.
+Find the latest native Swift release on [GitHub Releases](https://github.com/iPocket-APP/MijiaLAN/releases/latest). The Rust version uses a separate branch and `rs-` tags.
 
 1. Download `MijiaLAN-<version>-universal.dmg` from [GitHub Releases](https://github.com/iPocket-APP/MijiaLAN/releases/latest), open it and drag `MijiaLAN.app` into Applications. A ZIP package and `SHA256SUMS.txt` checksums are also available.
 2. Launch the app and allow Local Network access when macOS asks.
 
 Release packages are Developer ID signed with Hardened Runtime enabled and notarized by Apple. Both the app and the disk image have stapled notarization tickets.
+
+In-app updates are available starting with 0.1.6; earlier versions require one manual installation. The app fetches its update feed from `mijialan-updates.ipocket.xyz`, then downloads and verifies signed packages from GitHub Releases. Installation restarts the app and briefly interrupts the Home bridge. Devices and pairing material stay in the existing Keychain item.
 
 **Requirements**
 

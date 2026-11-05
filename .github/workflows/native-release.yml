@@ -130,9 +130,29 @@ jobs:
         run: |
           bash scripts/ci/resign_app.sh "$RELEASE_DIR/staging/MijiaLAN.app"
           scripts/package_release.sh --package-existing
+      - name: Prepare signed update feed from the notarized ZIP
+        env:
+          RELEASE_DIR: ${{ steps.metadata.outputs.release_dir }}
+          RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          test -n "$SPARKLE_PRIVATE_KEY"
+          python3 scripts/sparkle_updates.py fetch-tools "$RUNNER_TEMP/sparkle-tools"
+          python3 scripts/sparkle_updates.py prepare-feed \
+            --app "$RELEASE_DIR/staging/MijiaLAN.app" \
+            --archive "$RELEASE_DIR/dist/MijiaLAN-$RELEASE_VERSION-universal.zip" \
+            --notes "docs/releases/v$RELEASE_VERSION.md" \
+            --output "$RELEASE_DIR/updates" --tools "$RUNNER_TEMP/sparkle-tools/bin"
       - name: Remove signing materials
         if: always()
         run: bash scripts/ci/cleanup_signing.sh
+      - name: Upload update feed separately from the download packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: native-update-feed
+          path: ${{ steps.metadata.outputs.release_dir }}/updates/
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload distribution files
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -219,3 +239,29 @@ jobs:
           [[ "$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')" == 3 ]]
           gh release edit "$RELEASE_TAG" --draft=false --latest
           gh release view "$RELEASE_TAG" --json url --jq '.url' >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-updates:
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: mijialan-update-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: native-update-feed
+          path: updates
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        with:
+          path: updates
+      - name: Publish feed only after the release is public
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5

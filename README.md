@@ -15,17 +15,20 @@ MijiaLAN 用 miIO / MIoT 协议直接和局域网里的设备通信。凭据只�
 - **两边状态一致**：Mac 与「家庭」共用同一套能力目录、轮询和命令执行。模式、亮度、色温、温度、风速、摆动、读数和厨房设备菜单按机型提供。
 - **凭据只存在本机**：设备 token、设备清单和 HomeKit 配对信息保存在 macOS 钥匙串，不保存小米云登录会话。
 - **自动找回 IP**：定期广播发现设备，路由器重新分配地址后按设备 ID 更新。
+- **内置软件更新**：在设置或菜单栏右键菜单中检查更新。默认每天检查，自动下载和退出时安装可选择开启。
 - **后台开销小**：离线设备的重试间隔逐步拉长，最长 24 小时；面板隐藏 30 秒后释放界面，再次打开时保留页面、滚动位置和输入草稿。详见[性能与后台运行说明](docs/performance.md)。
 - **中英文界面**：跟随系统或单独设置 App 语言，支持浅色和深色外观。
 
 ## 下载与安装
 
-当前原生 Swift 正式版：**0.1.1（构建 2）**。Rust 版使用独立分支和 `rs-` 标签。
+最新原生 Swift 正式版见 [GitHub Releases](https://github.com/iPocket-APP/MijiaLAN/releases/latest)。Rust 版使用独立分支和 `rs-` 标签。
 
 1. 在 [GitHub Releases](https://github.com/iPocket-APP/MijiaLAN/releases/latest) 下载 `MijiaLAN-<版本号>-universal.dmg`，打开后把 `MijiaLAN.app` 拖进「应用程序」。也提供 ZIP 包和 `SHA256SUMS.txt` 校验值。
 2. 启动 App。macOS 询问「本地网络」权限时选择允许。
 
 发行包使用 Developer ID 签名，启用 Hardened Runtime 并经过 Apple 公证，App 与 DMG 都附有公证票据。
+
+从 0.1.6 起可在 App 内更新；更早版本需要先手动安装一次。软件更新通过 `mijialan-updates.ipocket.xyz` 获取清单，从 GitHub Releases 下载并校验签名。安装会重启 App，家庭桥接会短暂离线，钥匙串中的设备和配对资料继续保留。
 
 **系统要求**
 

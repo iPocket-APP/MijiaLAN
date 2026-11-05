@@ -4,8 +4,9 @@ import Observation
 import SwiftUI
 
 @MainActor
-final class MenuBarPanelController: NSObject, NSWindowDelegate {
+final class MenuBarPanelController: NSObject, NSWindowDelegate, NSMenuItemValidation {
     private let model: AppModel
+    private let updater: AppUpdater
     private let statusItem: NSStatusItem
     private let panel: ControlCenterPanel
     private let presentation: PanelPresentation
@@ -16,8 +17,9 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
     private var pendingShow: Task<Void, Never>?
     private var settledIconFrame: NSRect?
 
-    init(model: AppModel) {
+    init(model: AppModel, updater: AppUpdater) {
         self.model = model
+        self.updater = updater
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.autosaveName = "MijiaLAN.controlCenter"
         panel = ControlCenterPanel(contentRect: NSRect(x: 0, y: 0, width: PanelView.width, height: PanelView.maxHeight),
@@ -89,6 +91,9 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
         settings.keyEquivalentModifierMask = .command
         settings.target = self
         menu.addItem(settings)
+        let updates = NSMenuItem(title: L10n.tr("检查更新…", "Check for Updates…"), action: #selector(checkForUpdates), keyEquivalent: "")
+        updates.target = self
+        menu.addItem(updates)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: L10n.tr("退出 MijiaLAN", "Quit MijiaLAN"),
                               action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -110,6 +115,14 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
         if session.route == .settingsImport { model.cancelImport() }
         session.route = .settings
         show()
+    }
+
+    @objc private func checkForUpdates() {
+        updater.checkForUpdates()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        menuItem.action != #selector(checkForUpdates) || updater.canCheckForUpdates
     }
 
     func show() {
@@ -166,13 +179,13 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
 
     private func loadContent() {
         session.prune(deviceIDs: Set(model.config.devices.map(\.did)))
-        let model = model, session = session, presentation = presentation
+        let model = model, updater = updater, session = session, presentation = presentation
         let host = NSHostingView(rootView: PresentedPanel(presentation: presentation) {
             #if DEBUG
-            PanelView(model: model, reduceMotionOverride: ProcessInfo.processInfo.environment["MIJIALAN_UI_REDUCE_MOTION"].map { $0 == "1" }, session: session)
+            PanelView(model: model, updater: updater, reduceMotionOverride: ProcessInfo.processInfo.environment["MIJIALAN_UI_REDUCE_MOTION"].map { $0 == "1" }, session: session)
                 .background(PanelWindowSizing(anchorsToMenuBarIcon: true, anchorsTopToMenuBarIcon: true))
             #else
-            PanelView(model: model, session: session)
+            PanelView(model: model, updater: updater, session: session)
                 .background(PanelWindowSizing(anchorsToMenuBarIcon: true, anchorsTopToMenuBarIcon: true))
             #endif
         })
@@ -237,9 +250,12 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate {
     private func updateIcon() {
         session.prune(deviceIDs: Set(model.config.devices.map(\.did)))
         withObservationTracking {
-            let image = NSImage(systemSymbolName: model.config.devices.isEmpty ? "house" : "homekit", accessibilityDescription: nil)
+            let version = updater.availableVersion
+            let symbol = version == nil ? (model.config.devices.isEmpty ? "house" : "homekit") : "arrow.down.circle"
+            let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
             image?.isTemplate = true
             statusItem.button?.image = image
+            statusItem.button?.toolTip = version.map { L10n.tr("MijiaLAN · 可更新至 \($0)", "MijiaLAN · Update to \($0)") } ?? "MijiaLAN"
         } onChange: { [weak self] in
             Task { @MainActor in self?.updateIcon() }
         }

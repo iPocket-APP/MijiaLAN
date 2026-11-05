@@ -12,8 +12,11 @@
 | Apple 家庭桥 | 局域网 HAP 与 Bonjour / mDNS | 桥标识、已选择设备的名称、服务、读数和控制 |
 | 凭据持久化 | macOS 钥匙串 | 设备清单与 token、桥身份、配对码及配对密钥 |
 | 偏好设置 | 本机 UserDefaults | 外观、设备的 HomeKit 展示选择等偏好和标识 |
+| 软件更新 | GitHub Pages 自定义域名 `mijialan-updates.ipocket.xyz`、GitHub Releases 及其下载 CDN | 更新清单、更新说明和安装包；网络请求会向托管服务暴露 IP 和常规 HTTP 请求信息 |
 
 App 不使用自建后端、广告或分析 SDK。小米云会话只供当次导入使用，未调用依赖库的会话持久化接口。HTTP 使用临时 URLSession，并禁用自动 Cookie 存储。
+
+Sparkle 默认每天检查一次软件更新，可在设置中关闭，也可手动检查。自动下载和退出时安装默认关闭。更新不上传设备清单、token 或 HomeKit 配对资料；Sparkle 系统配置统计已关闭。上述临时 URLSession 说明针对设备接入与规格请求，Sparkle 使用其自身的下载机制。
 
 钥匙串使用 `AfterFirstUnlockThisDeviceOnly`。设备清单中的名称、IP 和 token 与桥配对资料一起存入单个钥匙串项目。用户拒绝钥匙串访问时，不会用空数据覆盖原凭据。这不意味着本机数据可以任意分享：设备名称、房间及行为读数同样可能涉及隐私。
 

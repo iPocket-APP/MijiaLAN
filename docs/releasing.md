@@ -25,6 +25,7 @@ to the existing Rust rules. Required environment secrets:
 | `MACOS_CERTIFICATE_P12_BASE64` | Base64 Developer ID Application certificate and private key |
 | `MACOS_CERTIFICATE_PASSWORD` | Password protecting that PKCS#12 export |
 | `APPLE_API_KEY_P8_BASE64` | Base64 App Store Connect API key authorized for notarization |
+| `SPARKLE_PRIVATE_KEY` | Dedicated Sparkle Ed25519 signing key; supplied to the signing tool over stdin |
 
 Environment variables: `MIJIALAN_SIGNING_IDENTITY` (certificate SHA-1 or identity),
 `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER_ID`. No credentials are needed for ordinary CI.
@@ -68,6 +69,41 @@ hashes, signatures, DMG integrity and their own Gatekeeper verdict (requiring
 `Notarized Developer ID`) instead of repeating `stapler validate`'s online CloudKit
 lookup. Evidence artifacts include the run attempt, preserving failures without
 colliding with a retry's upload.
+
+## In-app updates and GitHub Pages
+
+`updates.json` defines the HTTPS feed URL, public Ed25519 key, local Keychain account
+and checksummed Sparkle tools version. It must match the pinned Sparkle dependency.
+The current feed is `https://mijialan-updates.ipocket.xyz/appcast.xml`.
+
+The package job re-signs Sparkle's XPC services and helpers from the inside out,
+then signs and notarizes the app as usual. Once the final stapled ZIP exists,
+`sparkle_updates.py prepare-feed` runs Sparkle's `generate_appcast` and validates
+the version, build, minimum OS, archive length, URL and Ed25519 signature metadata.
+The private key is only available in the protected `macos-release` environment;
+it is supplied on stdin and is not written into artifacts or the repository.
+
+The feed is uploaded as a separate CI artifact. The normal signed macOS 15 checks
+must pass and all Release assets must be public before the `deploy-updates` job
+deploys that feed to Pages. Packaging-only runs never modify the live feed.
+Do not manually publish a feed pointing at an unpublished or differently signed ZIP.
+
+Pages uses GitHub Actions as its build source. The `github-pages` environment must
+allow `main` and native release tags `v*`. The custom domain is configured in the
+Pages repository settings; its DNS-only CNAME points at `ipocket-app.github.io`.
+Enable Enforce HTTPS after GitHub provisions its certificate. Changing the domain
+also requires updating `updates.json`; keep the old feed URL working for installed apps.
+
+For local signing, the dedicated key is in the login Keychain under account
+`com.mijialan.MijiaLAN`. Keep a secure backup of that key. For a newly configured
+machine, follow Sparkle's `generate_keys` import/export documentation; never add the
+private key to source control. CI uses the corresponding `SPARKLE_PRIVATE_KEY` secret.
+
+Default behavior is one check per day, no system-profile reporting and no automatic
+downloads. Users can disable checks or opt into downloading and installing on quit.
+An installation restarts the menu-bar app and briefly interrupts the Home bridge.
+The bundle identifier, signing team, device vault and HomeKit pairing identity stay
+the same. Versions before 0.1.6 require one manual installation to gain the updater.
 
 ## Local packaging
 

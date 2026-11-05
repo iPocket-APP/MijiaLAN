@@ -11,7 +11,7 @@ import MijiaCore
 @MainActor
 enum DevSnapshot {
     private static let diagnosticWriter = DiagnosticFileWriter()
-    static func scheduleIfRequested(model: AppModel, environment: [String: String] = ProcessInfo.processInfo.environment) {
+    static func scheduleIfRequested(model: AppModel, updater: AppUpdater? = nil, environment: [String: String] = ProcessInfo.processInfo.environment) {
         if let path = environment["MIJIALAN_DIAGNOSTICS_OUTPUT"] {
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(12))
@@ -70,14 +70,14 @@ enum DevSnapshot {
                 model.setInHomeKit(device, false)
                 try? await Task.sleep(for: .seconds(1))
             }
-            let renderer = ImageRenderer(content: PanelView(model: model, scrolls: false, initialRoute: route))
+            let renderer = ImageRenderer(content: PanelView(model: model, updater: updater, scrolls: false, initialRoute: route))
             renderer.scale = 2
             if let image = renderer.cgImage {
                 let rep = NSBitmapImageRep(cgImage: image)
                 try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
             }
             // The menu-bar window takes the scrolling panel's fitting size; it must not collapse.
-            let hosting = NSHostingView(rootView: PanelView(model: model).background(PanelWindowSizing()))
+            let hosting = NSHostingView(rootView: PanelView(model: model, updater: updater).background(PanelWindowSizing()))
             // Start oversized, like the reported production failure; the shared
             // sizing bridge must shrink both this host and the real MenuBarExtra.
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: PanelView.width, height: PanelView.maxHeight), styleMask: [.borderless], backing: .buffered, defer: false)
@@ -91,7 +91,7 @@ enum DevSnapshot {
             if let seconds = Double(environment["MIJIALAN_SNAPSHOT_WINDOW"] ?? "") {
                 let visible = NSWindow(contentRect: NSRect(x: 80, y: 80, width: PanelView.width, height: PanelView.maxHeight),
                                        styleMask: [.titled, .closable], backing: .buffered, defer: false)
-                let shown = NSHostingView(rootView: PanelView(model: model, initialRoute: route,
+                let shown = NSHostingView(rootView: PanelView(model: model, updater: updater, initialRoute: route,
                     reduceMotionOverride: environment["MIJIALAN_UI_REDUCE_MOTION"].map { $0 == "1" })
                     .environment(\.appearsActive, true)
                     .background(PanelWindowSizing()))
