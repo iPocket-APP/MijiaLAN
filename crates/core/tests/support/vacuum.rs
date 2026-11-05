@@ -75,7 +75,10 @@ impl Vacuum {
                     {
                         continue;
                     }
-                    Err(_) => break,
+                    Err(error) => {
+                        eprintln!("vacuum fixture UDP receive failed: {error:?}");
+                        break;
+                    }
                 };
                 if buffer[..len] == packet::HELLO {
                     let mut hello = vec![0x21, 0x31, 0, 32, 0, 0, 0, 0];

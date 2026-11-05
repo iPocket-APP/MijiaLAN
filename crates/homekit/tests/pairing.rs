@@ -250,103 +250,113 @@ fn concurrent_listener_start_keeps_one_identity_and_one_running_server() {
 fn paired_home_vacuum_switch_starts_cleaning_and_docks_even_when_already_off_but_paused() {
     use std::sync::atomic::Ordering;
     use vacuum_support::{C1, V19, Vacuum};
-    for (model, document, start_method, dock_method, paused) in [
-        ("roborock.vacuum.c1", C1, "app_start", "app_charge", 10),
-        ("ijai.vacuum.v19", V19, "action", "action", 2),
-    ] {
-        let device = Vacuum::start(model, document);
-        let engine = device.engine(model, document);
-        let bridge = HomeKit::new(engine.clone());
-        bridge
-            .start_at((Ipv4Addr::LOCALHOST, 0).into(), false)
-            .unwrap();
-        let info = bridge.info();
-        let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, info.port)).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        let controller = ControllerKeypair::from_seed("vacuum-controller".into(), [32; 32]);
-        let accessory = pair_controller(&mut stream, &info.code, &controller);
-        let mut session = verify(&mut stream, &controller, &accessory);
-        let (_, body) = encrypted_request(&mut stream, &mut session, "GET", "/accessories", &[]);
-        let database: Value = serde_json::from_slice(&body).unwrap();
-        let accessory = &database["accessories"][1];
-        let aid = accessory["aid"].as_u64().unwrap();
-        let service = accessory["services"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|s| {
-                s["type"] == "49"
-                    && s["characteristics"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .any(|c| c["type"] == "23" && c["value"] == "Fixture Vacuum")
-            })
-            .unwrap();
-        let on = service["characteristics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|c| c["type"] == "25")
-            .unwrap();
-        assert_eq!(on["value"], false);
-        let iid = on["iid"].as_u64().unwrap();
-        let path = format!("/characteristics?id={aid}.{iid}");
-        for (index, value) in [true, true, false, false, false].into_iter().enumerate() {
-            if index == 4 {
-                device.state.store(paused, Ordering::SeqCst);
-                engine.refresh("77").unwrap();
-            }
-            let body = json!({"characteristics":[{"aid":aid,"iid":iid,"value":value}]}).to_string();
-            assert_eq!(
-                encrypted_request(
+    // Windows surfaced a timing-sensitive failure in this real-socket path.
+    // Exercise transitions repeatedly while the other controller tests are active.
+    for repetition in 0..if cfg!(target_os = "windows") { 8 } else { 1 } {
+        for (model, document, start_method, dock_method, paused) in [
+            ("roborock.vacuum.c1", C1, "app_start", "app_charge", 10),
+            ("ijai.vacuum.v19", V19, "action", "action", 2),
+        ] {
+            let device = Vacuum::start(model, document);
+            let engine = device.engine(model, document);
+            let bridge = HomeKit::new(engine.clone());
+            bridge
+                .start_at((Ipv4Addr::LOCALHOST, 0).into(), false)
+                .unwrap();
+            let info = bridge.info();
+            let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, info.port)).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let controller = ControllerKeypair::from_seed("vacuum-controller".into(), [32; 32]);
+            let accessory = pair_controller(&mut stream, &info.code, &controller);
+            let mut session = verify(&mut stream, &controller, &accessory);
+            let (_, body) =
+                encrypted_request(&mut stream, &mut session, "GET", "/accessories", &[]);
+            let database: Value = serde_json::from_slice(&body).unwrap();
+            let accessory = &database["accessories"][1];
+            let aid = accessory["aid"].as_u64().unwrap();
+            let service = accessory["services"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| {
+                    s["type"] == "49"
+                        && s["characteristics"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|c| c["type"] == "23" && c["value"] == "Fixture Vacuum")
+                })
+                .unwrap();
+            let on = service["characteristics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["type"] == "25")
+                .unwrap();
+            assert_eq!(on["value"], false);
+            let iid = on["iid"].as_u64().unwrap();
+            let path = format!("/characteristics?id={aid}.{iid}");
+            for (index, value) in [true, true, false, false, false].into_iter().enumerate() {
+                if index == 4 {
+                    device.state.store(paused, Ordering::SeqCst);
+                    engine.refresh("77").unwrap();
+                }
+                let body =
+                    json!({"characteristics":[{"aid":aid,"iid":iid,"value":value}]}).to_string();
+                let (status, response) = encrypted_request(
                     &mut stream,
                     &mut session,
                     "PUT",
                     "/characteristics",
-                    body.as_bytes()
-                )
-                .0,
-                204
-            );
+                    body.as_bytes(),
+                );
+                assert_eq!(
+                    status,
+                    204,
+                    "{model}, repetition {repetition}, step {index}, request {value}, response {}, state {:?}, commands {:?}",
+                    String::from_utf8_lossy(&response),
+                    engine.state("77").map(|s| (s.online, s.error, s.values)),
+                    device.commands()
+                );
+                let (_, body) = encrypted_request(&mut stream, &mut session, "GET", &path, &[]);
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&body).unwrap()["characteristics"][0]["value"],
+                    value
+                );
+            }
+            let commands = device.commands();
+            assert_eq!(commands.len(), 3, "repeated Home writes must be idempotent");
+            assert_eq!(commands[0]["method"], start_method);
+            assert_eq!(commands[1]["method"], dock_method);
+            assert_eq!(commands[2]["method"], dock_method);
+            if start_method == "action" {
+                assert_eq!(
+                    commands[0]["params"],
+                    json!({"did":"77","siid":2,"aiid":1,"in":[]})
+                );
+                assert_eq!(
+                    commands[1]["params"],
+                    json!({"did":"77","siid":3,"aiid":1,"in":[]})
+                );
+            } else {
+                assert!(commands.iter().all(|r| r["params"] == json!([])));
+            }
+            device.state.store(255, Ordering::SeqCst);
+            engine.refresh("77").unwrap();
             let (_, body) = encrypted_request(&mut stream, &mut session, "GET", &path, &[]);
-            assert_eq!(
-                serde_json::from_slice::<Value>(&body).unwrap()["characteristics"][0]["value"],
-                value
-            );
+            // Unknown legacy states deliberately normalize to Idle, as in native.
+            if start_method == "action" {
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&body).unwrap()["characteristics"][0]["status"],
+                    -70402
+                );
+            }
+            assert!(bridge.info().paired);
+            assert_eq!(bridge.info().uri, info.uri);
+            bridge.stop();
         }
-        let commands = device.commands();
-        assert_eq!(commands.len(), 3, "repeated Home writes must be idempotent");
-        assert_eq!(commands[0]["method"], start_method);
-        assert_eq!(commands[1]["method"], dock_method);
-        assert_eq!(commands[2]["method"], dock_method);
-        if start_method == "action" {
-            assert_eq!(
-                commands[0]["params"],
-                json!({"did":"77","siid":2,"aiid":1,"in":[]})
-            );
-            assert_eq!(
-                commands[1]["params"],
-                json!({"did":"77","siid":3,"aiid":1,"in":[]})
-            );
-        } else {
-            assert!(commands.iter().all(|r| r["params"] == json!([])));
-        }
-        device.state.store(255, Ordering::SeqCst);
-        engine.refresh("77").unwrap();
-        let (_, body) = encrypted_request(&mut stream, &mut session, "GET", &path, &[]);
-        // Unknown legacy states deliberately normalize to Idle, as in native.
-        if start_method == "action" {
-            assert_eq!(
-                serde_json::from_slice::<Value>(&body).unwrap()["characteristics"][0]["status"],
-                -70402
-            );
-        }
-        assert!(bridge.info().paired);
-        assert_eq!(bridge.info().uri, info.uri);
-        bridge.stop();
     }
 }
 
