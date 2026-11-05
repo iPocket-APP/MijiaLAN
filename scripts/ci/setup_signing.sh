@@ -34,6 +34,6 @@ xcrun notarytool store-credentials mijialan-native-ci --keychain "$keychain" \
     --key "$signing_dir/notary.p8" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
     > "$signing_dir/notary-credentials.txt" 2>&1
 printf 'MIJIALAN_NOTARY_PROFILE=mijialan-native-ci\nMIJIALAN_NOTARY_KEYCHAIN=%s\n' "$keychain" >> "$GITHUB_ENV"
-rm -f "$signing_dir/certificate.p12" "$signing_dir/notary.p8" "$signing_dir/notary-credentials.txt"
+rm -f "$signing_dir/certificate.p12" "$signing_dir/notary-credentials.txt"
 unset keychain_password
 echo 'Temporary signing identity and notarization profile verified'
