@@ -194,7 +194,8 @@ def main():
             if prompt.get('pressed') or (check.pid(executable) and 'Cancel' not in prompt.get('buttons', [])):
                 break
         if not (prompt and prompt.get('pressed')):
-            # The prompt is not in the accessibility tree on macOS 15; its Open button sits at the right of its foot.
+            # The prompt is not in the accessibility tree on macOS 15. Open sits at the right of its foot, or, in the
+            # taller prompt for an app on a disk image, first in a column of three buttons.
             dialog = None
             for _ in range(10):
                 windows = check.probe_json('onscreen').get('windows', [])
@@ -206,7 +207,8 @@ def main():
             if dialog:
                 check.screenshot('prompt.png')
                 b = dialog['bounds']
-                run(check.probe, 'click', b['X'] + b['Width'] * 0.728, b['Y'] + b['Height'] * 0.886)
+                x, y = (0.5, 0.627) if b['Height'] > 330 else (0.728, 0.886)
+                run(check.probe, 'click', b['X'] + b['Width'] * x, b['Y'] + b['Height'] * y)
                 prompt = dict(prompt or {}, clicked=b)
                 time.sleep(2)
         report['gatekeeperPrompt'] = prompt

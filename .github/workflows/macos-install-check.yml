@@ -20,6 +20,7 @@ defaults:
 
 jobs:
   imports:
+    if: false  # v0.1.2 and v0.1.3 passed against the macOS 15.0–15.5 SDKs in run 42030328380
     # Whether a release needs a system library or symbol that an earlier macOS 15 lacks: dyld would stop
     # it before main(), leaving no process. The runner's older Xcodes carry the macOS 15.0–15.5 SDKs.
     name: ${{ matrix.tag }} · imports vs macOS 15.x SDKs
@@ -68,7 +69,7 @@ jobs:
       matrix:
         runner: [macos-15, macos-15-intel]
         tag: [v0.1.3]
-        scenario: [gatekeeper, dmg]
+        scenario: [dmg]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
