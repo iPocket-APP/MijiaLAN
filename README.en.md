@@ -78,7 +78,7 @@ How generated controls appear in Apple Home: lights, fans and air purifiers use 
 - Features without a suitable native Home control use named switches or presets; some readings appear only on the Mac.
 - For air conditioners and heaters without a temperature reading, the current temperature is a placeholder based on the target temperature, not a room temperature measurement.
 
-See the [device interface matrix](docs/device-interface-matrix-2026-10-31.md) for permissions, parameters and verification status. The matrix is currently in Chinese.
+Run `mijia-lan matrix` for permissions, parameters and verification status (currently in Chinese). To save a report, run `mkdir -p build/reports && swift run mijia-lan matrix > build/reports/device-interface-matrix.md`. Generated reports stay outside version control.
 
 ## FAQ
 

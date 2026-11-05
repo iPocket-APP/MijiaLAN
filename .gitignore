@@ -1,8 +1,14 @@
 .DS_Store
-/.build
-/.swiftpm
-/build
+.build/
+.swiftpm/
+build/
+.generated/
+DerivedData/
+/.vscode/
 *.app
+*.dSYM/
+*.xcresult/
+*.xcuserstate
 xcuserdata/
 __pycache__/
 *.pyc
@@ -34,4 +40,4 @@ credentials*.json
 *.trace/
 /design-qa.md
 /docs/*-2026-*.md
-!/docs/device-interface-matrix-2026-10-31.md
+/docs/device-interface-matrix*.md

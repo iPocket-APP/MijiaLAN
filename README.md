@@ -78,7 +78,7 @@ MijiaLAN 控制能在局域网里直接访问的 Wi-Fi 设备，按适配程度�
 - 「家庭」没有合适原生控件的功能，用具名开关或预设表达；部分读数只在 Mac 上显示。
 - 空调和取暖器没有温度读数时，「当前温度」用设定温度占位，不是实测室温。
 
-逐项权限、参数和验证状态见[设备接口矩阵](docs/device-interface-matrix-2026-10-31.md)。
+逐项权限、参数和验证状态可用 `mijia-lan matrix` 查看。需要保存报告时，运行 `mkdir -p build/reports && swift run mijia-lan matrix > build/reports/device-interface-matrix.md`；生成的报告不纳入版本控制。
 
 ## 常见问题
 
