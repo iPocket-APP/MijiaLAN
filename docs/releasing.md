@@ -88,6 +88,13 @@ must pass and all Release assets must be public before the `deploy-updates` job
 deploys that feed to Pages. Packaging-only runs never modify the live feed.
 Do not manually publish a feed pointing at an unpublished or differently signed ZIP.
 
+If Pages deployment is interrupted after the release becomes public, run
+**Redeploy native update feed** on `main` with that successful signed release's run ID.
+It verifies the release source, both architecture checks, the public version tag,
+and the published ZIP's Ed25519 signature before deploying the existing feed. It
+does not rebuild, sign again or replace published release assets. The run must
+match the current `release.json`; recovery artifacts are retained for 14 days.
+
 Pages uses GitHub Actions as its build source. The `github-pages` environment must
 allow `main` and native release tags `v*`. The custom domain is configured in the
 Pages repository settings; its DNS-only CNAME points at `ipocket-app.github.io`.

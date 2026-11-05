@@ -109,6 +109,27 @@ def prepare_feed(app, archive, notes, output, tools):
                                       '<p><a href="https://github.com/iPocket-APP/MijiaLAN/releases">Downloads and release notes</a></p></html>\n')
 
 
+def verify_public_feed(feed, openssl="openssl"):
+    """Verify an existing feed against the immutable public ZIP and embedded public key."""
+    config, release = configuration(), metadata()
+    name = f"MijiaLAN-{release['version']}-universal.zip"
+    prefix = f"https://github.com/iPocket-APP/MijiaLAN/releases/download/v{release['version']}/"
+    with tempfile.TemporaryDirectory(prefix="mijialan-public-update-") as directory:
+        root = Path(directory)
+        archive = root / name
+        with urllib.request.urlopen(prefix + name, timeout=120) as response, archive.open("wb") as output:
+            shutil.copyfileobj(response, output)
+        info = {"CFBundleVersion": str(release["build_number"]), "CFBundleShortVersionString": release["version"],
+                "LSMinimumSystemVersion": "15.0"}
+        validate_feed(feed, archive, info, prefix)
+        enclosure = ET.parse(feed).find("./channel/item/enclosure")
+        public_key, signature = root / "public.der", root / "archive.sig"
+        public_key.write_bytes(bytes.fromhex("302a300506032b6570032100") + base64.b64decode(config["public_key"]))
+        signature.write_bytes(base64.b64decode(enclosure.get(f"{{{SPARKLE}}}edSignature"), validate=True))
+        subprocess.run([openssl, "pkeyutl", "-verify", "-pubin", "-keyform", "DER", "-inkey", str(public_key),
+                        "-rawin", "-in", str(archive), "-sigfile", str(signature)], check=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -116,6 +137,9 @@ def main():
     configure.add_argument("app", type=Path)
     fetch = commands.add_parser("fetch-tools")
     fetch.add_argument("destination", type=Path)
+    verify = commands.add_parser("verify-public-feed")
+    verify.add_argument("feed", type=Path)
+    verify.add_argument("--openssl", default="openssl", help="OpenSSL 3 executable")
     prepare = commands.add_parser("prepare-feed")
     for name in ("app", "archive", "notes", "output", "tools"):
         prepare.add_argument("--" + name, type=Path, required=True)
@@ -124,6 +148,8 @@ def main():
         configure_app(args.app)
     elif args.command == "fetch-tools":
         print(fetch_tools(args.destination.resolve()))
+    elif args.command == "verify-public-feed":
+        verify_public_feed(args.feed, args.openssl)
     else:
         prepare_feed(args.app.resolve(), args.archive.resolve(), args.notes.resolve(), args.output.resolve(), args.tools.resolve())
 
