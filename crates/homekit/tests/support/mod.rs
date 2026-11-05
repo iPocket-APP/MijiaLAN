@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use std::{
     net::{Ipv4Addr, UdpSocket},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     },
     time::Duration,
@@ -16,11 +16,19 @@ pub struct MiotDevice {
     pub port: u16,
     pub phase: Arc<AtomicU8>,
     pub writes: Arc<AtomicUsize>,
+    pub commands: Arc<Mutex<Vec<Value>>>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl MiotDevice {
     pub fn start() -> Self {
+        Self::with_spec(
+            "zhimi.airpurifier.rma1",
+            Specification::bundled("zhimi.airpurifier.rma1").unwrap(),
+        )
+    }
+    pub fn with_spec(model: &str, document: &str) -> Self {
+        let spec = Specification::for_model(model, document).unwrap();
         let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         socket
             .set_read_timeout(Some(Duration::from_millis(50)))
@@ -29,15 +37,14 @@ impl MiotDevice {
         let phase = Arc::new(AtomicU8::new(0));
         let writes = Arc::new(AtomicUsize::new(0));
         let stop = Arc::new(AtomicBool::new(false));
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let worker_commands = commands.clone();
         let (worker_phase, worker_writes, worker_stop) =
             (phase.clone(), writes.clone(), stop.clone());
         let thread = std::thread::spawn(move || {
             let token = Token::parse(TOKEN).unwrap();
-            let spec = Specification::for_model(
-                "zhimi.airpurifier.rma1",
-                Specification::bundled("zhimi.airpurifier.rma1").unwrap(),
-            )
-            .unwrap();
+            let mut actual: std::collections::BTreeMap<String, Value> =
+                std::collections::BTreeMap::new();
             let mut buffer = [0; 65535];
             while !worker_stop.load(Ordering::Relaxed) {
                 let (len, from) = match socket.recv_from(&mut buffer) {
@@ -72,6 +79,7 @@ impl MiotDevice {
                             "temperature" if phase == 1 => json!(-3276.8),
                             "relative-humidity" => json!(if phase == 2 {55} else {45}),
                             "temperature" => json!(21.56),
+                            _ if actual.contains_key(&property.key())=>actual[&property.key()].clone(),
                             _ if property.format == "bool" => json!(property.name == "on"),
                             _ if !property.choices.is_empty() => property.choices[0].value.clone(),
                             _ => property.range.map_or(json!(0), |r| numeric(r[0], &property.format)),
@@ -80,6 +88,8 @@ impl MiotDevice {
                     }).collect()),
                     "set_properties" => {
                         worker_writes.fetch_add(1, Ordering::SeqCst);
+                        worker_commands.lock().unwrap().push(request.clone());
+                        for p in request["params"].as_array().unwrap() { actual.insert(format!("{}.{}",p["siid"],p["piid"]),p["value"].clone()); }
                         Value::Array(request["params"].as_array().unwrap().iter().map(|p| json!({"siid":p["siid"],"piid":p["piid"],"code":0})).collect())
                     }
                     method => panic!("unexpected fixture method {method}"),
@@ -97,6 +107,7 @@ impl MiotDevice {
             port,
             phase,
             writes,
+            commands,
             stop,
             thread: Some(thread),
         }

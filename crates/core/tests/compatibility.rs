@@ -160,9 +160,31 @@ fn reports_preserve_existing_controls_for_every_bundled_model() {
             profile.adapt_spec(&mut previous);
         }
         let current = Specification::for_model(model, text).unwrap();
+        fn protocol_fields(mut value: serde_json::Value) -> serde_json::Value {
+            fn strip(value: &mut serde_json::Value) {
+                match value {
+                    serde_json::Value::Object(o) => {
+                        o.remove("title");
+                        for v in o.values_mut() {
+                            strip(v);
+                        }
+                    }
+                    serde_json::Value::Array(a) => {
+                        for v in a {
+                            strip(v);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            strip(&mut value);
+            value
+        }
         assert_eq!(
-            serde_json::to_value((&previous.properties, &previous.actions)).unwrap(),
-            serde_json::to_value((&current.properties, &current.actions)).unwrap(),
+            protocol_fields(
+                serde_json::to_value((&previous.properties, &previous.actions)).unwrap()
+            ),
+            protocol_fields(serde_json::to_value((&current.properties, &current.actions)).unwrap()),
             "{model}"
         );
         let unique: BTreeSet<_> = current.compatibility.iter().map(|c| &c.id).collect();

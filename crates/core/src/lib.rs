@@ -6,6 +6,7 @@ pub mod engine;
 pub mod import_job;
 pub mod legacy;
 pub mod localization;
+pub mod naming;
 pub mod packet;
 pub mod spec;
 pub mod store;

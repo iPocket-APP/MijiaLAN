@@ -1,0 +1,270 @@
+{
+  "services": {
+    "indicator-light": {
+      "zh": "指示灯",
+      "en": "Indicator Light"
+    },
+    "alarm": {
+      "zh": "提示音",
+      "en": "Sound"
+    },
+    "charging-protection": {
+      "zh": "充电保护",
+      "en": "Charging Protection"
+    },
+    "charge-prt-ext": {
+      "zh": "扩展充电保护",
+      "en": "Extended Charging Protection"
+    },
+    "max-power-limit": {
+      "zh": "功率限制",
+      "en": "Power Limit"
+    },
+    "power-limit-ext": {
+      "zh": "扩展功率限制",
+      "en": "Extended Power Limit"
+    },
+    "quick-countdown": {
+      "zh": "关机倒计时",
+      "en": "Power-off Countdown"
+    },
+    "over-use-ele-alert": {
+      "zh": "过量用电提醒",
+      "en": "Energy Usage Alert"
+    },
+    "cycle": {
+      "zh": "循环计划",
+      "en": "Cycle Schedule"
+    }
+  },
+  "properties": {
+    "fan-level": {
+      "zh": "风速挡位",
+      "en": "Fan Level"
+    },
+    "speed-level": {
+      "zh": "风速",
+      "en": "Fan Speed"
+    },
+    "mode": {
+      "zh": "模式",
+      "en": "Mode"
+    },
+    "cook-mode": {
+      "zh": "菜单",
+      "en": "Menu"
+    },
+    "horizontal-swing": {
+      "zh": "左右摇头",
+      "en": "Horizontal Oscillation"
+    },
+    "horizontal-angle": {
+      "zh": "左右摇头角度",
+      "en": "Horizontal Angle"
+    },
+    "vertical-swing": {
+      "zh": "上下摇头",
+      "en": "Vertical Oscillation"
+    },
+    "vertical-angle": {
+      "zh": "上下摇头角度",
+      "en": "Vertical Angle"
+    },
+    "horizontal-swing-included-angle": {
+      "zh": "左右摇头角度",
+      "en": "Horizontal Angle"
+    },
+    "vertical-swing-included-angle": {
+      "zh": "上下摇头角度",
+      "en": "Vertical Angle"
+    },
+    "alarm": {
+      "zh": "提示音",
+      "en": "Sound"
+    },
+    "off-delay-time": {
+      "zh": "关机定时",
+      "en": "Sleep Timer"
+    },
+    "physical-controls-locked": {
+      "zh": "童锁",
+      "en": "Child Lock"
+    },
+    "temperature": {
+      "zh": "温度",
+      "en": "Temperature"
+    },
+    "relative-humidity": {
+      "zh": "湿度",
+      "en": "Humidity"
+    },
+    "swing-all": {
+      "zh": "循环摇头",
+      "en": "Circulating Oscillation"
+    },
+    "back-to-center": {
+      "zh": "回正",
+      "en": "Return to Center"
+    },
+    "off-to-center": {
+      "zh": "关机回正",
+      "en": "Center on Power Off"
+    },
+    "color-temperature": {
+      "zh": "色温",
+      "en": "Color Temperature"
+    },
+    "target-temperature": {
+      "zh": "设定温度",
+      "en": "Target Temperature"
+    },
+    "electric-power": {
+      "zh": "功率",
+      "en": "Power Draw"
+    },
+    "power-consumption": {
+      "zh": "累计电量",
+      "en": "Energy Used"
+    },
+    "filter-life-level": {
+      "zh": "滤芯寿命",
+      "en": "Filter Life"
+    },
+    "filter-used-time": {
+      "zh": "滤芯已用时间",
+      "en": "Filter Usage"
+    },
+    "filter-left-time": {
+      "zh": "滤芯剩余时间",
+      "en": "Filter Time Remaining"
+    },
+    "favorite-level": {
+      "zh": "最爱档位",
+      "en": "Favorite Level"
+    },
+    "motor-speed": {
+      "zh": "电机转速",
+      "en": "Motor Speed"
+    },
+    "fault": {
+      "zh": "故障",
+      "en": "Fault"
+    },
+    "status": {
+      "zh": "运行状态",
+      "en": "Operating Status"
+    },
+    "target-time": {
+      "zh": "烹饪时间",
+      "en": "Cooking Time"
+    },
+    "left-time": {
+      "zh": "剩余时间",
+      "en": "Time Remaining"
+    },
+    "auto-keep-warm": {
+      "zh": "自动保温",
+      "en": "Auto Keep Warm"
+    },
+    "current-keep-warm-time": {
+      "zh": "已保温时间",
+      "en": "Keep-warm Time Elapsed"
+    },
+    "keep-warm-time": {
+      "zh": "保温时间",
+      "en": "Keep-warm Duration"
+    },
+    "target-cooking-measure": {
+      "zh": "份量",
+      "en": "Serving Size"
+    },
+    "texture": {
+      "zh": "口感",
+      "en": "Texture"
+    },
+    "reservation-left-time": {
+      "zh": "预约时间",
+      "en": "Scheduled Delay"
+    },
+    "cooking-weight": {
+      "zh": "食材重量",
+      "en": "Ingredient Weight"
+    },
+    "turn-pot-config": {
+      "zh": "翻面提醒",
+      "en": "Turn-over Reminder"
+    },
+    "default-power-on-state": {
+      "zh": "上电状态",
+      "en": "Power-on Behavior"
+    },
+    "countdown": {
+      "zh": "倒计时",
+      "en": "Countdown"
+    },
+    "countdown-time": {
+      "zh": "倒计时时长",
+      "en": "Countdown Duration"
+    },
+    "countdown-left-time": {
+      "zh": "倒计时剩余",
+      "en": "Countdown Remaining"
+    },
+    "countdown-on": {
+      "zh": "倒计时开关",
+      "en": "Countdown Enabled"
+    },
+    "charge-protect": {
+      "zh": "充电保护",
+      "en": "Charging Protection"
+    },
+    "power-limit": {
+      "zh": "功率限制",
+      "en": "Power Limit"
+    },
+    "power": {
+      "zh": "功率",
+      "en": "Power"
+    },
+    "time": {
+      "zh": "时长",
+      "en": "Duration"
+    },
+    "on-off-count": {
+      "zh": "开关次数",
+      "en": "Power Cycles"
+    },
+    "menu-id": {
+      "zh": "运行菜单编号",
+      "en": "Active Menu ID"
+    },
+    "current-keep-warm": {
+      "zh": "当前保温状态",
+      "en": "Keep-warm Status"
+    },
+    "total-time": {
+      "zh": "总时间",
+      "en": "Total Time"
+    },
+    "cook-left-time": {
+      "zh": "烹饪剩余时间",
+      "en": "Cooking Time Remaining"
+    },
+    "pre-left-time": {
+      "zh": "预约剩余时间",
+      "en": "Scheduled Delay Remaining"
+    },
+    "no-pan": {
+      "zh": "锅体状态",
+      "en": "Pot Status"
+    },
+    "pot-status": {
+      "zh": "提壶状态",
+      "en": "Kettle Position"
+    },
+    "pm2.5-density": {
+      "zh": "PM2.5",
+      "en": "PM2.5"
+    }
+  }
+}

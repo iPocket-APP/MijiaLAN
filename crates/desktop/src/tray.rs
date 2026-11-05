@@ -8,6 +8,11 @@ pub enum Command {
     Show,
     Toggle,
     Hide,
+    #[cfg(target_os = "macos")]
+    OutsideClick {
+        x: f64,
+        y: f64,
+    },
     Settings,
     Quit,
 }

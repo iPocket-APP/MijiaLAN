@@ -24,6 +24,8 @@ pub struct Capability {
     pub description_en: String,
     pub is_action: bool,
     pub reason: Reason,
+    #[serde(default)]
+    pub label: Option<crate::naming::Name>,
 }
 
 impl Capability {
@@ -44,6 +46,9 @@ impl Capability {
             "pause" if self.is_action => ("暂停", "Pause"),
             "resume-cook" if self.is_action => ("继续", "Resume"),
             _ if self.is_action => {
+                if let Some(label) = &self.label {
+                    return label.get(english);
+                }
                 return if english {
                     &self.description_en
                 } else {
@@ -51,6 +56,9 @@ impl Capability {
                 };
             }
             _ => {
+                if let Some(label) = &self.label {
+                    return label.get(english);
+                }
                 return Property::label_for(
                     &self.service,
                     &self.name,
@@ -222,6 +230,7 @@ fn capability(
         description_en: en,
         is_action,
         reason,
+        label: None,
     }
 }
 fn alternate_control(name: &str, reason: Reason, spec: &Specification) -> Reason {

@@ -2,6 +2,8 @@
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "macos", test))]
+mod macos_placement;
 #[cfg(any(target_os = "windows", test))]
 mod menu_selection;
 #[cfg(target_os = "windows")]
@@ -408,6 +410,18 @@ fn run() -> anyhow::Result<()> {
                                 && let Some(handle) = current.borrow().as_ref()
                             {
                                 trace_panel("hide");
+                                let _ = handle.update(cx, |_, window, _| window.remove_window());
+                            }
+                        }
+                        #[cfg(target_os = "macos")]
+                        tray::Command::OutsideClick { x, y } => {
+                            // AppKit's global callback can run off the main thread.
+                            let over_tray = cx.has_global::<TrayState>()
+                                && macos::point_over_tray(Some(&cx.global::<TrayState>().0), x, y);
+                            if !over_tray
+                                && !macos::defer_panel_dismiss()
+                                && let Some(handle) = current.borrow().as_ref()
+                            {
                                 let _ = handle.update(cx, |_, window, _| window.remove_window());
                             }
                         }

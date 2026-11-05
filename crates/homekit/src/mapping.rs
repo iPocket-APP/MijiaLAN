@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod controls;
 mod value;
 pub(crate) use value::validate_write;
 
@@ -42,10 +43,57 @@ pub enum Transform {
     Percent,
     Mired,
     Option(Value),
-    Adjust(f64),
+    FanSpeed {
+        power: String,
+    },
+    FanLevel {
+        levels: Vec<Value>,
+        power: String,
+        mode: Option<(String, Value)>,
+    },
+    Gear {
+        levels: Vec<Value>,
+        auto: Option<Value>,
+    },
+    FanAuto {
+        auto: Value,
+        manual: Value,
+    },
+    PurifierMode {
+        auto: Value,
+        manual: Value,
+    },
+    Toggle {
+        off: Value,
+        on: Value,
+    },
+    Mode {
+        selected: Value,
+        off: Value,
+        state: u8,
+    },
+    ClimateTarget {
+        modes: Vec<(u8, Value)>,
+        power: String,
+    },
+    ClimateCurrent {
+        mode: String,
+        heat: Option<Value>,
+        cool: Option<Value>,
+    },
+    Position {
+        opening: Option<Value>,
+        closing: Option<Value>,
+    },
+    Running {
+        rpm: Option<String>,
+    },
     Fixed(Value),
     Action(u32, u32),
-    Cleaning { start: (u32, u32), dock: (u32, u32) },
+    Cleaning {
+        start: (u32, u32),
+        dock: (u32, u32),
+    },
     Mapped(Vec<(u8, Value)>),
     FilterChange,
 }
@@ -62,7 +110,7 @@ impl Binding {
     pub fn read(&self, engine: &Engine, stale: bool) -> Result<Value, i32> {
         match &self.transform {
             Transform::Fixed(value) => return Ok(value.clone()),
-            Transform::Adjust(_) | Transform::Action(_, _) => return Ok(json!(false)),
+            Transform::Action(_, _) => return Ok(json!(false)),
             _ => {}
         }
         let state = engine.state(&self.did).ok_or(-70402)?;
@@ -71,7 +119,7 @@ impl Binding {
     fn read_state(&self, state: &DeviceState, stale: bool) -> Result<Value, i32> {
         match &self.transform {
             Transform::Fixed(value) => return Ok(value.clone()),
-            Transform::Adjust(_) | Transform::Action(_, _) => return Ok(json!(false)),
+            Transform::Action(_, _) => return Ok(json!(false)),
             _ => {}
         }
         if !stale && !state.online {
@@ -87,6 +135,12 @@ impl Binding {
             .iter()
             .find(|p| p.key() == self.key)
             .ok_or(-70402)?;
+        if state.errors.contains_key(&self.key) {
+            return Err(-70402);
+        }
+        if let Some(result) = controls::read(&self.transform, value, state)? {
+            return Ok(result);
+        }
         Ok(match &self.transform {
             Transform::Cleaning { .. } => json!(mijialan_core::vacuum::is_cleaning(
                 mijialan_core::vacuum::status_description(property, value).ok_or(-70402)?
@@ -123,9 +177,18 @@ impl Binding {
                 }
                 json!((raw - min) / (max - min) * 100.)
             }
-            Transform::Mired => json!(
-                (1_000_000. / value.as_f64().filter(|v| *v > 0.).ok_or(-70402)?).round() as i64
-            ),
+            Transform::Mired => {
+                let mired = (1_000_000.
+                    / value
+                        .as_f64()
+                        .filter(|v| v.is_finite() && *v > 0.)
+                        .ok_or(-70402)?)
+                .round();
+                if !mired.is_finite() || !(0. ..=u32::MAX as f64).contains(&mired) {
+                    return Err(-70402);
+                }
+                json!(mired as u64)
+            }
             _ => unreachable!(),
         })
     }
@@ -182,6 +245,23 @@ impl Binding {
                 .action(&self.did, *siid, *aiid, vec![])
                 .map_err(|_| -70402);
         }
+        if let Some(writes) = controls::writes(&self.transform, property, &state, value)? {
+            // Validate the complete plan before any command reaches the device.
+            for (key, value) in &writes {
+                state
+                    .spec
+                    .properties
+                    .iter()
+                    .find(|p| p.key() == *key)
+                    .ok_or(-70402)?
+                    .validate(value)
+                    .map_err(|_| -70410)?;
+            }
+            for (key, value) in writes {
+                engine.write(&self.did, &key, value).map_err(|_| -70402)?;
+            }
+            return Ok(());
+        }
         let output = match &self.transform {
             Transform::Direct => {
                 if property.format == "bool" {
@@ -209,24 +289,12 @@ impl Binding {
                     return Ok(());
                 }
             }
-            Transform::Adjust(direction) => {
-                if !as_bool(value)? {
-                    return Ok(());
-                }
-                let [min, max, step] = property.range.ok_or(-70410)?;
-                let current = state
-                    .values
-                    .get(&self.key)
-                    .and_then(Value::as_f64)
-                    .ok_or(-70402)?;
-                numeric(
-                    (current + step * direction).clamp(min, max),
-                    &property.format,
-                )
-            }
             Transform::Percent | Transform::Mired => {
                 let number = value.as_f64().filter(|n| n.is_finite()).ok_or(-70410)?;
                 let [min, max, step] = property.range.ok_or(-70410)?;
+                if ![min, max, step].iter().all(|v| v.is_finite()) || min > max || step <= 0. {
+                    return Err(-70410);
+                }
                 let raw = if matches!(self.transform, Transform::Percent) {
                     if !(0. ..=100.).contains(&number) {
                         return Err(-70410);
@@ -330,6 +398,12 @@ struct Builder<'a> {
     omitted_services: usize,
 }
 impl Builder<'_> {
+    fn primary(&mut self, service: usize) {
+        for s in &mut self.services {
+            s.as_object_mut().unwrap().remove("primary");
+        }
+        self.services[service]["primary"] = json!(true);
+    }
     fn service(&mut self, key: &str, kind: &str, name: &str) -> Option<usize> {
         if let Some(index) = self.service_indices.get(key) {
             return Some(*index);
@@ -410,6 +484,12 @@ impl Builder<'_> {
                     .and_then(|v| u8::try_from(v).ok())
                     .map(|v| [v].into()),
                 Transform::Mapped(v) => Some(v.iter().map(|(n, _)| *n).collect()),
+                Transform::ClimateTarget { modes, .. } => {
+                    Some(modes.iter().map(|(n, _)| *n).collect())
+                }
+                Transform::Working(state) | Transform::Mode { state, .. } if *state > 1 => {
+                    Some([0, 1, *state].into())
+                }
                 _ => None,
             };
             if let Some(valid) = valid {
@@ -496,22 +576,21 @@ fn build_states(engine: &Engine, layout: &mut Layout, states: Vec<DeviceState>) 
             omitted_services: 0,
         };
         let props = &state.spec.properties;
-        let power = props
-            .iter()
-            .find(|p| p.name == "on" && p.writable && p.format == "bool");
+        let power = controls::power(&state);
         let native = native(&mut builder, &state);
         if let Some(power) = power.filter(|_| !native) {
             let kind = state.spec.kind.as_str();
             let service_type = match kind {
                 "light" => "43",
-                "fan" => "40",
+                "fan" => "B7",
                 "air-purifier" => "BB",
                 _ => "47",
             };
             let s = builder
                 .service("primary", service_type, &state.device.name)
                 .expect("primary service is added before optional services");
-            let active = kind == "air-purifier";
+            builder.primary(s);
+            let active = ["fan", "air-purifier"].contains(&kind);
             builder.characteristic(
                 s,
                 "primary:power",
@@ -527,26 +606,9 @@ fn build_states(engine: &Engine, layout: &mut Layout, states: Vec<DeviceState>) 
                 if active { Some([0., 1., 1.]) } else { None },
             );
             if kind == "air-purifier" {
-                builder.characteristic(
-                    s,
-                    "primary:current",
-                    "A9",
-                    "uint8",
-                    Some(power),
-                    Transform::Working(2),
-                    false,
-                    Some([0., 2., 1.]),
-                );
-                builder.characteristic(
-                    s,
-                    "primary:target",
-                    "A8",
-                    "uint8",
-                    None,
-                    Transform::Fixed(json!(0)),
-                    true,
-                    Some([0., 1., 1.]),
-                );
+                controls::purifier(&mut builder, s, &state, power);
+            } else if kind == "fan" {
+                controls::fan(&mut builder, s, &state, power);
             } else if service_type == "47" {
                 builder.characteristic(
                     s,
@@ -590,24 +652,16 @@ fn build_states(engine: &Engine, layout: &mut Layout, states: Vec<DeviceState>) 
                         Some([(1_000_000. / max).round(), (1_000_000. / min).round(), 1.]),
                     );
                 }
-                if ["fan", "air-purifier"].contains(&kind)
-                    && p.name == "speed-level"
-                    && p.range.is_some_and(|r| r[0] < r[1])
-                {
-                    builder.characteristic(
-                        s,
-                        "primary:speed",
-                        "29",
-                        "float",
-                        Some(p),
-                        Transform::Percent,
-                        true,
-                        Some([0., 100., 1.]),
-                    );
-                }
             }
         }
-        for p in props.iter().filter(|p| p.readable) {
+        let reviewed = mijialan_core::Specification::bundled(&state.device.model).is_some();
+        for p in props
+            .iter()
+            .filter(|p| p.readable && !p.writable && (reviewed || !p.vendor_defined))
+        {
+            if builder.consumed.contains(&p.key()) {
+                continue;
+            }
             let (service, characteristic, range) = match p.name.as_str() {
                 "temperature" => ("8A", "11", [-40., 100., 0.1]),
                 "relative-humidity" => ("82", "10", [0., 100., 1.]),
@@ -654,67 +708,7 @@ fn build_states(engine: &Engine, layout: &mut Layout, states: Vec<DeviceState>) 
                 Some(range),
             );
         }
-        for p in props.iter().filter(|p| p.writable) {
-            if builder.consumed.contains(&p.key()) {
-                continue;
-            }
-            if p.format == "bool" {
-                builder.named(p, "toggle", p.label(), Transform::Direct);
-            } else if !p.choices.is_empty() {
-                for (index, choice) in p.choices.iter().enumerate() {
-                    builder.named(
-                        p,
-                        &format!("option:{index}"),
-                        &format!("{} · {}", p.label(), choice.description),
-                        Transform::Option(choice.value.clone()),
-                    );
-                }
-            } else if let Some([min, max, _]) = p.range {
-                builder.named(
-                    p,
-                    "minimum",
-                    &format!("{} {}", p.label(), p.display(&numeric(min, &p.format))),
-                    Transform::Option(numeric(min, &p.format)),
-                );
-                builder.named(
-                    p,
-                    "maximum",
-                    &format!("{} {}", p.label(), p.display(&numeric(max, &p.format))),
-                    Transform::Option(numeric(max, &p.format)),
-                );
-                builder.named(
-                    p,
-                    "decrease",
-                    &format!("{} −", p.label()),
-                    Transform::Adjust(-1.),
-                );
-                builder.named(
-                    p,
-                    "increase",
-                    &format!("{} +", p.label()),
-                    Transform::Adjust(1.),
-                );
-            }
-        }
-        for a in state.spec.actions.iter().filter(|a| a.inputs.is_empty()) {
-            let key = format!("action:{}.{}", a.siid, a.aiid);
-            if builder.consumed.contains(&key) {
-                continue;
-            }
-            let Some(s) = builder.service(&key, "49", a.label()) else {
-                continue;
-            };
-            builder.characteristic(
-                s,
-                &format!("{key}:on"),
-                "25",
-                "bool",
-                None,
-                Transform::Action(a.siid, a.aiid),
-                true,
-                None,
-            );
-        }
+        controls::extras(&mut builder, &state, reviewed);
         if builder.omitted_services > 0 {
             database.warnings.push(if mijialan_core::localization::english() {
                 format!("Some extra Home controls for {} exceed the bridge limit; use the client for those controls.", state.device.name)
@@ -754,11 +748,12 @@ fn hap_string(value: &str) -> &str {
 
 fn native(b: &mut Builder<'_>, state: &DeviceState) -> bool {
     let props = &state.spec.properties;
-    let power = props
-        .iter()
-        .find(|p| p.name == "on" && p.writable && p.format == "bool");
+    let power = controls::power(state);
     let find = |names: &[&str]| props.iter().find(|p| names.contains(&p.name.as_str()));
     let kind = state.spec.kind.as_str();
+    if kind == "bath-heater" {
+        return controls::bath_heater(b, state);
+    }
     if kind == "vacuum" {
         let action = |service: &str, name: &str| {
             state
@@ -777,6 +772,7 @@ fn native(b: &mut Builder<'_>, state: &DeviceState) -> bool {
         let Some(service) = b.service("native", "49", &state.device.name) else {
             return false;
         };
+        b.primary(service);
         b.characteristic(
             service,
             "native:cleaning",
@@ -801,10 +797,14 @@ fn native(b: &mut Builder<'_>, state: &DeviceState) -> bool {
         else {
             return false;
         };
-        let current = find(&["current-position"]).unwrap_or(target);
+        let Some(current) = find(&["current-position"]).filter(|p| p.readable && p.range.is_some())
+        else {
+            return false;
+        };
         let Some(s) = b.service("native", "8C", &state.device.name) else {
             return false;
         };
+        b.primary(s);
         b.characteristic(
             s,
             "native:target",
@@ -825,16 +825,32 @@ fn native(b: &mut Builder<'_>, state: &DeviceState) -> bool {
             false,
             Some([0., 100., 1.]),
         );
-        b.characteristic(
-            s,
-            "native:state",
-            "72",
-            "uint8",
-            None,
-            Transform::Fixed(json!(2)),
-            false,
-            Some([0., 2., 1.]),
-        );
+        if let Some(status) = find(&["status"]).filter(|p| p.readable) {
+            b.characteristic(
+                s,
+                "native:state",
+                "72",
+                "uint8",
+                Some(status),
+                Transform::Position {
+                    opening: controls::option(status, &["opening"]),
+                    closing: controls::option(status, &["closing"]),
+                },
+                false,
+                Some([0., 2., 1.]),
+            );
+        } else {
+            b.characteristic(
+                s,
+                "native:state",
+                "72",
+                "uint8",
+                None,
+                Transform::Fixed(json!(2)),
+                false,
+                Some([0., 2., 1.]),
+            );
+        }
         return true;
     }
     if kind == "humidifier" || kind == "dehumidifier" {
@@ -845,10 +861,14 @@ fn native(b: &mut Builder<'_>, state: &DeviceState) -> bool {
         ) else {
             return false;
         };
+        let Some([lo, hi, step]) = target.range.filter(|r| r[0].max(0.) <= r[1].min(100.)) else {
+            return false;
+        };
         let humidifying = kind == "humidifier";
         let Some(s) = b.service("native", "BD", &state.device.name) else {
             return false;
         };
+        b.primary(s);
         b.characteristic(
             s,
             "native:power",
@@ -897,7 +917,7 @@ fn native(b: &mut Builder<'_>, state: &DeviceState) -> bool {
             Some(target),
             Transform::Direct,
             true,
-            target.range,
+            Some([lo.max(0.), hi.min(100.), step]),
         );
         if let Some(water) =
             find(&["water-level"]).filter(|p| p.readable && p.range.is_some_and(|r| r[0] < r[1]))
@@ -913,6 +933,7 @@ fn native(b: &mut Builder<'_>, state: &DeviceState) -> bool {
                 Some([0., 100., 1.]),
             );
         }
+        controls::child_lock(b, s);
         return true;
     }
     if kind == "heater" || kind == "air-conditioner" {
@@ -926,23 +947,14 @@ fn native(b: &mut Builder<'_>, state: &DeviceState) -> bool {
             let Some(mode) = find(&["mode"]).filter(|p| p.writable) else {
                 return false;
             };
-            let values: Vec<_> = mode
-                .choices
-                .iter()
-                .filter_map(|c| {
-                    let text = c.description.to_lowercase();
-                    let code = if text.contains("auto") || text.contains("自动") {
-                        0
-                    } else if text.contains("heat") || text.contains("制热") {
-                        1
-                    } else if text.contains("cool") || text.contains("制冷") {
-                        2
-                    } else {
-                        return None;
-                    };
-                    Some((code, c.value.clone()))
-                })
-                .collect();
+            let values: Vec<_> = [
+                (0, &["auto", "automatic"][..]),
+                (1, &["heat", "heating"][..]),
+                (2, &["cool", "cooling"][..]),
+            ]
+            .into_iter()
+            .filter_map(|(n, names)| controls::option(mode, names).map(|v| (n, v)))
+            .collect();
             if values.is_empty() {
                 return false;
             }
@@ -950,12 +962,17 @@ fn native(b: &mut Builder<'_>, state: &DeviceState) -> bool {
         } else {
             None
         };
+        let Some([lo, hi, step]) = target.range.filter(|r| r[0].max(0.) <= r[1].min(38.)) else {
+            return false;
+        };
+        let climate_range = Some([lo.max(0.), hi.min(38.), step]);
         let temperature = find(&["temperature", "indoor-temperature"])
             .filter(|p| p.readable)
             .unwrap_or(target);
         let Some(s) = b.service("native", "BC", &state.device.name) else {
             return false;
         };
+        b.primary(s);
         b.characteristic(
             s,
             "native:power",
@@ -966,13 +983,22 @@ fn native(b: &mut Builder<'_>, state: &DeviceState) -> bool {
             true,
             Some([0., 1., 1.]),
         );
+        let current = modes
+            .as_ref()
+            .map_or(Transform::Working(2), |(mode, values)| {
+                Transform::ClimateCurrent {
+                    mode: mode.key(),
+                    heat: values.iter().find(|(n, _)| *n == 1).map(|(_, v)| v.clone()),
+                    cool: values.iter().find(|(n, _)| *n == 2).map(|(_, v)| v.clone()),
+                }
+            });
         b.characteristic(
             s,
             "native:current",
             "B1",
             "uint8",
             Some(power),
-            Transform::Working(if kind == "heater" { 2 } else { 1 }),
+            current,
             false,
             Some([0., 3., 1.]),
         );
@@ -984,7 +1010,10 @@ fn native(b: &mut Builder<'_>, state: &DeviceState) -> bool {
                 "B2",
                 "uint8",
                 Some(mode),
-                Transform::Mapped(values),
+                Transform::ClimateTarget {
+                    modes: values,
+                    power: power.key(),
+                },
                 true,
                 Some([0., 2., 1.]),
             );
@@ -997,7 +1026,7 @@ fn native(b: &mut Builder<'_>, state: &DeviceState) -> bool {
                     Some(target),
                     Transform::Direct,
                     true,
-                    target.range,
+                    climate_range,
                 );
             }
             if states.contains(&0) || states.contains(&1) {
@@ -1009,7 +1038,32 @@ fn native(b: &mut Builder<'_>, state: &DeviceState) -> bool {
                     Some(target),
                     Transform::Direct,
                     true,
-                    target.range,
+                    climate_range,
+                );
+            }
+            for (index, choice) in mode.choices.iter().enumerate() {
+                if [
+                    controls::option(mode, &["auto", "automatic"]),
+                    controls::option(mode, &["heat", "heating"]),
+                    controls::option(mode, &["cool", "cooling"]),
+                    controls::option(mode, &["off", "none"]),
+                ]
+                .iter()
+                .flatten()
+                .any(|v| equivalent(v, &choice.value))
+                {
+                    continue;
+                }
+                let title = if mijialan_core::localization::english() {
+                    &choice.description_en
+                } else {
+                    &choice.description
+                };
+                b.named(
+                    mode,
+                    &format!("option:{index}"),
+                    &format!("{} · {title}", mode.label()),
+                    Transform::Option(choice.value.clone()),
                 );
             }
         } else {
@@ -1031,7 +1085,7 @@ fn native(b: &mut Builder<'_>, state: &DeviceState) -> bool {
                 Some(target),
                 Transform::Direct,
                 true,
-                target.range,
+                climate_range,
             );
         }
         b.characteristic(
@@ -1054,6 +1108,7 @@ fn native(b: &mut Builder<'_>, state: &DeviceState) -> bool {
             true,
             Some([0., 1., 1.]),
         );
+        controls::climate_fan(b, s, state);
         return true;
     }
     false

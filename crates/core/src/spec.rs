@@ -9,6 +9,30 @@ pub struct Choice {
     pub description: String,
     pub description_en: String,
 }
+impl Choice {
+    pub fn label(&self, english: bool) -> &str {
+        if english {
+            return &self.description_en;
+        }
+        match self.description.to_ascii_lowercase().as_str() {
+            "auto" => "自动",
+            "cool" => "制冷",
+            "dry" => "除湿",
+            "heat" => "制热",
+            "fan" => "送风",
+            "low" => "低",
+            "medium" => "中",
+            "high" => "高",
+            "off" => "关闭",
+            "on" => "开启",
+            "pause" => "暂停",
+            "paused" => "已暂停",
+            "error" | "fault" => "故障",
+            "idle" => "待机",
+            _ => &self.description,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Property {
@@ -24,6 +48,10 @@ pub struct Property {
     pub unit: String,
     pub range: Option<[f64; 3]>,
     pub choices: Vec<Choice>,
+    #[serde(default)]
+    pub title: Option<crate::naming::Name>,
+    #[serde(default)]
+    pub vendor_defined: bool,
 }
 
 impl Property {
@@ -31,6 +59,9 @@ impl Property {
         format!("{}.{}", self.siid, self.piid)
     }
     pub fn label(&self) -> &str {
+        if let Some(title) = &self.title {
+            return title.get(crate::localization::english());
+        }
         Self::label_for(
             &self.service,
             &self.name,
@@ -100,6 +131,38 @@ impl Property {
                 Err(Error::Validation("需要布尔值".into()))
             };
         }
+        if self.format == "string" && !value.is_string() {
+            return Err(Error::Validation("需要字符串".into()));
+        }
+        if self.format != "string" {
+            let n = value
+                .as_f64()
+                .filter(|n| n.is_finite())
+                .ok_or_else(|| Error::Validation("需要有效数值".into()))?;
+            let limits = match self.format.as_str() {
+                "uint8" => Some((0., 255.)),
+                "uint16" => Some((0., 65535.)),
+                "uint32" => Some((0., u32::MAX as f64)),
+                "int8" => Some((-128., 127.)),
+                "int16" => Some((-32768., 32767.)),
+                "int32" | "int" => Some((i32::MIN as f64, i32::MAX as f64)),
+                "uint64" | "int64" => Some((
+                    if self.format == "uint64" {
+                        0.
+                    } else {
+                        i64::MIN as f64
+                    },
+                    9223372036854774784.,
+                )),
+                "float" => None,
+                _ => return Err(Error::Validation("不支持的数值格式".into())),
+            };
+            if let Some((lo, hi)) = limits
+                && (n.fract() != 0. || n < lo || n > hi)
+            {
+                return Err(Error::Validation("数值超出属性格式范围".into()));
+            }
+        }
         if !self.choices.is_empty() {
             return if self.choices.iter().any(|c| &c.value == value) {
                 Ok(())
@@ -113,6 +176,12 @@ impl Property {
                 .ok_or_else(|| Error::Validation("需要数值".into()))?;
             let units = (number - min) / step;
             if !number.is_finite()
+                || !min.is_finite()
+                || !max.is_finite()
+                || min > max
+                || !step.is_finite()
+                || step <= 0.
+                || !units.is_finite()
                 || number < min
                 || number > max
                 || (units - units.round()).abs() > 1e-6
@@ -128,11 +197,7 @@ impl Property {
     }
     pub fn display(&self, value: &Value) -> String {
         if let Some(choice) = self.choices.iter().find(|c| c.value == *value) {
-            return if crate::localization::english() {
-                choice.description_en.clone()
-            } else {
-                choice.description.clone()
-            };
+            return choice.label(crate::localization::english()).into();
         }
         if let Some(on) = value.as_bool() {
             return crate::localization::text(if on { "开启" } else { "关闭" });
@@ -173,6 +238,10 @@ pub struct Action {
     #[serde(default)]
     pub description_en: String,
     pub inputs: Vec<Property>,
+    #[serde(default)]
+    pub title: Option<crate::naming::Name>,
+    #[serde(default)]
+    pub vendor_defined: bool,
 }
 
 impl Action {
@@ -180,6 +249,9 @@ impl Action {
         self.label_for(crate::localization::english())
     }
     pub fn label_for(&self, english: bool) -> &str {
+        if let Some(title) = &self.title {
+            return title.get(english);
+        }
         action_label(&self.name, english).unwrap_or_else(|| {
             if english && !self.description_en.is_empty() {
                 &self.description_en
@@ -219,11 +291,26 @@ pub(crate) fn urn_name(value: &Value) -> String {
 }
 
 impl Specification {
+    pub fn primary_power(&self) -> Option<&Property> {
+        self.properties
+            .iter()
+            .find(|p| p.service == self.kind && p.name == "on")
+            .or_else(|| {
+                (self.kind == "outlet")
+                    .then(|| {
+                        self.properties
+                            .iter()
+                            .find(|p| p.service == "switch" && p.name == "on")
+                    })
+                    .flatten()
+            })
+    }
     pub fn parse(text: &str) -> Result<Self> {
         let document: Value =
             serde_json::from_str(text).map_err(|_| Error::Spec("无法解析设备规格".into()))?;
         let mut properties = Vec::new();
         let mut actions = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
         for service in document["services"].as_array().into_iter().flatten() {
             let service_name = urn_name(&service["type"]);
             if ["device-information", "device-diagnosis", "device-config"]
@@ -238,6 +325,9 @@ impl Specification {
                 let Some(piid) = raw["iid"].as_u64().filter(|id| *id <= u32::MAX as u64) else {
                     continue;
                 };
+                if !seen.insert((false, siid, piid)) {
+                    continue;
+                }
                 let name = urn_name(&raw["type"]);
                 let format = raw["format"].as_str().unwrap_or_default().to_string();
                 let access: Vec<_> = raw["access"]
@@ -251,10 +341,13 @@ impl Specification {
                         return None;
                     }
                     let range = [r[0].as_f64()?, r[1].as_f64()?, r[2].as_f64()?];
-                    (range.iter().all(|n| n.is_finite()) && range[0] <= range[1] && range[2] > 0.)
+                    (range.iter().all(|n| n.is_finite())
+                        && range[0] <= range[1]
+                        && (range[1] - range[0]).is_finite()
+                        && range[2] > 0.)
                         .then_some(range)
                 });
-                let choices: Vec<_> = raw["value-list"]
+                let mut choices: Vec<_> = raw["value-list"]
                     .as_array()
                     .into_iter()
                     .flatten()
@@ -270,6 +363,24 @@ impl Specification {
                         })
                     })
                     .collect();
+                let shortened: Vec<_> = choices
+                    .iter()
+                    .map(|c| crate::naming::comment(&c.description))
+                    .collect();
+                for (i, choice) in choices.iter_mut().enumerate() {
+                    choice.description = if let Some(name) = &shortened[i]
+                        && shortened.iter().filter(|n| *n == &shortened[i]).count() == 1
+                    {
+                        name.clone()
+                    } else {
+                        crate::naming::first_line(&choice.description)
+                            .unwrap_or(&choice.description_en)
+                            .to_owned()
+                    };
+                    choice.description_en = crate::naming::first_line(&choice.description_en)
+                        .unwrap_or("Option")
+                        .to_owned();
+                }
                 let writable = access.contains(&"write")
                     && (format == "bool" || !choices.is_empty() || range.is_some())
                     && !name.is_empty();
@@ -290,6 +401,11 @@ impl Specification {
                     unit: raw["unit"].as_str().unwrap_or_default().into(),
                     range,
                     choices,
+                    title: None,
+                    vendor_defined: !raw["type"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .starts_with("urn:miot-spec-v2:"),
                 });
             }
             for action in service["actions"].as_array().into_iter().flatten() {
@@ -316,6 +432,9 @@ impl Specification {
                 let Some(aiid) = action["iid"].as_u64().filter(|id| *id <= u32::MAX as u64) else {
                     continue;
                 };
+                if !seen.insert((true, siid, aiid)) {
+                    continue;
+                }
                 let mut inputs = Vec::new();
                 let mut supported = true;
                 for id in input_ids {
@@ -346,16 +465,23 @@ impl Specification {
                             .into(),
                         description_en: action["description"].as_str().unwrap_or("Action").into(),
                         inputs,
+                        title: None,
+                        vendor_defined: !action["type"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .starts_with("urn:miot-spec-v2:"),
                     });
                 }
             }
         }
-        Ok(Self {
+        let mut spec = Self {
             kind: urn_name(&document["type"]),
             properties,
             actions,
             compatibility: Vec::new(),
-        })
+        };
+        crate::naming::apply(&mut spec, &document, false);
+        Ok(spec)
     }
 
     /// Attach support explanations only after applying the model's LAN adapter.
@@ -366,6 +492,9 @@ impl Specification {
             profile.adapt_spec(&mut spec);
         }
         spec.compatibility = crate::compatibility::inspect(text, &spec, legacy.as_ref())?;
+        let document: Value =
+            serde_json::from_str(text).map_err(|_| Error::Spec("无法解析设备规格".into()))?;
+        crate::naming::apply(&mut spec, &document, Self::bundled(model).is_some());
         Ok(spec)
     }
 

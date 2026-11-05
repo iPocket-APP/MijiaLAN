@@ -22,16 +22,18 @@ impl gpui::Global for EventMonitors {}
 impl EventMonitors {
     pub fn new(
         sender: async_channel::Sender<crate::tray::Command>,
-        tray: tray_icon::TrayIcon,
+        _tray: tray_icon::TrayIcon,
     ) -> Self {
         let outside_sender = sender.clone();
         let outside_handler = block2::RcBlock::new(move |_: NonNull<NSEvent>| {
-            if !pointer_over_tray(Some(&tray)) && !defer_panel_dismiss() {
-                let _ = outside_sender.try_send(crate::tray::Command::Hide);
-            }
+            let point = NSEvent::mouseLocation();
+            let _ = outside_sender.try_send(crate::tray::Command::OutsideClick {
+                x: point.x,
+                y: point.y,
+            });
         });
         let outside = NSEvent::addGlobalMonitorForEventsMatchingMask_handler(
-            NSEventMask::LeftMouseDown | NSEventMask::RightMouseDown,
+            NSEventMask::LeftMouseDown | NSEventMask::RightMouseDown | NSEventMask::OtherMouseDown,
             &outside_handler,
         );
         let escape_handler = block2::RcBlock::new(move |event: NonNull<NSEvent>| {
@@ -116,6 +118,10 @@ fn anchor(tray: Option<&tray_icon::TrayIcon>) -> Option<(NSRect, NSRect)> {
     // rectangle mixes display pixel height and points on Retina displays.
     let icon = window.convertRectToScreen(button.convertRect_toView(button.bounds(), None));
     let screens = NSScreen::screens(mtm);
+    let frames: Vec<_> = screens.iter().map(|s| geometry(s.frame())).collect();
+    if !window.isVisible() || !crate::macos_placement::visible_anchor(geometry(icon), &frames) {
+        return None;
+    }
     let screen = window.screen().or_else(|| {
         screens.iter().find(|screen| {
             let frame = screen.frame();
@@ -130,12 +136,15 @@ fn anchor(tray: Option<&tray_icon::TrayIcon>) -> Option<(NSRect, NSRect)> {
     let visible = screen.visibleFrame();
     // AppKit initially creates the status window at (0, 0), then places it in
     // the menu bar on a later run-loop pass. Do not anchor to that placeholder.
-    if !window.isVisible()
-        || icon.origin.y + icon.size.height < visible.origin.y + visible.size.height
-    {
-        return None;
-    }
     Some((icon, visible))
+}
+fn geometry(rect: NSRect) -> crate::macos_placement::Rect {
+    crate::macos_placement::Rect {
+        x: rect.origin.x,
+        y: rect.origin.y,
+        width: rect.size.width,
+        height: rect.size.height,
+    }
 }
 pub fn tray_ready(tray: &tray_icon::TrayIcon) -> bool {
     anchor(Some(tray)).is_some()
@@ -172,19 +181,32 @@ pub fn position(window: &Window, tray: Option<&tray_icon::TrayIcon>) -> bool {
     };
     window.setStyleMask(NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel);
     configure_panel_surface(&window);
-    let Some((icon, visible)) = anchor(tray) else {
+    let (icon, visible) = if let Some((icon, visible)) = anchor(tray) {
+        (Some(icon), visible)
+    } else {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return false;
+        };
+        let Some(screen) =
+            NSScreen::mainScreen(mtm).or_else(|| NSScreen::screens(mtm).firstObject())
+        else {
+            return false;
+        };
+        (None, screen.visibleFrame())
+    };
+    let Some(frame) = crate::macos_placement::place(
+        geometry(visible),
+        icon.map(geometry),
+        window.frame().size.height,
+    ) else {
         return false;
     };
-    let width = 360.;
-    let height = window.frame().size.height.min(visible.size.height - 16.);
-    let x = (icon.origin.x + icon.size.width / 2. - width / 2.).clamp(
-        visible.origin.x + 8.,
-        visible.origin.x + visible.size.width - width - 8.,
-    );
-    let y = (icon.origin.y - height - 6.).clamp(
-        visible.origin.y + 8.,
-        visible.origin.y + visible.size.height - height - 8.,
-    );
+    let crate::macos_placement::Rect {
+        x,
+        y,
+        width,
+        height,
+    } = frame;
     crate::trace_panel(&format!(
         "position icon={icon:?} frame=({x}, {y}, {width}, {height})"
     ));
@@ -213,16 +235,18 @@ pub fn resize_panel(window: &Window, height: f32, cx: &gpui::App) {
         return;
     };
     let visible = screen.visibleFrame();
+    let available = (visible.size.height - 16.).clamp(1., 660.);
     let height = f64::from(height)
         .ceil()
-        .clamp(100., (visible.size.height - 16.).min(660.));
+        .clamp(100_f64.min(available), available);
     if (frame.size.height - height).abs() < 0.5 {
         return;
     }
     let top = frame.origin.y + frame.size.height;
+    let gap = 8_f64.min(visible.size.height / 4.);
     let y = (top - height).clamp(
-        visible.origin.y + 8.,
-        visible.origin.y + visible.size.height - height - 8.,
+        visible.origin.y + gap,
+        (visible.origin.y + visible.size.height - height - gap).max(visible.origin.y + gap),
     );
     let handle = window.window_handle();
     let mut app = cx.to_async();
@@ -286,13 +310,16 @@ pub fn symbol_png(name: &str) -> Option<Vec<u8>> {
     }?;
     Some(png.to_vec())
 }
-pub fn pointer_over_tray(tray: Option<&tray_icon::TrayIcon>) -> bool {
+pub fn point_over_tray(tray: Option<&tray_icon::TrayIcon>, x: f64, y: f64) -> bool {
     let Some((icon, _)) = anchor(tray) else {
         return false;
     };
+    x >= icon.origin.x - 3.
+        && x <= icon.origin.x + icon.size.width + 3.
+        && y >= icon.origin.y - 3.
+        && y <= icon.origin.y + icon.size.height + 3.
+}
+pub fn pointer_over_tray(tray: Option<&tray_icon::TrayIcon>) -> bool {
     let point = NSEvent::mouseLocation();
-    point.x >= icon.origin.x - 3.
-        && point.x <= icon.origin.x + icon.size.width + 3.
-        && point.y >= icon.origin.y - 3.
-        && point.y <= icon.origin.y + icon.size.height + 3.
+    point_over_tray(tray, point.x, point.y)
 }

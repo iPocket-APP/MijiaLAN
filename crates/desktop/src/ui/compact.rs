@@ -201,9 +201,8 @@ fn symbol(state: &DeviceState) -> &'static str {
 fn primary_power(state: &DeviceState) -> Option<&Property> {
     state
         .spec
-        .properties
-        .iter()
-        .find(|p| p.name == "on" && p.service != "indicator-light" && p.writable)
+        .primary_power()
+        .filter(|p| p.writable && p.format == "bool")
 }
 fn power_value(state: &DeviceState) -> Option<bool> {
     primary_power(state)
@@ -252,24 +251,7 @@ fn issue(state: &DeviceState) -> (String, String, bool) {
     )
 }
 fn choice_title(choice: &mijialan_core::spec::Choice) -> String {
-    if mijialan_core::localization::english() {
-        return choice.description_en.clone();
-    }
-    // Some legacy MIoT specifications only provide English choice names.
-    match choice.description.to_ascii_lowercase().as_str() {
-        "auto" => "自动",
-        "cool" => "制冷",
-        "dry" => "除湿",
-        "heat" => "制热",
-        "fan" => "送风",
-        "low" => "低",
-        "medium" => "中",
-        "high" => "高",
-        "off" => "关闭",
-        "on" => "开启",
-        _ => return choice.description.clone(),
-    }
-    .into()
+    choice.label(mijialan_core::localization::english()).into()
 }
 fn property_value(property: &Property, value: &Value) -> String {
     property
@@ -1136,7 +1118,9 @@ impl Dashboard {
     ) -> AnyElement {
         let p = Palette::new(cx);
         let full = format!("{}:{}", state.device.did, property.key());
-        let Some([min, max, step]) = property.range.filter(|r| r[0] < r[1]) else {
+        let Some([min, max, step]) = property.range.filter(|r| {
+            r.iter().all(|v| v.is_finite()) && r[0] < r[1] && (r[1] - r[0]).is_finite() && r[2] > 0.
+        }) else {
             return div().into_any_element();
         };
         let current = self

@@ -22,6 +22,197 @@ mod support;
 mod vacuum_support;
 
 #[test]
+fn encrypted_fan_speed_commands_and_same_value_error_recovery_match_native() {
+    use mijialan_core::{Device, Store, Token};
+    use std::sync::atomic::Ordering;
+    let document = include_str!("../../core/tests/fixtures/dmaker-p220.json");
+    let device = support::MiotDevice::with_spec("dmaker.fan.p220", document);
+    let store = Arc::new(Store::memory());
+    store.cache_spec("dmaker.fan.p220", document).unwrap();
+    store
+        .put(
+            Device {
+                did: "77".into(),
+                name: "Fixture Fan".into(),
+                model: "dmaker.fan.p220".into(),
+                host: Ipv4Addr::LOCALHOST,
+                room: String::new(),
+                port: device.port,
+                bridged: true,
+            },
+            &Token::parse(support::TOKEN).unwrap(),
+        )
+        .unwrap();
+    let engine = Arc::new(Engine::new(store, false));
+    engine.refresh("77").unwrap();
+    let bridge = HomeKit::new(engine.clone());
+    bridge
+        .start_at((Ipv4Addr::LOCALHOST, 0).into(), false)
+        .unwrap();
+    let info = bridge.info();
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, info.port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let controller = ControllerKeypair::from_seed("native-fan-parity".into(), [67; 32]);
+    let accessory = pair_controller(&mut stream, &info.code, &controller);
+    let mut session = verify(&mut stream, &controller, &accessory);
+    let (_, body) = encrypted_request(&mut stream, &mut session, "GET", "/accessories", &[]);
+    let db: Value = serde_json::from_slice(&body).unwrap();
+    let fan = &db["accessories"][1];
+    let aid = fan["aid"].as_u64().unwrap();
+    let service = fan["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["type"] == "B7")
+        .unwrap();
+    assert_eq!(service["primary"], true);
+    let speed = service["characteristics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["type"] == "29")
+        .unwrap();
+    let iid = speed["iid"].as_u64().unwrap();
+    for value in [0, 75] {
+        let body = json!({"characteristics":[{"aid":aid,"iid":iid,"value":value}]}).to_string();
+        assert_eq!(
+            encrypted_request(
+                &mut stream,
+                &mut session,
+                "PUT",
+                "/characteristics",
+                body.as_bytes()
+            )
+            .0,
+            204
+        );
+    }
+    let commands = device.commands.lock().unwrap().clone();
+    assert_eq!(
+        commands.len(),
+        3,
+        "0% must send power-off only; a nonzero speed sends speed then power-on"
+    );
+    let params: Vec<_> = commands.iter().map(|r| r["params"][0].clone()).collect();
+    assert_eq!(
+        (
+            params[0]["siid"].clone(),
+            params[0]["piid"].clone(),
+            params[0]["value"].clone()
+        ),
+        (json!(2), json!(1), json!(false))
+    );
+    assert_eq!(params[1]["value"], 75);
+    assert_eq!(params[2]["value"], true);
+    assert_eq!(engine.state("77").unwrap().values["2.1"], true);
+    let body = json!({"characteristics":[{"aid":aid,"iid":iid,"ev":true}]}).to_string();
+    assert_eq!(
+        encrypted_request(
+            &mut stream,
+            &mut session,
+            "PUT",
+            "/characteristics",
+            body.as_bytes()
+        )
+        .0,
+        204
+    );
+    let event = |stream: &mut TcpStream, session: &mut Session| -> Value {
+        let (_, body) = read_encrypted(stream, session);
+        let data: Value = serde_json::from_slice(&body).unwrap();
+        data["characteristics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["iid"] == iid)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        event(&mut stream, &mut session)["value"].as_f64(),
+        Some(75.)
+    );
+    device.phase.store(1, Ordering::SeqCst);
+    engine.refresh("77").unwrap();
+    assert_eq!(event(&mut stream, &mut session)["status"], -70402);
+    device.phase.store(0, Ordering::SeqCst);
+    engine.refresh("77").unwrap();
+    assert_eq!(
+        event(&mut stream, &mut session)["value"].as_f64(),
+        Some(75.),
+        "recovery with the same number must still emit success"
+    );
+    drop(stream);
+    // A fresh subscription starts while unavailable, and must recover through the same ordered writer.
+    device.phase.store(1, Ordering::SeqCst);
+    engine.refresh("77").unwrap();
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, info.port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let mut session = verify(&mut stream, &controller, &accessory);
+    assert_eq!(
+        encrypted_request(
+            &mut stream,
+            &mut session,
+            "PUT",
+            "/characteristics",
+            body.as_bytes()
+        )
+        .0,
+        204
+    );
+    assert_eq!(event(&mut stream, &mut session)["status"], -70402);
+    device.phase.store(0, Ordering::SeqCst);
+    engine.refresh("77").unwrap();
+    assert_eq!(
+        event(&mut stream, &mut session)["value"].as_f64(),
+        Some(75.)
+    );
+    stream
+        .set_read_timeout(Some(Duration::from_millis(600)))
+        .unwrap();
+    let mut byte = [0];
+    let error = stream.read(&mut byte).unwrap_err();
+    assert!(
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ),
+        "unexpected old error or duplicate event after recovery"
+    );
+    assert_eq!(bridge.info().uri, info.uri);
+    assert!(bridge.info().paired);
+    bridge.stop();
+}
+
+#[test]
+fn concurrent_listener_start_keeps_one_identity_and_one_running_server() {
+    let bridge = Arc::new(HomeKit::new(Arc::new(Engine::demo())));
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            let bridge = bridge.clone();
+            scope.spawn(move || {
+                bridge
+                    .start_at((Ipv4Addr::LOCALHOST, 0).into(), false)
+                    .unwrap()
+            });
+        }
+    });
+    let first = bridge.info();
+    assert!(first.running && first.port > 0);
+    bridge
+        .start_at((Ipv4Addr::LOCALHOST, 0).into(), false)
+        .unwrap();
+    let second = bridge.info();
+    assert_eq!(first.port, second.port);
+    assert_eq!(first.uri, second.uri);
+    bridge.stop();
+}
+
+#[test]
 fn paired_home_vacuum_switch_starts_cleaning_and_docks_even_when_already_off_but_paused() {
     use std::sync::atomic::Ordering;
     use vacuum_support::{C1, V19, Vacuum};

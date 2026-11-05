@@ -1,8 +1,12 @@
 use super::*;
 use mijialan_core::{Specification, spec::Choice};
+#[path = "native_parity.rs"]
+mod native_parity;
 
 fn property(name: &str, format: &str, writable: bool, range: Option<[f64; 3]>) -> Property {
     Property {
+        title: None,
+        vendor_defined: false,
         siid: 2,
         piid: 1,
         service: String::new(),
@@ -73,13 +77,13 @@ fn vacuum_fixture(model: &str, document: &str) -> (Engine, DeviceState) {
 }
 
 #[test]
-fn vacuum_primary_switch_consumes_actions_but_retains_speed_and_mode_controls() {
+fn vacuum_primary_switch_consumes_actions_and_keeps_only_reviewed_daily_switches() {
     for (model, document, actions, properties) in [
         (
             "roborock.vacuum.c1",
             include_str!("../../../core/tests/fixtures/roborock-c1.json"),
             1,
-            4,
+            0,
         ),
         (
             "ijai.vacuum.v19",
@@ -346,13 +350,15 @@ fn large_specs_are_bounded_to_one_hundred_services_with_stable_identifiers() {
             description_en: format!("Mode {n}"),
         })
         .collect();
-    let (engine, state) = fixture(
+    let (engine, mut state) = fixture(
         "outlet",
         vec![
             (property("on", "bool", true, None), json!(true)),
             (mode, json!(0)),
         ],
     );
+    // Reviewed models retain curated option lists; the hard protocol cap still applies.
+    state.device.model = "cuco.plug.v3".into();
     let mut layout = Layout::default();
     let first = build_states(&engine, &mut layout, vec![state.clone()]);
     assert_eq!(

@@ -224,7 +224,9 @@ fn confirmed(result: &Value) -> bool {
 }
 
 fn number(v: &Value) -> Option<f64> {
-    v.as_f64().or_else(|| v.as_str()?.parse().ok())
+    v.as_f64()
+        .or_else(|| v.as_str()?.parse().ok())
+        .filter(|n| n.is_finite())
 }
 fn boolean(v: &Value) -> Option<bool> {
     v.as_bool()
@@ -250,9 +252,14 @@ pub fn read_transform(t: &Value, raw: &Value, format: &str) -> Option<Value> {
             } else {
                 raw.clone()
             };
-            let n = number(&value)? * t["ratio"].as_f64().unwrap_or(1.)
-                + t["offset"].as_f64().unwrap_or(0.);
-            Some(json!((n * 1000.).round() / 1000.))
+            let ratio = t["ratio"].as_f64().unwrap_or(1.);
+            let n = number(&value)? * ratio + t["offset"].as_f64().unwrap_or(0.);
+            let n = if ratio == 1. {
+                n
+            } else {
+                (n * 1000.).round() / 1000.
+            };
+            n.is_finite().then(|| json!(n))
         }
         "values" => {
             let key = raw
@@ -305,11 +312,15 @@ pub fn write_transform(t: &Value, value: &Value) -> Option<(String, Vec<Value>)>
                 .map(str::to_owned)
                 .unwrap_or_else(|| value.to_string())
         ),
-        "integer" => json!(
-            (number(value)? * t["ratio"].as_f64().unwrap_or(1.)
+        "integer" => {
+            let n = (number(value)? * t["ratio"].as_f64().unwrap_or(1.)
                 + t["offset"].as_f64().unwrap_or(0.))
-            .trunc() as i64
-        ),
+            .trunc();
+            if !n.is_finite() || n < i64::MIN as f64 || n >= 9223372036854775808. {
+                return None;
+            }
+            json!(n as i64)
+        }
         "values" => json!(
             t["table"]
                 .as_object()?

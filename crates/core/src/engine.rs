@@ -4,7 +4,7 @@ use crate::{
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     net::Ipv4Addr,
     sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
@@ -25,6 +25,7 @@ pub struct Engine {
     pub store: Arc<Store>,
     clients: Mutex<HashMap<String, Arc<Mutex<MiioClient>>>>,
     states: RwLock<BTreeMap<String, DeviceState>>,
+    probe_requests: Mutex<BTreeSet<String>>,
     demo: bool,
 }
 
@@ -64,6 +65,7 @@ impl Engine {
             store,
             clients: Mutex::new(HashMap::new()),
             states: RwLock::new(states),
+            probe_requests: Mutex::new(BTreeSet::new()),
             demo,
         }
     }
@@ -311,8 +313,12 @@ impl Engine {
                 .state(did)
                 .ok_or_else(|| Error::Validation("设备不存在".into()));
         }
+        let device = self.device(did)?;
+        let client = self.client(&device)?;
+        // Keep I/O and its publication in the same per-device order. Otherwise
+        // an old failed read can publish after a successful command/recovery.
+        let mut client = client.lock().unwrap();
         let result = (|| {
-            let device = self.device(did)?;
             let spec = self
                 .state(did)
                 .map(|s| s.spec)
@@ -320,8 +326,6 @@ impl Engine {
                 .map(Ok)
                 .unwrap_or_else(|| self.load_spec(&device.model, true))?;
             let profile = Profile::for_model(&device.model);
-            let client = self.client(&device)?;
-            let mut client = client.lock().unwrap();
             let mut errors = BTreeMap::new();
             let values = if let Some(profile) = profile {
                 profile.read(&mut client, &spec)?
@@ -340,13 +344,15 @@ impl Engine {
                     }
                 }
                 for item in response {
-                    let Some(siid) = item["siid"].as_u64() else {
+                    let Some(siid) = item["siid"].as_u64().and_then(|id| u32::try_from(id).ok())
+                    else {
                         continue;
                     };
-                    let Some(piid) = item["piid"].as_u64() else {
+                    let Some(piid) = item["piid"].as_u64().and_then(|id| u32::try_from(id).ok())
+                    else {
                         continue;
                     };
-                    if !props.contains(&(siid as u32, piid as u32)) {
+                    if !props.contains(&(siid, piid)) {
                         continue;
                     }
                     let key = format!("{siid}.{piid}");
@@ -374,11 +380,17 @@ impl Engine {
             })
         })();
         match result {
-            Ok(state) => {
-                self.states
-                    .write()
-                    .unwrap()
-                    .insert(did.into(), state.clone());
+            Ok(mut state) => {
+                let mut states = self.states.write().unwrap();
+                let current = states
+                    .get_mut(did)
+                    .ok_or_else(|| Error::Validation("设备已移除".into()))?;
+                if current.device.model != state.device.model {
+                    return Err(Error::Validation("设备配置已变更".into()));
+                }
+                state.device = current.device.clone();
+                state.revision = current.revision + 1;
+                *current = state.clone();
                 Ok(state)
             }
             Err(error) => {
@@ -402,17 +414,22 @@ impl Engine {
             .find(|p| p.key() == key)
             .ok_or_else(|| Error::Validation("属性不存在".into()))?;
         property.validate(&value)?;
-        if !self.demo {
-            let client = self.client(&state.device)?;
-            let mut client = client.lock().unwrap();
+        let client = if self.demo {
+            None
+        } else {
+            Some(self.client(&state.device)?)
+        };
+        let mut client = client.as_ref().map(|c| c.lock().unwrap());
+        if let Some(client) = client.as_mut() {
             if let Some(profile) = Profile::for_model(&state.device.model) {
-                profile.write(&mut client, property, &value)?;
+                profile.write(client, property, &value)?;
             } else {
                 client.set_property(did, property.siid, property.piid, value.clone())?;
             }
         }
         if let Some(state) = self.states.write().unwrap().get_mut(did) {
             state.values.insert(key.into(), value);
+            state.errors.remove(key);
             state.revision += 1;
         }
         Ok(())
@@ -502,29 +519,45 @@ impl Engine {
         devices: &[crate::discovery::DiscoveredDevice],
     ) -> Result<()> {
         let mut changed = Vec::new();
+        let mut seen = BTreeSet::new();
         self.store.update(|config| {
             for device in &mut config.devices {
                 if let Some(found) = devices
                     .iter()
-                    .find(|d| d.device_id.to_string() == device.did && d.host != device.host)
+                    .find(|d| d.device_id.to_string() == device.did)
                 {
-                    device.host = found.host;
-                    changed.push(device.clone());
+                    seen.insert(device.did.clone());
+                    if device.host != found.host {
+                        device.host = found.host;
+                        changed.push(device.clone());
+                    }
                 }
             }
         })?;
+        let changed_ids: BTreeSet<_> = changed.iter().map(|d| d.did.clone()).collect();
         for device in changed {
             self.clients.lock().unwrap().remove(&device.did);
             if let Some(state) = self.states.write().unwrap().get_mut(&device.did) {
                 state.device = device;
             }
         }
+        let states = self.states.read().unwrap();
+        let retry = seen
+            .into_iter()
+            .filter(|did| changed_ids.contains(did) || states.get(did).is_some_and(|s| !s.online))
+            .collect::<Vec<_>>();
+        drop(states);
+        self.probe_requests.lock().unwrap().extend(retry);
         Ok(())
     }
     pub fn refresh_all(&self) {
-        for device in self.store.config().devices {
-            let _ = self.refresh(&device.did);
-        }
+        std::thread::scope(|scope| {
+            for device in self.store.config().devices {
+                scope.spawn(move || {
+                    let _ = self.refresh(&device.did);
+                });
+            }
+        });
     }
     pub fn start_polling(self: &Arc<Self>) -> Poller {
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -533,38 +566,94 @@ impl Engine {
             let stopped = stop.clone();
             std::thread::spawn(move || {
                 let mut schedule: HashMap<String, (Instant, u32)> = HashMap::new();
+                let mut active: HashMap<String, std::thread::JoinHandle<bool>> = HashMap::new();
+                let mut discovery: Option<std::thread::JoinHandle<()>> = None;
                 let mut discovery_due = Instant::now() + Duration::from_secs(30);
                 while !stopped.load(std::sync::atomic::Ordering::Relaxed) {
                     let Some(engine) = engine.upgrade() else {
                         break;
                     };
-                    if discovery_due <= Instant::now() && !engine.store.config().devices.is_empty()
-                    {
-                        if let Ok(found) = crate::discovery::discover(Duration::from_secs(2)) {
-                            let _ = engine.update_discovered_hosts(&found);
+                    let completed: Vec<_> = active
+                        .iter()
+                        .filter(|(_, task)| task.is_finished())
+                        .map(|(did, _)| did.clone())
+                        .collect();
+                    for did in completed {
+                        let success = active.remove(&did).unwrap().join().unwrap_or(false);
+                        let entry = schedule.entry(did).or_insert((Instant::now(), 0));
+                        entry.1 = if success { 0 } else { (entry.1 + 1).min(12) };
+                        entry.0 = Instant::now()
+                            + Duration::from_secs(if success {
+                                15
+                            } else {
+                                (15u64 << entry.1).min(86400)
+                            });
+                    }
+                    // Discovery can bring forward an offline probe, including at the same IP.
+                    // Leave an in-flight request pending until its result has been consumed.
+                    engine.probe_requests.lock().unwrap().retain(|did| {
+                        if active.contains_key(did) {
+                            true
+                        } else {
+                            schedule.insert(did.clone(), (Instant::now(), 0));
+                            false
                         }
+                    });
+                    if discovery.as_ref().is_some_and(|task| task.is_finished()) {
+                        let _ = discovery.take().unwrap().join();
+                    }
+                    if discovery.is_none()
+                        && discovery_due <= Instant::now()
+                        && !engine.store.config().devices.is_empty()
+                    {
+                        let engine = engine.clone();
+                        discovery = Some(std::thread::spawn(move || {
+                            if let Ok(found) = crate::discovery::discover(Duration::from_secs(2)) {
+                                let _ = engine.update_discovered_hosts(&found);
+                            }
+                        }));
                         discovery_due = Instant::now() + Duration::from_secs(300);
                     }
-                    for device in engine.store.config().devices {
+                    let devices = engine.store.config().devices;
+                    let included: std::collections::BTreeSet<_> =
+                        devices.iter().map(|d| d.did.clone()).collect();
+                    schedule.retain(|did, _| included.contains(did));
+                    let mut due = Vec::new();
+                    for device in devices {
                         if stopped.load(std::sync::atomic::Ordering::Relaxed) {
                             break;
                         }
-                        let due = schedule
+                        let entry = schedule
                             .entry(device.did.clone())
                             .or_insert((Instant::now(), 0));
-                        if due.0 <= Instant::now() {
-                            let success = engine.refresh(&device.did).is_ok();
-                            due.1 = if success { 0 } else { (due.1 + 1).min(12) };
-                            due.0 = Instant::now()
-                                + Duration::from_secs(if success {
-                                    15
-                                } else {
-                                    (15u64 << due.1).min(86400)
-                                });
+                        if entry.0 <= Instant::now() && !active.contains_key(&device.did) {
+                            due.push((
+                                !engine
+                                    .states
+                                    .read()
+                                    .unwrap()
+                                    .get(&device.did)
+                                    .is_some_and(|s| s.online),
+                                entry.1,
+                                entry.0,
+                                device.did,
+                            ));
                         }
                     }
+                    due.sort();
+                    // Each device publishes inside refresh, without waiting for other reads.
+                    // Bound simultaneous LAN probes and never queue a second poll for one device.
+                    for (_, _, _, did) in due.into_iter().take(8_usize.saturating_sub(active.len()))
+                    {
+                        let worker = engine.clone();
+                        let key = did.clone();
+                        active.insert(
+                            did,
+                            std::thread::spawn(move || worker.refresh(&key).is_ok()),
+                        );
+                    }
                     drop(engine);
-                    std::thread::sleep(Duration::from_secs(1));
+                    std::thread::sleep(Duration::from_millis(50));
                 }
             });
         }
@@ -579,9 +668,14 @@ impl Drop for Poller {
     }
 }
 pub fn numeric(value: f64, format: &str) -> Value {
+    if !value.is_finite() {
+        return Value::Null;
+    }
     if format == "float" {
         json!(value)
-    } else {
+    } else if value.round() >= i64::MIN as f64 && value.round() < 9223372036854775808. {
         json!(value.round() as i64)
+    } else {
+        Value::Null
     }
 }
