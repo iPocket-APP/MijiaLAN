@@ -4,6 +4,7 @@ import argparse
 import base64
 import json
 import os
+import plistlib
 from pathlib import Path
 import re
 import shutil
@@ -118,6 +119,20 @@ def verify_feed(content, platform, directory, rust_tag=None):
         raise ValueError('Truncated update archive')
     key = config()['native_public_key' if platform == 'native' else 'rust_public_key']
     verify(archive, signature, key)
+    if platform == 'native' or platform.startswith('macos'):
+        with zipfile.ZipFile(archive) as payload:
+            info_path = 'MijiaLAN.app/Contents/Info.plist'
+            if payload.getinfo(info_path).file_size > 128 * 1024:
+                raise ValueError('Packaged app metadata is too large')
+            info = plistlib.loads(payload.read(info_path))
+        item = ET.fromstring(content).find('./channel/item')
+        feed_path = '/appcast.xml' if platform == 'native' else f'/rs/{platform}/appcast.xml'
+        expected = dict(CFBundleIdentifier='com.mijialan.MijiaLAN' if platform == 'native' else 'xyz.ipocket.MijiaLAN.Rust',
+            CFBundleVersion=item.findtext(f'{{{SPARKLE}}}version'),
+            CFBundleShortVersionString=item.findtext(f'{{{SPARKLE}}}shortVersionString'),
+            SUFeedURL=config()['origin'] + feed_path, SUPublicEDKey=key)
+        if any(info.get(k) != v for k, v in expected.items()):
+            raise ValueError('Feed metadata does not match the signed app bundle')
 
 
 def rust_feeds(directory):

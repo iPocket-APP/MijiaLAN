@@ -1,4 +1,6 @@
 import base64
+import io
+import plistlib
 from pathlib import Path
 import sys
 import tempfile
@@ -39,6 +41,16 @@ class SharedSiteTests(unittest.TestCase):
         name = f'MijiaLAN-{version}-universal.zip' if platform == 'native' else f'MijiaLAN-rs-{version}-b{build}-{platform}.{extension}'
         url = f'https://github.com/iPocket-APP/MijiaLAN/releases/download/{tag}/{name}'
         content = ('archive:' + name).encode()
+        if not platform.startswith('windows'):
+            buffer = io.BytesIO()
+            feed_path = '/appcast.xml' if platform == 'native' else f'/rs/{platform}/appcast.xml'
+            info = dict(CFBundleIdentifier='com.mijialan.MijiaLAN' if platform == 'native' else 'xyz.ipocket.MijiaLAN.Rust',
+                CFBundleVersion=str(build), CFBundleShortVersionString=version,
+                SUFeedURL=self.settings['origin'] + feed_path,
+                SUPublicEDKey=self.settings['native_public_key' if platform == 'native' else 'rust_public_key'])
+            with zipfile.ZipFile(buffer, 'w') as archive:
+                archive.writestr('MijiaLAN.app/Contents/Info.plist', plistlib.dumps(info))
+            content = buffer.getvalue()
         self.files[url] = content
         release = self.releases.setdefault(tag, dict(tag_name=tag, draft=False, assets=[]))
         release['assets'].append(dict(name=name, size=len(content), browser_download_url=url))
@@ -102,6 +114,13 @@ class SharedSiteTests(unittest.TestCase):
     def test_native_cannot_be_replaced_with_a_rust_enclosure(self):
         content = self.feed('rs-v0.1.0-b12', 'macos-arm64', 12)
         with self.assertRaises(ValueError): site.inspect_feed(content, 'native')
+
+    def test_unsigned_feed_cannot_lie_about_the_signed_native_build(self):
+        content = self.feed('v0.1.6', 'native', 6)
+        root = ET.fromstring(content)
+        root.find(f'./channel/item/{{{site.SPARKLE}}}version').text = '9999'
+        with self.assertRaisesRegex(ValueError, 'signed app bundle'):
+            site.verify_feed(ET.tostring(root), 'native', self.root)
 
     def test_initial_site_retains_native_when_no_rust_update_release_exists(self):
         native = self.feed('v0.1.6', 'native', 6)
