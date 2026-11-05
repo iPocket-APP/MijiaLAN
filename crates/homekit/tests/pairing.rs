@@ -315,10 +315,11 @@ fn paired_home_vacuum_switch_starts_cleaning_and_docks_even_when_already_off_but
                 assert_eq!(
                     status,
                     204,
-                    "{model}, repetition {repetition}, step {index}, request {value}, response {}, state {:?}, commands {:?}",
+                    "{model}, repetition {repetition}, step {index}, request {value}, response {}, state {:?}, commands {:?}, requests {:?}",
                     String::from_utf8_lossy(&response),
                     engine.state("77").map(|s| (s.online, s.error, s.values)),
-                    device.commands()
+                    device.commands(),
+                    device.requests()
                 );
                 let (_, body) = encrypted_request(&mut stream, &mut session, "GET", &path, &[]);
                 assert_eq!(

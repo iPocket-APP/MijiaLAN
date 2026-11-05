@@ -9,6 +9,13 @@ pub(crate) use value::validate_write;
 
 const MAX_SERVICES: usize = 100;
 
+fn action_error(error: mijialan_core::Error) -> i32 {
+    // Keep the underlying failure observable instead of reporting only HAP's
+    // generic communication status; do not log request bodies or credentials.
+    eprintln!("HomeKit action failed: {error}");
+    -70402
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Layout {
     pub aids: BTreeMap<String, u64>,
@@ -208,7 +215,7 @@ impl Binding {
                 return if as_bool(value)? {
                     engine
                         .action(&self.did, *siid, *aiid, vec![])
-                        .map_err(|_| -70402)
+                        .map_err(action_error)
                 } else {
                     Ok(())
                 };
@@ -243,7 +250,7 @@ impl Binding {
             let (siid, aiid) = if on { start } else { dock };
             return engine
                 .action(&self.did, *siid, *aiid, vec![])
-                .map_err(|_| -70402);
+                .map_err(action_error);
         }
         if let Some(writes) = controls::writes(&self.transform, property, &state, value)? {
             // Validate the complete plan before any command reaches the device.
