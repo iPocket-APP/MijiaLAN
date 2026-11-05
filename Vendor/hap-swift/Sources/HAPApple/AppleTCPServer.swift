@@ -239,20 +239,22 @@ public final class AppleTCPServer: HAPServer, @unchecked Sendable {
         // the first resume is valid.
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             // One-shot wrapper: the first resume() consumes the continuation;
-            // subsequent calls are no-ops.  Safe without a lock because
-            // stateUpdateHandler is always called on the listener's serial queue.
-            class ContinuationBox: @unchecked Sendable {
-                var continuation: CheckedContinuation<Void, Error>?
+            // subsequent calls are no-ops.  The listener starts on a global queue,
+            // which is concurrent, so two state updates can overlap: take the
+            // continuation under a lock, or both could resume it and trap.
+            final class ContinuationBox: @unchecked Sendable {
+                private let lock = NSLock()
+                private var continuation: CheckedContinuation<Void, Error>?
                 init(_ continuation: CheckedContinuation<Void, Error>) {
                     self.continuation = continuation
                 }
-                func resume() {
-                    continuation?.resume()
-                    continuation = nil
-                }
-                func resume(throwing error: Error) {
-                    continuation?.resume(throwing: error)
-                    continuation = nil
+                func resume() { take()?.resume() }
+                func resume(throwing error: Error) { take()?.resume(throwing: error) }
+                private func take() -> CheckedContinuation<Void, Error>? {
+                    lock.withLock {
+                        defer { continuation = nil }
+                        return continuation
+                    }
                 }
             }
             let box = ContinuationBox(continuation)

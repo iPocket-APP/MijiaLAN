@@ -315,6 +315,20 @@ struct HomeKitAccessoryMapperTests {
         let c = Self.light()
         let names = HomeKitBridgeController.displayNames(for: [a, b, c])
         #expect(names == ["a": "主卧 吸顶灯", "b": "客厅 吸顶灯", "light_study": "书房台灯"])
+        // A repeated device ID keeps one name rather than trapping.
+        #expect(HomeKitBridgeController.displayNames(for: [c, c]) == ["light_study": "书房 书房台灯"])
+    }
+
+    @Test("A write Int cannot hold is clamped or refused, never trapped")
+    func outOfRangeWrites() {
+        let light = Self.light()
+        #expect(HomeKitAccessoryMapper.write(.lightBrightness, value: .string("nan"), to: light) == nil)
+        #expect(HomeKitAccessoryMapper.write(.lightBrightness, value: .float(1e300), to: light) == .brightness(100))
+        #expect(HomeKitAccessoryMapper.write(.lightColorTemperature, value: .float(1e300), to: light) == .colorTemperature(kelvin: 2700))
+        #expect(HomeKitAccessoryMapper.write(.lightColorTemperature, value: .float(1e-300), to: light) == .colorTemperature(kelvin: 6500))
+        let ac = Self.climate()
+        #expect(HomeKitAccessoryMapper.write(.climateTargetState, value: .float(1e300), to: ac) == nil)
+        #expect(HomeKitAccessoryMapper.write(.climateFanSpeed, value: .float(1e300), to: ac) == .climateFanMode("High"))
     }
 }
 

@@ -411,13 +411,13 @@ public final class DeviceController {
             }
             snapshots[did]?.lastCommand = L10n.tr("设备已接受动作，正在确认状态", "Action accepted. Confirming device state.")
             let status = snapshot.capability(snapshot.schema.category, "status")
-            let before = status.flatMap { snapshot.value($0.id)?.intValue }
+            let before = status.flatMap { snapshot.value($0.id)?.integer }
             var confirmed = false
             // A robot vacuum reports its new status only once it starts moving: allow it about two seconds.
             for attempt in 0..<(snapshot.schema.category == "vacuum" ? 6 : 3) {
                 if attempt > 0 { try await Task.sleep(for: .milliseconds(350)) }
                 await refresh(did: did, capabilities: snapshot.capabilities.filter { $0.readable && !$0.lowFrequency })
-                if let status, let actual = snapshots[did]?.value(status.id)?.intValue,
+                if let status, let actual = snapshots[did]?.value(status.id)?.integer,
                    Self.actionConfirmed(cap.name, category: snapshot.schema.category, status: actual, before: before, in: status) {
                     snapshots[did]?.lastCommand = L10n.tr("状态已确认：\(status.formatted(.number(Double(actual))))", "State confirmed: \(status.formatted(.number(Double(actual))))")
                     snapshots[did]?.commandReceipt?.confirmedAt = Date()
@@ -501,7 +501,11 @@ public final class DeviceController {
         for s in snapshots.values {
             specs[s.device.model] = s.coreSpec
             for c in s.capabilities where c.kind == .property {
-                if let value = s.value(c.id) { values[MiotPropKey(did: s.id, siid: c.siid, piid: c.iid)] = value }
+                // MijiaCore reads numbers, and numeric strings such as "nan", with `intValue`, which traps on a
+                // number Int cannot hold. Such a value is left out; the capability itself still shows it.
+                if let value = s.value(c.id), value.doubleValue == nil || value.integer != nil {
+                    values[MiotPropKey(did: s.id, siid: c.siid, piid: c.iid)] = value
+                }
             }
         }
         var home = MiotSynthesizer.synthesize(devices: records, rooms: rooms, specs: specs, values: values)

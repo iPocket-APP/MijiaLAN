@@ -13,7 +13,7 @@ struct CategoryMappingTests {
         var s = try snapshot("zhimi-ca4", model: "test.humidifier.ca4")
         let plan = try plan(s)
         let service = try #require(plan.services.first { $0.type.rawValue == "BD" })
-        #expect(service.characteristics.map(\.type.rawValue) == ["B0", "B3", "B4", "10", "CA", "B5"])
+        #expect(service.characteristics.map(\.type.rawValue) == ["B0", "B3", "B4", "10", "CA", "B5", "A7"])
         #expect(characteristic(service, "B3").validValues == [0, 1, 2])
         #expect(characteristic(service, "B4").validValues == [1])
         #expect(characteristic(service, "CA").minValue == 30)
@@ -31,6 +31,8 @@ struct CategoryMappingTests {
         #expect(value(plan, service, "B3", s) == .uint8(0))
         #expect(try commands(plan, service, "CA", .float(45), s) == [.set("p:2:6", .number(45))])
         #expect(try commands(plan, service, "B4", .uint8(1), s) == [])
+        // The child lock is part of the humidifier rather than its own switch.
+        #expect(try commands(plan, service, "A7", .uint8(1), s) == [.set("p:6:1", .bool(true))])
     }
 
     @Test("A dehumidifier dehumidifies, with its own threshold characteristic")
@@ -38,7 +40,7 @@ struct CategoryMappingTests {
         var s = try snapshot("xiaomi-13l", model: "test.derh.13l")
         let plan = try plan(s)
         let service = try #require(plan.services.first { $0.type.rawValue == "BD" })
-        #expect(service.characteristics.map(\.type.rawValue) == ["B0", "B3", "B4", "10", "C9"])
+        #expect(service.characteristics.map(\.type.rawValue) == ["B0", "B3", "B4", "10", "C9", "A7"])
         #expect(characteristic(service, "B3").validValues == [0, 1, 3])
         #expect(characteristic(service, "B4").validValues == [2])
         s.health = LANDeviceHealth(state: .online)
@@ -51,7 +53,7 @@ struct CategoryMappingTests {
         var s = try snapshot("zhimi-za2", model: "test.heater.za2")
         let plan = try plan(s)
         let service = try #require(plan.services.first { $0.type.rawValue == "BC" })
-        #expect(service.characteristics.map(\.type.rawValue) == ["B0", "B1", "B2", "11", "12", "36"])
+        #expect(service.characteristics.map(\.type.rawValue) == ["B0", "B1", "B2", "11", "12", "36", "A7"])
         #expect(characteristic(service, "B2").validValues == [1])
         #expect(characteristic(service, "12").minValue == 16)
         #expect(characteristic(service, "12").maxValue == 28)
@@ -63,7 +65,7 @@ struct CategoryMappingTests {
         #expect(value(plan, service, "11", s) == .float(19.5))
     }
 
-    @Test("An air conditioner offers the modes it has; dry and fan stay named switches")
+    @Test("An air conditioner offers the modes it has and its gears as speed; dry, fan and auto speed stay named switches")
     func airConditioner() throws {
         var s = try snapshot("xiaomi-mc4", model: "test.aircondition.mc4")
         // MijiaCore synthesizes a climate for it too; its fixed 2.x / 3.x addresses only fit the AC companion.
@@ -71,13 +73,21 @@ struct CategoryMappingTests {
         let plan = try plan(s, legacyDevice: device)
         #expect(!plan.bindings.values.contains { if case .legacy = $0 { true } else { false } })
         let service = try #require(plan.services.first { $0.type.rawValue == "BC" })
-        #expect(service.characteristics.map(\.type.rawValue) == ["B0", "B1", "B2", "11", "D", "12", "36", "B6"])
+        #expect(service.characteristics.map(\.type.rawValue) == ["B0", "B1", "B2", "11", "D", "12", "36", "B6", "29"])
         #expect(characteristic(service, "B2").validValues == [1, 2])
         #expect(characteristic(service, "D").minStep == 0.5)
         let modeSwitches = plan.bindings.values.compactMap { binding -> Double? in
             if case .option("p:2:2", let v) = binding { v.doubleValue } else { nil }
         }
         #expect(modeSwitches.sorted() == [3, 4])
+        // An Off mode would be a second power switch.
+        var withOff = s
+        let m = try #require(withOff.capabilities.firstIndex { $0.id == "p:2:2" })
+        withOff.capabilities[m].options[1].description = "Off"
+        let offModes = try self.plan(withOff, legacyDevice: device).bindings.values.compactMap { binding -> Double? in
+            if case .option("p:2:2", let v) = binding { v.doubleValue } else { nil }
+        }
+        #expect(offModes == [4])
 
         s.health = LANDeviceHealth(state: .online)
         s.readings["p:2:1"] = DeviceReading(value: .bool(true), code: 0)
@@ -88,6 +98,259 @@ struct CategoryMappingTests {
         }
         #expect(try commands(plan, service, "B2", .uint8(2), s) == [.set("p:2:2", .number(2)), .set("p:2:1", .bool(true))])
         #expect(throws: HAPError.self) { try commands(plan, service, "B2", .uint8(0), s) }
+
+        // Level1–7 share the slider; its bottom is auto, which also stays a named switch.
+        #expect(characteristic(service, "29").minStep == 100.0 / 7)
+        let speeds = plan.bindings.values.compactMap { binding -> Double? in
+            if case .option("p:3:2", let v) = binding { v.doubleValue } else { nil }
+        }
+        #expect(speeds == [0])
+        s.readings["p:3:2"] = DeviceReading(value: .number(3), code: 0)
+        #expect(value(plan, service, "29", s) == .float(3 * 100 / 7.0))
+        s.readings["p:3:2"] = DeviceReading(value: .number(0), code: 0)
+        #expect(value(plan, service, "29", s) == .float(0))
+        #expect(try commands(plan, service, "29", .float(100), s) == [.set("p:3:2", .number(7))])
+        #expect(try commands(plan, service, "29", .float(0), s) == [.set("p:3:2", .number(0))])
+    }
+
+    @Test("A fan is one Fan v2: speed from the vendor service, Smart as auto and the child lock; the rest stays small")
+    func fan() throws {
+        // dmaker.fan.p220 as reported by a user: Home previously listed 36 services, among them range-end, ± and
+        // per-angle switches, plus dmaker's private power flag and two writable temperature set points as sensors.
+        var s = try snapshot("dmaker-p220", model: "test.fan.p220")
+        let plan = try plan(s)
+        let service = try #require(plan.services.first { $0.type == .fanV2 })
+        #expect(service.isPrimary)
+        #expect(service.characteristics.map(\.type.rawValue) == ["B0", "29", "B6", "BF", "A7"])
+        #expect(plan.services.filter(\.isPrimary).count == 1)
+        #expect(plan.services.count == 7)
+        // The gears 2.2 are covered by the speed. Angles, the timer, the vendor service, the indicator light and the
+        // alarm sound stay on the Mac.
+        let bound = Set(plan.bindings.values.compactMap { binding -> String? in
+            switch binding { case .property(let id, _), .option(let id, _), .action(let id): id; default: nil }
+        })
+        #expect(bound == ["p:2:1", "p:8:1", "p:2:4", "p:2:3", "p:7:1", "p:9:1", "p:9:2", "p:2:7"])
+        let modes = plan.bindings.values.compactMap { binding -> Double? in
+            if case .option("p:2:3", let v) = binding { v.doubleValue } else { nil }
+        }
+        #expect(modes.sorted() == [0, 1, 3])
+
+        s.health = LANDeviceHealth(state: .online)
+        s.readings["p:2:1"] = DeviceReading(value: .bool(true), code: 0)
+        s.readings["p:8:1"] = DeviceReading(value: .number(40), code: 0)
+        s.readings["p:2:3"] = DeviceReading(value: .number(2), code: 0)
+        s.readings["p:7:1"] = DeviceReading(value: .bool(true), code: 0)
+        #expect(value(plan, service, "29", s) == .float(40))
+        #expect(value(plan, service, "BF", s) == .uint8(1))
+        #expect(value(plan, service, "A7", s) == .uint8(1))
+        #expect(try commands(plan, service, "29", .float(60), s) == [.set("p:8:1", .number(60)), .set("p:2:1", .bool(true))])
+        #expect(try commands(plan, service, "BF", .uint8(0), s) == [.set("p:2:3", .number(0))])
+        #expect(try commands(plan, service, "A7", .uint8(0), s) == [.set("p:7:1", .bool(false))])
+        // Natural wind is already manual; auto selects Smart.
+        s.readings["p:2:3"] = DeviceReading(value: .number(1), code: 0)
+        #expect(value(plan, service, "BF", s) == .uint8(0))
+        #expect(try commands(plan, service, "BF", .uint8(0), s) == [])
+        #expect(try commands(plan, service, "BF", .uint8(1), s) == [.set("p:2:3", .number(2))])
+    }
+
+    @Test("Without a percentage speed, four gears become a slider in steps of 25")
+    func fanGears() throws {
+        var s = try snapshot("dmaker-p220", model: "test.fan.p220")
+        s.capabilities.removeAll { $0.name == "speed-level" }
+        let plan = try plan(s)
+        let service = try #require(plan.services.first { $0.type == .fanV2 })
+        #expect(characteristic(service, "29").minStep == 25)
+        #expect(!plan.bindings.values.contains { if case .option("p:2:2", _) = $0 { true } else { false } })
+
+        s.health = LANDeviceHealth(state: .online)
+        s.readings["p:2:1"] = DeviceReading(value: .bool(true), code: 0)
+        s.readings["p:2:2"] = DeviceReading(value: .number(3), code: 0)
+        #expect(value(plan, service, "29", s) == .float(75))
+        for (speed, level) in [(25.0, 1.0), (40, 2), (50, 2), (75, 3), (100, 4)] {
+            #expect(try commands(plan, service, "29", .float(speed), s) == [.set("p:2:2", .number(level)), .set("p:2:1", .bool(true))])
+        }
+        #expect(try commands(plan, service, "29", .float(0), s) == [.set("p:2:1", .bool(false))])
+        s.readings["p:2:1"] = DeviceReading(value: .bool(false), code: 0)
+        #expect(value(plan, service, "29", s) == .float(0))
+    }
+
+    @Test("A gear list with an auto entry has no speed scale and stays named switches")
+    func fanGearsWithAuto() throws {
+        var s = try snapshot("dmaker-p220", model: "test.fan.p220")
+        s.capabilities.removeAll { $0.name == "speed-level" }
+        let i = try #require(s.capabilities.firstIndex { $0.id == "p:2:2" })
+        s.capabilities[i].options[3].description = "Auto"
+        let plan = try plan(s)
+        let service = try #require(plan.services.first { $0.type == .fanV2 })
+        #expect(!service.characteristics.contains { $0.type == .rotationSpeed })
+        #expect(plan.bindings.values.filter { if case .option("p:2:2", _) = $0 { true } else { false } }.count == 4)
+    }
+
+    @Test("An unreviewed device gets daily switches only: settings and program lists stay on the Mac, within a budget")
+    func dailySwitchBudget() throws {
+        var s = try snapshot("zhimi-ca4", model: "test.humidifier.ca4")
+        let level = try #require(s.capabilities.first { $0.id == "p:2:5" })
+        let dry = try #require(s.capabilities.first { $0.id == "p:2:8" })
+        func copy(_ c: DeviceCapability, _ iid: Int, _ name: String, options count: Int? = nil) -> DeviceCapability {
+            var c = c
+            c.id = "p:2:\(iid)"; c.iid = iid; c.name = name; c.vendorDefined = false
+            if let count {
+                c.options = (0..<count).map { i in var o = level.options[0]; o.value = i; o.description = "Program\(i)"; return o }
+            }
+            return c
+        }
+        s.capabilities += [copy(level, 20, "mode", options: 3), copy(level, 21, "program", options: 8)] + (30..<42).map { copy(dry, $0, "feature-\($0)") }
+        let plan = try plan(s)
+        let switched = plan.services.filter { $0.type == .switch }.compactMap { service -> String? in
+            switch service.characteristics.first.flatMap({ plan.bindings[$0.iid] }) {
+            case .property(let id, _)?: id
+            case .option(let id, let v)?: "\(id)=\(Int(v.doubleValue ?? -1))"
+            default: nil
+            }
+        }
+        // The device's mode comes first, then its main service in spec order until ten switches are used. The alarm
+        // and screen brightness are settings, eight programs are too many for switches, and dry is zhimi's own field.
+        #expect(switched == ["p:2:20=0", "p:2:20=1", "p:2:20=2", "p:2:5=0", "p:2:5=1", "p:2:5=2", "p:2:5=3", "p:2:30", "p:2:31", "p:2:32"])
+    }
+
+    @Test("Each key of a wall switch has its own name in Home, and so does each key's mode")
+    func wallSwitchNames() throws {
+        let names = try L10n.$overrideLanguage.withValue(.zhHans) { switchNames(try plan(try snapshot("xiaomi-2b2", model: "test.switch.2b2"))) }
+        #expect(Set(names) == ["左键模式·有线和无线开关", "左键模式·无线开关", "右键模式·有线和无线开关", "右键模式·无线开关", "防闪烁模式", "右键"])
+        #expect(Set(names).count == names.count)
+    }
+
+    @Test("An airer's light is named for the light, and a repeated Pause option is one switch")
+    func airerNames() throws {
+        let (plan, names) = try L10n.$overrideLanguage.withValue(.zhHans) {
+            let plan = try plan(try snapshot("xiaomi-airer-0002", model: "test.airer.0002"))
+            return (plan, switchNames(plan))
+        }
+        #expect(names == ["电机控制·暂停", "电机控制·升高", "电机控制·降低", "电机控制·设限时上升", "电机控制·设限时降低", "照明", "夜灯开关"])
+        #expect(plan.bindings.values.contains { if case .option("p:2:5", .number(0)) = $0 { true } else { false } })
+        #expect(!plan.bindings.values.contains { if case .option("p:2:5", .number(3)) = $0 { true } else { false } })
+    }
+
+    @Test("Off and one other setting make one switch that writes both values; other pairs stay two switches")
+    func offOnSwitch() throws {
+        var s = try snapshot("xiaomi-airer-0002", model: "test.airer.0002")
+        let motor = try #require(s.capabilities.first { $0.id == "p:2:5" })
+        s.capabilities.removeAll { $0.id == "p:2:5" }
+        func list(_ iid: Int, _ options: [(Int, String, String?)]) -> DeviceCapability {
+            var c = motor
+            c.id = "p:2:\(iid)"; c.iid = iid; c.name = "feature-\(iid)"; c.readable = true
+            c.options = options.map { value, description, comment in
+                var o = motor.options[0]; o.value = value; o.description = description; o.comment = comment; return o
+            }
+            return c
+        }
+        s.capabilities += [list(20, [(0, "Off", "关闭"), (1, "On", "打开")]), list(21, [(0, "Enable", nil), (1, "Disable", nil)]),
+                           list(22, [(0, "0", "关"), (1, "1", "开")]), list(23, [(0, "Low", "低风"), (1, "High", "高风")])]
+        let plan = try plan(s)
+        func toggle(_ id: String) throws -> HAPService {
+            try #require(plan.services.first { service in
+                service.characteristics.contains { if case .property(id, .toggle)? = plan.bindings[$0.iid] { true } else { false } }
+            })
+        }
+        s.health = LANDeviceHealth(state: .online)
+        s.readings["p:2:20"] = DeviceReading(value: .number(1), code: 0)
+        let purify = try toggle("p:2:20")
+        #expect(value(plan, purify, "25", s) == .bool(true))
+        s.readings["p:2:20"] = DeviceReading(value: .number(0), code: 0)
+        #expect(value(plan, purify, "25", s) == .bool(false))
+        #expect(try commands(plan, purify, "25", .bool(true), s) == [.set("p:2:20", .number(1))])
+        #expect(try commands(plan, purify, "25", .bool(false), s) == [.set("p:2:20", .number(0))])
+        // Enable comes first in some lists, and some name their values only in the comment.
+        #expect(try commands(plan, try toggle("p:2:21"), "25", .bool(true), s) == [.set("p:2:21", .number(0))])
+        #expect(try commands(plan, try toggle("p:2:22"), "25", .bool(false), s) == [.set("p:2:22", .number(0))])
+        // Low and High are two speeds, not off and on.
+        let low = plan.bindings.values.filter { if case .option("p:2:23", _) = $0 { true } else { false } }
+        #expect(low.count == 2)
+        #expect(plan.services.filter { $0.type == .switch }.count == 7)
+    }
+
+    @Test("A bath heater heats from its heating switch, reads the room's temperature, and its light is a lightbulb")
+    func bathHeater() throws {
+        var s = try L10n.$overrideLanguage.withValue(.zhHans) { try snapshot("xiaomi-bhf-na1", model: "test.bhf.na1") }
+        let plan = try plan(s)
+        let heater = try #require(plan.services.first { $0.type.rawValue == "BC" })
+        #expect(heater.isPrimary)
+        #expect(heater.characteristics.map(\.type.rawValue) == ["B0", "B1", "B2", "11", "12", "36"])
+        #expect(characteristic(heater, "B2").validValues == [1])
+        #expect(characteristic(heater, "12").minValue == 25)
+        #expect(characteristic(heater, "12").maxValue == 35)
+        // The room's thermometer is the heater's temperature rather than a sensor of its own.
+        #expect(!plan.services.contains { $0.type == .temperatureSensor })
+        s.health = LANDeviceHealth(state: .online)
+        s.readings["p:4:6"] = DeviceReading(value: .bool(true), code: 0)
+        s.readings["p:11:7"] = DeviceReading(value: .number(22), code: 0)
+        #expect(value(plan, heater, "B1", s) == .uint8(2))
+        #expect(value(plan, heater, "11", s) == .float(22))
+        #expect(try commands(plan, heater, "B0", .uint8(0), s) == [.set("p:4:6", .bool(false))])
+
+        let light = try #require(plan.services.first { $0.type == .lightbulb })
+        #expect(!light.isPrimary)
+        #expect(light.characteristics.map(\.type.rawValue) == ["25", "8", "23", "E3"])
+        #expect(try commands(plan, light, "8", .int32(0), s) == [.set("p:2:1", .bool(false))])
+        #expect(!switchNames(plan).contains("照明"))
+        #expect(!switchNames(plan).contains("暖风"))
+    }
+
+    @Test("Apple Home draws heating up to 38 °C, so a higher set point stays on the Mac")
+    func bathHeaterHotSetPoint() throws {
+        var s = try snapshot("xiaomi-bhf-na1", model: "test.bhf.na1")
+        let i = try #require(s.capabilities.firstIndex { $0.id == "p:4:4" })
+        s.capabilities[i].range = [25, 45, 1]
+        let heater = try #require(try plan(s).services.first { $0.type.rawValue == "BC" })
+        #expect(heater.characteristics.map(\.type.rawValue) == ["B0", "B1", "B2", "11", "36"])
+    }
+
+    @Test("Without a heating switch, the Heat mode is Active; switching off leaves other modes running")
+    func bathHeaterMode() throws {
+        var s = try L10n.$overrideLanguage.withValue(.zhHans) { try snapshot("xiaomi-bhf-na2", model: "test.bhf.na2") }
+        let plan = try plan(s)
+        let heater = try #require(plan.services.first { $0.type.rawValue == "BC" })
+        s.health = LANDeviceHealth(state: .online)
+        s.readings["p:4:17"] = DeviceReading(value: .number(2), code: 0)
+        #expect(value(plan, heater, "B0", s) == .uint8(1))
+        #expect(value(plan, heater, "B1", s) == .uint8(2))
+        #expect(try commands(plan, heater, "B0", .uint8(0), s) == [.set("p:4:17", .number(0))])
+        s.readings["p:4:17"] = DeviceReading(value: .number(3), code: 0)
+        #expect(value(plan, heater, "B0", s) == .uint8(0))
+        #expect(value(plan, heater, "B1", s) == .uint8(0))
+        #expect(try commands(plan, heater, "B0", .uint8(0), s) == [])
+        #expect(try commands(plan, heater, "B0", .uint8(1), s) == [.set("p:4:17", .number(2))])
+        // Heat and Idle are the heater itself; drying and the other modes stay switches.
+        let modes = plan.bindings.values.compactMap { binding -> Int? in
+            if case .option("p:4:17", let v) = binding { v.doubleValue.map(Int.init) } else { nil }
+        }
+        #expect(Set(modes) == [1, 3, 4, 5])
+    }
+
+    @Test("A bath heater without any temperature keeps its heating switch, now the main control")
+    func bathHeaterWithoutTemperature() throws {
+        let plan = try L10n.$overrideLanguage.withValue(.zhHans) { try plan(try snapshot("yeelink-bhf-v10", model: "test.bhf.v10")) }
+        #expect(!plan.services.contains { $0.type.rawValue == "BC" })
+        let heating = try #require(plan.services.first { $0.isPrimary })
+        #expect(heating.type == .switch)
+        #expect(heating.characteristics.contains { if case .property("p:3:3", .direct)? = plan.bindings[$0.iid] { true } else { false } })
+        #expect(plan.services.contains { $0.type == .lightbulb && !$0.isPrimary })
+        #expect(switchNames(plan).contains("照明模式·日光"))
+        #expect(switchNames(plan).contains("浴霸模式·干燥"))
+    }
+
+    @Test("Reset flags and display units are settings, never Home switches")
+    func resetIsSetting() throws {
+        var s = try snapshot("xiaomi-airer-0002", model: "test.airer.0002")
+        let i = try #require(s.capabilities.firstIndex { $0.id == "p:3:4" })
+        s.capabilities[i].name = "set-factory-reset-flag"
+        var unit = s.capabilities[i]
+        unit.id = "p:3:9"; unit.iid = 9; unit.name = "temperature-display-unit"
+        s.capabilities.append(unit)
+        let bound = Set(try plan(s).bindings.values.compactMap { binding -> String? in if case .property(let id, _) = binding { id } else { nil } })
+        #expect(!bound.contains("p:3:4"))
+        #expect(!bound.contains("p:3:9"))
+        #expect(bound.contains("p:3:1"))
     }
 
     @Test("A curtain moves to a position and reports which way it is going")
@@ -115,10 +378,8 @@ struct CategoryMappingTests {
         #expect(service.characteristics.map(\.type.rawValue) == ["25"])
         // Stop stays a named switch; identify is maintenance.
         #expect(actionSwitches(plan) == ["a:2:2"])
-        let speeds = plan.bindings.values.compactMap { binding -> Double? in
-            if case .option("p:2:2", let v) = binding { v.doubleValue } else { nil }
-        }
-        #expect(speeds.sorted() == [1, 100])
+        // A suction range without reviewed presets stays on the Mac rather than becoming range-end switches.
+        #expect(!plan.bindings.values.contains { if case .option("p:2:2", _) = $0 { true } else { false } })
 
         #expect(value(plan, service, "25", s) == nil)
         s.health = LANDeviceHealth(state: .online)
@@ -219,6 +480,13 @@ struct CategoryMappingTests {
                 if case .cleaning = plan.bindings[$0.iid] { true } else { false }
             }
         })
+    }
+    private func switchNames(_ plan: CapabilityHomeKitPlan) -> [String] {
+        plan.services.filter { $0.type == .switch }.compactMap { service in
+            service.characteristics.first { $0.type == .name }.flatMap { c -> String? in
+                if case .name(_, let title)? = plan.bindings[c.iid] { title } else { nil }
+            }
+        }
     }
     private func actionSwitches(_ plan: CapabilityHomeKitPlan) -> [String] {
         plan.bindings.values.compactMap { binding -> String? in if case .action(let id) = binding { id } else { nil } }.sorted()

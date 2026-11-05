@@ -333,11 +333,13 @@ public struct CharacteristicProtocol: Sendable {
                     charList.append(charDict)
                 }
 
-                serviceList.append([
+                var serviceDict: [String: Any] = [
                     "iid": service.iid,
                     "type": service.type.rawValue,
                     "characteristics": charList,
-                ])
+                ]
+                if service.isPrimary { serviceDict["primary"] = true }
+                serviceList.append(serviceDict)
             }
 
             accessoryList.append([

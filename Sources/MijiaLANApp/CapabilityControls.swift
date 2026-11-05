@@ -54,7 +54,7 @@ private struct CapabilityControlRow: View {
                 Button(L10n.tr("关闭", "Off")) { send(.set(capability.id, .bool(false))) }
             }
         case .choice:
-            Picker(capability.displayTitle, selection: Binding(get: { value?.intValue ?? Int.min }, set: {
+            Picker(capability.displayTitle, selection: Binding(get: { value?.integer ?? Int.min }, set: {
                 if $0 != Int.min { send(.set(capability.id, .number(Double($0)))) }
             })) {
                 Text(capability.prepared ? L10n.tr("请选择", "Select…") : L10n.tr("状态未知", "Unknown State")).tag(Int.min)

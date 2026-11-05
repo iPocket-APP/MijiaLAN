@@ -111,7 +111,7 @@ private struct AirConditionerControl: View {
             if let mode = snapshot.capability("air-conditioner", "mode") {
                 HStack(spacing: 6) {
                     ForEach(mode.options) { option in
-                        let selected = snapshot.value(mode.id)?.intValue == option.value
+                        let selected = snapshot.value(mode.id)?.integer == option.value
                         Button { perform(.set(mode.id, .number(Double(option.value)))) } label: {
                             VStack(spacing: 5) {
                                 Image(systemName: Self.symbol(option.value)).font(.system(size: 17))
@@ -130,7 +130,7 @@ private struct AirConditionerControl: View {
             if let fan = snapshot.capability("fan-control", "fan-level") {
                 HStack(spacing: 12) {
                     Text(L10n.tr("风速", "Fan Speed")).foregroundStyle(.secondary)
-                    Picker(L10n.tr("风速", "Fan Speed"), selection: Binding(get: { snapshot.value(fan.id)?.intValue ?? -1 }, set: { perform(.set(fan.id, .number(Double($0)))) })) {
+                    Picker(L10n.tr("风速", "Fan Speed"), selection: Binding(get: { snapshot.value(fan.id)?.integer ?? -1 }, set: { perform(.set(fan.id, .number(Double($0)))) })) {
                         if snapshot.value(fan.id) == nil { Text(L10n.tr("未知", "Unknown")).tag(-1) }
                         ForEach(fan.options) { Text($0.title).tag($0.value) }
                     }
@@ -190,7 +190,7 @@ private struct LampControl: View {
     var body: some View {
         VStack(spacing: 12) {
             BrightnessBar(value: writer.pendingValue ?? snapshot.value(brightness.id)?.doubleValue,
-                          range: (brightness.min ?? 1)...(brightness.max ?? 100), step: brightness.step, commit: writer.submit)
+                          range: brightness.sliderRange(default: 1...100), step: brightness.step, commit: writer.submit)
             .disabled(!snapshot.isOnline)
             Text(hint)
                 .font(.system(size: 12))
@@ -227,7 +227,7 @@ private struct LampColorTemperatureControl: View {
 
     private var actual: Double? { snapshot.value(capability.id)?.doubleValue }
     private var displayed: Double? { draft ?? writer.pendingValue ?? actual }
-    private var range: ClosedRange<Double> { (capability.min ?? 2600)...(capability.max ?? 5000) }
+    private var range: ClosedRange<Double> { capability.sliderRange(default: 2600...5000) }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -285,6 +285,15 @@ private struct LampColorTemperatureControl: View {
         guard next != value else { return }
         draft = next
         writer.submit(next)
+    }
+}
+
+private extension DeviceCapability {
+    /// The spec's range, or the default for a bound it lacks. `lo...hi` traps when lo > hi, so a backwards or
+    /// empty range, which a spec can declare, also falls back to the default.
+    func sliderRange(default fallback: ClosedRange<Double>) -> ClosedRange<Double> {
+        let lo = min ?? fallback.lowerBound, hi = max ?? fallback.upperBound
+        return lo < hi ? lo...hi : fallback
     }
 }
 

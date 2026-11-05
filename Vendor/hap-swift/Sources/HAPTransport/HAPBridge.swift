@@ -197,7 +197,7 @@ public actor HAPBridge {
             for char in service.characteristics where !appendingCharacteristicTypes.contains(char.type) {
                 updatedChars.append(numbered(char))
             }
-            allServices.append(HAPService(iid: serviceIID, type: service.type, characteristics: updatedChars))
+            allServices.append(HAPService(iid: serviceIID, type: service.type, characteristics: updatedChars, isPrimary: service.isPrimary))
         }
         for (index, service) in services.enumerated() {
             for char in service.characteristics where appendingCharacteristicTypes.contains(char.type) {

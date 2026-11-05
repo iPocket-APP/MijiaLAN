@@ -194,16 +194,15 @@ public enum HomeKitAccessoryMapper {
             return on == s.isOn ? nil : .power(on)
 
         case (.lightBrightness, .light(let s)):
-            let percent = min(100, max(0, Int(number.rounded())))
+            let percent = Int(min(100, max(0, number)).rounded())
             if percent == 0 { return s.isOn ? .power(false) : nil }
             return (s.isOn && s.brightnessPercent == percent) ? nil : .brightness(percent)
 
         case (.lightColorTemperature, .light(let s)):
             // Setting a colour temperature turns the light on; only follow it while the light is already on.
             guard s.isOn, number > 0 else { return nil }
-            let requestedMired = Int(number.rounded())
-            if let current = s.colorTempKelvin, mired(fromKelvin: current) == requestedMired { return nil }
-            let kelvin = min(s.maxKelvin, max(s.minKelvin, Int((1_000_000 / number).rounded())))
+            if let current = s.colorTempKelvin, Double(mired(fromKelvin: current)) == number.rounded() { return nil }
+            let kelvin = Int(min(Double(s.maxKelvin), max(Double(s.minKelvin), (1_000_000 / number).rounded())))
             return .colorTemperature(kelvin: kelvin)
 
         case (.outletOn, .plug(let s)):
@@ -224,7 +223,8 @@ public enum HomeKitAccessoryMapper {
 
         case (.climateTargetState, .climate(let s)):
             // Picking a mode also turns the device on, as it did with the thermostat.
-            guard let mode = hvacMode(forTargetState: Int(number.rounded()), availableModes: s.availableModes) else { return nil }
+            guard let state = Int(exactly: number.rounded()),
+                  let mode = hvacMode(forTargetState: state, availableModes: s.availableModes) else { return nil }
             return isActive(s) && s.hvacMode == mode ? nil : .climateMode(mode)
 
         case (.climateCoolingThreshold, .climate(let s)), (.climateHeatingThreshold, .climate(let s)):
@@ -236,7 +236,7 @@ public enum HomeKitAccessoryMapper {
         case (.climateFanSpeed, .climate(let s)):
             let levels = fanLevels(of: s)
             guard !levels.isEmpty else { return nil }
-            let index = min(levels.count, max(0, Int((number * Double(levels.count) / 100).rounded())))
+            let index = Int((min(100, max(0, number)) * Double(levels.count) / 100).rounded())
             // 0 % is the device's automatic speed, when it has one.
             let mode = index == 0 ? (s.availableFanModes.first(where: isAutoFan) ?? levels[0]) : levels[index - 1]
             return mode == s.fanMode ? nil : .climateFanMode(mode)
@@ -520,7 +520,7 @@ public enum HomeKitAccessoryMapper {
         case .uint32(let v): return Double(v)
         case .int32(let v): return Double(v)
         case .float(let v): return v.isFinite ? v : nil
-        case .string(let v): return Double(v)
+        case .string(let v): return Double(v).flatMap { $0.isFinite ? $0 : nil }
         case .data, .tlv8: return nil
         }
     }

@@ -617,10 +617,10 @@ public final class HomeKitBridgeController {
     /// Two devices called 吸顶灯 in different rooms would both land in Apple Home's default room; prefix the room.
     nonisolated static func displayNames(for devices: [SmartDevice]) -> [String: String] {
         let counts = Dictionary(grouping: devices, by: \.name).mapValues(\.count)
-        return Dictionary(uniqueKeysWithValues: devices.map { device in
+        return Dictionary(devices.map { device in
             let isDuplicate = (counts[device.name] ?? 0) > 1 && !device.roomName.isEmpty
             return (device.id, isDuplicate ? "\(device.roomName) \(device.name)" : device.name)
-        })
+        }, uniquingKeysWith: { first, _ in first })
     }
 
     private func resolveIIDs(bridge: HAPBridge, aid: UInt64, plan: HomeKitAccessoryPlan) async -> [HomeKitRole: UInt64] {

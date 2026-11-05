@@ -73,7 +73,7 @@ struct CapabilityMappingTests {
         }
     }
 
-    @Test("Fan speed is 8.1, gear is 2.2, and zero only powers off")
+    @Test("Fan speed is 8.1 and covers the 2.2 gears; zero only powers off")
     func fanRouting() throws {
         var s = try snapshot("dmaker.fan.p28")
         var ids: [String: UInt64] = [:]
@@ -88,8 +88,30 @@ struct CapabilityMappingTests {
         s.readings["p:8:1"] = DeviceReading(value: .number(8), code: 0)
         s.readings["p:2:2"] = DeviceReading(value: .number(4), code: 0)
         #expect(CapabilityHomeKitMapper.value(binding, snapshot: s, legacyValues: [:], names: [:]) == .float(8))
-        let presets = plan.bindings.values.filter { binding in if case .option("p:2:2", _) = binding { true } else { false } }
-        #expect(presets.count == 4)
+        #expect(!plan.bindings.values.contains { binding in
+            switch binding { case .property("p:2:2", _), .option("p:2:2", _): true; default: false }
+        })
+    }
+
+    @Test("A purifier's speed is its favorite level, and setting it selects Favorite mode")
+    func purifierSpeed() throws {
+        var s = try snapshot("zhimi.airpurifier.rma1")
+        var ids: [String: UInt64] = [:]
+        let plan = CapabilityHomeKitMapper.plan(snapshot: s, legacyDevice: smart(s), names: [:], identifiers: &ids)
+        let speed = try #require(plan.services.first { $0.type.rawValue == "BB" }?.characteristics.first { $0.type == .rotationSpeed })
+        #expect(speed.minStep == 100.0 / 15)
+        // Levels 0–14 now share the slider instead of four preset switches.
+        #expect(!plan.bindings.values.contains { if case .option("p:9:2", _) = $0 { true } else { false } })
+        let binding = try #require(plan.bindings[speed.iid])
+        s.health = LANDeviceHealth(state: .online)
+        s.readings["p:2:1"] = DeviceReading(value: .bool(true), code: 0)
+        s.readings["p:9:2"] = DeviceReading(value: .number(14), code: 0)
+        #expect(CapabilityHomeKitMapper.value(binding, snapshot: s, legacyValues: [:], names: [:]) == .float(100))
+        #expect(try CapabilityHomeKitMapper.commands(binding, value: .float(50), snapshot: s)
+                == [.set("p:9:2", .number(7)), .set("p:2:4", .number(2)), .set("p:2:1", .bool(true))])
+        #expect(try CapabilityHomeKitMapper.commands(binding, value: .float(0), snapshot: s) == [.set("p:2:1", .bool(false))])
+        s.readings["p:2:1"] = DeviceReading(value: .bool(false), code: 0)
+        #expect(CapabilityHomeKitMapper.value(binding, snapshot: s, legacyValues: [:], names: [:]) == .float(0))
     }
 
     @Test("Purifier current state uses actual motor speed instead of assuming power-on means purifying")

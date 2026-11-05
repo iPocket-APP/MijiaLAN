@@ -14,7 +14,7 @@ public struct DeviceSchema: Codable, Equatable, Sendable {
         public var description: String
         public var comment: String?
         public var id: Int { value }
-        public var title: String { CapabilityNames.option(L10n.isEnglish ? description : (comment ?? description)) }
+        public var title: String { CapabilityNames.option(L10n.isEnglish ? description : (CapabilityNames.firstLine(comment) ?? description)) }
     }
     public struct Property: Codable, Equatable, Sendable {
         public var iid: Int
@@ -117,6 +117,8 @@ public struct DeviceCapability: Equatable, Sendable, Identifiable {
     public var prepared: Bool
     public var limitation: String?
     public var lowFrequency: Bool
+    /// Defined in the manufacturer's own namespace rather than the shared `urn:miot-spec-v2` one.
+    public var vendorDefined: Bool = false
     public var min: Double? { range?.first }
     public var max: Double? { range.flatMap { $0.count >= 2 ? $0[1] : nil } }
     public var step: Double { range.flatMap { $0.count >= 3 ? $0[2] : nil } ?? 1 }
@@ -284,7 +286,10 @@ public enum DeviceCapabilityCatalog {
         let legacy = LegacyMiioProfile.forModel(model)
         var result: [DeviceCapability] = []
         var seen: Set<String> = []
+        var specific: [String: String] = [:]
+        var qualifiers: [Int: String] = [:]
         for service in schema.services where !excludedServices.contains(service.name) {
+            if qualifiers[service.iid] == nil { qualifiers[service.iid] = CapabilityNames.service(service.name, description: service.description) }
             let argumentIDs = Set(service.actions.filter { actionNames.contains($0.name) }.flatMap(\.inputs))
             for p in service.properties {
                 // A repeated schema entry addresses the same property. Keep its first definition consistently
@@ -315,9 +320,19 @@ public enum DeviceCapabilityCatalog {
                 }
                 if !readable && !writable && !prepared { control = .unsupported }
                 var options = p.valueList ?? []
+                // An option's explanation goes unless it is what tells two options apart, as in 充电中 and 充电中(断点中).
+                let short = options.map { CapabilityNames.comment($0.comment) }
+                for i in options.indices where short[i] == nil || short.filter({ $0 == short[i] }).count == 1 { options[i].comment = short[i] }
                 var unit = p.unit
-                let fallback = L10n.isEnglish ? (p.description ?? p.name) : (p.comment ?? p.description ?? p.name)
-                var title = CapabilityNames.property(service: service.name, name: p.name, fallback: fallback)
+                let comment = L10n.isEnglish ? p.description.flatMap(CapabilityNames.comment) : CapabilityNames.comment(p.comment)
+                var title = CapabilityNames.property(service: service.name, name: p.name, fallback: comment ?? p.description ?? p.name)
+                specific[DeviceCapability.propertyID(service.iid, p.iid)] = comment
+                // A further power switch belongs to a part of the device, such as a bath heater's light.
+                let main = service.name == schema.category || schema.category == "outlet" && service.name == "switch"
+                if p.name == "on", !main, title == L10n.tr("电源", "Power"),
+                   let part = comment.flatMap({ CapabilityNames.genericNames.contains($0.lowercased()) ? nil : $0 }) ?? qualifiers[service.iid] {
+                    title = part
+                }
                 if model == "dmaker.fan.p28", service.iid == 3, p.iid == 1 { unit = "minutes" }
                 if p.name.contains("swing-included-angle") { unit = "arcdegrees" }
                 if model == "cuco.plug.v3" {
@@ -342,11 +357,14 @@ public enum DeviceCapabilityCatalog {
                     service: service.name, name: p.name, title: title, format: p.format, readable: readable,
                     writable: writable, unit: unit, range: p.valueRange, options: options, inputs: [], outputs: [],
                     control: control, prepared: prepared, limitation: limitation,
-                    lowFrequency: ["filter", "power-consumption", "on-off-count"].contains(service.name)
+                    lowFrequency: ["filter", "power-consumption", "on-off-count"].contains(service.name),
+                    vendorDefined: !p.type.hasPrefix("urn:miot-spec-v2:")
                 ))
             }
             for a in service.actions {
                 guard seen.insert(DeviceCapability.actionID(service.iid, a.iid)).inserted else { continue }
+                let comment = L10n.isEnglish ? a.description.flatMap(CapabilityNames.comment) : CapabilityNames.comment(a.comment)
+                specific[DeviceCapability.actionID(service.iid, a.iid)] = comment
                 // A legacy device runs only the actions its profile maps to methods.
                 let reachable = legacy.map { $0.action(siid: service.iid, aiid: a.iid) != nil } ?? true
                 let supported = reachable && (actionNames.contains(a.name) && service.name == schema.category
@@ -354,13 +372,53 @@ public enum DeviceCapabilityCatalog {
                 result.append(DeviceCapability(
                     id: DeviceCapability.actionID(service.iid, a.iid), model: model, specification: schema.type, kind: .action, siid: service.iid, iid: a.iid,
                     service: service.name, name: a.name,
-                    title: CapabilityNames.action(a.name, fallback: L10n.isEnglish ? (a.description ?? a.name) : (a.comment ?? a.description ?? a.name)),
+                    title: CapabilityNames.action(a.name, fallback: comment ?? a.description ?? a.name),
                     format: "action", readable: false, writable: supported, unit: nil, range: nil, options: [],
                     inputs: a.inputs, outputs: a.outputs, control: supported ? .button : .unsupported, prepared: false,
-                    limitation: supported ? nil : reachable ? "维护操作或厂商复合参数，不作为日常控制" : "规格存在，尚无经过确认的旧 miIO 映射", lowFrequency: false
+                    limitation: supported ? nil : reachable ? "维护操作或厂商复合参数，不作为日常控制" : "规格存在，尚无经过确认的旧 miIO 映射", lowFrequency: false,
+                    vendorDefined: !a.type.hasPrefix("urn:miot-spec-v2:")
                 ))
             }
         }
+        distinguish(&result, specific: specific, qualifiers: qualifiers, reviewed: DeviceSchema.bundledModels.contains(model))
         return result
+    }
+
+    /// Home lists a device's controls side by side, as does the Mac panel, so no two may share a title. A repeated
+    /// title takes its spec comment where that sets it apart ("速冷模式"), else its service's qualifier ("右键模式"),
+    /// else a number. Reviewed models keep their curated names and only gain numbers.
+    static func distinguish(_ caps: inout [DeviceCapability], specific: [String: String], qualifiers: [Int: String], reviewed: Bool) {
+        func repeated() -> [[Int]] {
+            Dictionary(grouping: caps.indices.filter { !caps[$0].title.isEmpty }) { caps[$0].title }.values
+                .filter { $0.count > 1 }.map { $0.sorted() }.sorted { $0[0] < $1[0] }
+        }
+        for group in reviewed ? [] : repeated() {
+            let title = caps[group[0]].title
+            let names = group.map { specific[caps[$0].id].flatMap { $0 == title || CapabilityNames.genericNames.contains($0.lowercased()) ? nil : $0 } }
+            for (i, index) in group.enumerated() where names[i] != nil && names.filter({ $0 == names[i] }).count == 1 {
+                caps[index].title = names[i]!
+            }
+        }
+        for group in reviewed ? [] : repeated() {
+            let labels = group.map { qualifiers[caps[$0].siid] }
+            // When every member has a qualifier all read alike ("左键模式", "右键模式"); otherwise the first, normally
+            // the main service, keeps the plain title.
+            let all = labels.allSatisfy { $0 != nil } && Set(labels).count > 1
+            for (i, index) in group.enumerated() {
+                guard let label = labels[i], all || i > 0 && label != labels[0] else { continue }
+                caps[index].title = qualified(caps[index], label)
+            }
+        }
+        for group in repeated() {
+            for (n, index) in group.enumerated().dropFirst() { caps[index].title += " \(n + 1)" }
+        }
+    }
+
+    /// "新风" and 左右摇头 make 新风左右摇头; a further power switch is the part itself, and a reset names what it resets.
+    private static func qualified(_ c: DeviceCapability, _ label: String) -> String {
+        if c.name == "on" && c.title == L10n.tr("电源", "Power") { return label }
+        if c.title.hasPrefix(label) { return c.title }
+        if L10n.isEnglish { return label + " " + c.title }
+        return c.title.hasPrefix("重置") ? "重置" + label + c.title.dropFirst(2) : label + c.title
     }
 }

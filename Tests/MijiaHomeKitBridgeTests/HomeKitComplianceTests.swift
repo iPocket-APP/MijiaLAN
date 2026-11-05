@@ -96,14 +96,15 @@ struct HomeKitComplianceTests {
         }
     }
 
+    /// Switches of unreviewed models stay within a budget, so readings are what can still reach the limit.
     @Test("The 100-service limit includes accessory information and leaves complete services", arguments: [98, 99, 100, 120])
     func serviceLimit(_ count: Int) async throws {
         var s = try snapshot("zhimi-ca4")
         s.schema.type = "audit"
-        let original = try #require(s.capabilities.first { $0.name == "on" })
+        let original = try #require(s.capabilities.first { $0.name == "temperature" })
         s.capabilities = (1...count).map { i in
             var c = original
-            c.id = "p:99:\(i)"; c.siid = 99; c.iid = i; c.service = "audit"; c.name = "switch-\(i)"
+            c.id = "p:99:\(i)"; c.siid = 99; c.iid = i; c.service = "audit"
             return c
         }
         var ids: [String: UInt64] = [:]
@@ -113,7 +114,7 @@ struct HomeKitComplianceTests {
         let accessory = try #require(await bridge.accessoryDatabase().first { $0.aid == 2 })
         #expect(accessory.services.count == min(count + 1, 100))
         #expect(p.omittedServiceCount == max(0, count - 99))
-        #expect(p.services.allSatisfy { Set($0.characteristics.map(\.type.rawValue)) == ["25", "23", "E3"] })
+        #expect(p.services.allSatisfy { Set($0.characteristics.map(\.type.rawValue)) == ["11", "23", "E3"] })
         let before = ids
         let repeated = CapabilityHomeKitMapper.plan(snapshot: s, legacyDevice: nil, names: [:], identifiers: &ids)
         #expect(ids == before)

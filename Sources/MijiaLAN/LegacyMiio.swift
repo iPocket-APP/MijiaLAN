@@ -134,12 +134,14 @@ public struct LegacyMiioProfile: Sendable {
             case .number(let ratio, let offset, let strip):
                 var source = legacy
                 if let strip, let text = legacy.stringValue { source = .string(text.replacingOccurrences(of: strip, with: "")) }
-                return source.doubleValue.map { raw in
+                return source.doubleValue.flatMap { raw in
                     let n = raw * ratio + offset
-                    return .number(ratio == 1 ? n : (n * 1000).rounded() / 1000)
+                    let value = ratio == 1 ? n : (n * 1000).rounded() / 1000
+                    // "nan" and "inf" parse as numbers, but they are no reading.
+                    return value.isFinite ? .number(value) : nil
                 }
             case .values(let table, let fallback):
-                let key = legacy.stringValue ?? legacy.doubleValue.map { $0.rounded() == $0 ? String(Int($0)) : String($0) }
+                let key = legacy.stringValue ?? legacy.doubleValue.map { Int(exactly: $0).map(String.init) ?? String($0) }
                 if let key, let number = table[key] { return .number(Double(number)) }
                 return fallback.map { .number(Double($0)) }
             case .nonZero:
@@ -172,14 +174,14 @@ public struct LegacyMiioProfile: Sendable {
             case .value:
                 argument = miot
             case .string:
-                if let n = miot.doubleValue { argument = .string(n.rounded() == n ? String(Int(n)) : String(n)) }
+                if let n = miot.doubleValue { argument = .string(Int(exactly: n).map(String.init) ?? String(n)) }
                 else if let text = miot.stringValue { argument = .string(text) }
                 else { return nil }
             case .integer(let ratio, let offset):
                 guard let n = Self.number(miot) else { return nil }
                 argument = .number((n * ratio + offset).rounded(.towardZero))
             case .values(let table):
-                guard let number = miot.intValue, let key = table.first(where: { $0.value == number })?.key else { return nil }
+                guard let number = miot.integer, let key = table.first(where: { $0.value == number })?.key else { return nil }
                 argument = .string(key)
             case .boolChoice(let onValue, let offValue):
                 guard let on else { return nil }

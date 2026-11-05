@@ -32,9 +32,11 @@ struct IncrementalSyncTests {
     @Test("Truncated devices publish at most 100 services, report omissions and clear warnings when hidden")
     func serviceLimitWarnings() async throws {
         let identifier = UUID().uuidString
+        // Readings: an unreviewed model's switches stay within a budget, but each reading is its own sensor.
         let properties: [[String: Any]] = (1...120).map { i in
-            ["iid": i, "type": "urn:miot-spec-v2:property:\(i == 1 ? "on" : "toggle-\(i)"):00000006:audit:1",
-             "format": "bool", "access": ["read", "write"]]
+            i == 1 ? ["iid": i, "type": "urn:miot-spec-v2:property:on:00000006:audit:1", "format": "bool", "access": ["read", "write"]]
+                : ["iid": i, "type": "urn:miot-spec-v2:property:temperature:00000020:audit:1", "format": "float", "access": ["read"],
+                   "value-range": [-40, 100, 0.1]]
         }
         let json: [String: Any] = ["model": "test.audit.\(identifier)",
             "type": "urn:miot-spec-v2:device:outlet:0000A002:audit-\(identifier):1",

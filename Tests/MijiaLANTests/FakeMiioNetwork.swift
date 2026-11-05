@@ -24,6 +24,8 @@ final class FakeMiioNetwork: MiioTransport, @unchecked Sendable {
         var legacyProps: [String: JSONValue]?
         /// Further legacy methods a pre-MIoT device answers, with their replies (`get_status`, `app_start`).
         var legacyReplies: [String: JSONValue] = [:]
+        /// Reply text after the id, sent as is: a number JSONValue cannot write, such as a 20-digit code.
+        var rawReply: String?
         /// Setter and command calls, reads (`get_*`) left out.
         var legacyCalls: [String] = []
         /// The names of each `get_prop`, in order.
@@ -91,6 +93,10 @@ final class FakeMiioNetwork: MiioTransport, @unchecked Sendable {
         device.receivedMethods.append(method)
         device.stamp += 1
 
+        if let raw = device.rawReply, method != "miIO.info" {
+            let body = Data("{\"id\":\((request["id"] ?? .null).compactJSONString),\(raw)}".utf8) + [0]
+            return try MiioPacket.encode(body, token: device.token, deviceID: device.deviceID, stamp: device.stamp)
+        }
         var reply: [String: JSONValue] = ["id": request["id"] ?? .null]
         if var legacy = device.legacyProps, method != "miIO.info" {
             if method == "get_prop" {

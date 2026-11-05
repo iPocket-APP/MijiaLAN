@@ -64,3 +64,10 @@ subscription snapshot. Cache mutation order alone does not preserve delivery ord
 when an asynchronous send suspends. A delayed unavailable event could previously
 arrive after a same-value recovery event and leave Home displaying an old error.
 Regression cases cover both existing subscribers and subscribing while unavailable.
+
+### Primary service (2026-11-05)
+
+`HAPService.isPrimary` is published as the service's `"primary": true` in `GET /accessories`, and
+`HAPBridge.addAccessory` keeps it when it renumbers services. MijiaLAN marks each device's main service,
+such as Fan v2, so Home builds the accessory tile around it instead of one of its named switches.
+A changed flag is part of MijiaLAN's database signature, so Home is told to reload the accessory.

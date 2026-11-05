@@ -110,7 +110,7 @@ public actor MiioClient {
         self.clock = (header.stamp, .now)
         guard let json = Self.parseJSON(payload) else { throw MiioError.badResponse(L10n.tr("无法解析 JSON", "Could not parse JSON.")) }
         if let error = json["error"] {
-            throw MiioError.deviceError(code: error["code"]?.intValue ?? 0, message: error["message"]?.stringValue ?? "")
+            throw MiioError.deviceError(code: error["code"]?.integer ?? 0, message: error["message"]?.stringValue ?? "")
         }
         return json["result"] ?? .null
     }
@@ -188,9 +188,9 @@ extension MiioClient {
                 values[MiotPropKey(did: did, siid: p.siid, piid: p.piid)] = DeviceReading(error: L10n.tr("设备未返回此属性", "The device did not return this property."))
             }
             for item in result.arrayValue ?? [] {
-                guard let siid = item["siid"]?.intValue, let piid = item["piid"]?.intValue,
+                guard let siid = item["siid"]?.integer, let piid = item["piid"]?.integer,
                       chunk.contains(where: { $0.siid == siid && $0.piid == piid }) else { continue }
-                let code = item["code"]?.intValue
+                let code = item["code"]?.integer
                 let value = item["value"]
                 values[MiotPropKey(did: did, siid: siid, piid: piid)] = DeviceReading(
                     value: code == 0 ? value : nil, updatedAt: Date(), code: code,
@@ -221,7 +221,7 @@ extension MiioClient {
     /// MIoT per-item codes: 0 done, 1 accepted; negatives are errors (e.g. -4004 invalid value, -4003 not writable).
     static func checkCodes(_ items: [JSONValue]) throws {
         for item in items {
-            guard let code = item["code"]?.intValue else { throw MiioError.badResponse(L10n.tr("响应缺少返回码", "The response is missing a result code.")) }
+            guard let code = item["code"]?.integer else { throw MiioError.badResponse(L10n.tr("响应缺少返回码", "The response is missing a result code.")) }
             if code != 0 && code != 1 { throw MiioError.deviceError(code: code, message: Self.propertyError(code)) }
         }
     }
@@ -254,8 +254,15 @@ extension JSONValue {
     var idString: String? {
         switch self {
         case .string(let s): return s
-        case .number(let n): return n == n.rounded() ? String(Int64(n)) : String(n)
+        case .number(let n): return Int64(exactly: n).map(String.init) ?? String(n)
         default: return nil
         }
+    }
+
+    /// The value as an integer, or nil when Int cannot hold it. MijiaCore's `intValue` traps on NaN, infinity or a
+    /// number past Int's range, and a device reply can contain any of them, including as a string such as "nan".
+    public var integer: Int? {
+        guard let d = doubleValue?.rounded(), d.isFinite else { return nil }
+        return Int(exactly: d)
     }
 }

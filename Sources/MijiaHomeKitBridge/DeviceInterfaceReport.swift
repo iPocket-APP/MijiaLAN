@@ -53,22 +53,30 @@ public enum DeviceInterfaceReport {
                 let cleaningSwitch = plan.bindings.values.contains { binding in
                     if case .cleaning(let start, let dock, _) = binding { [start, dock].contains(c.id) } else { false }
                 }
-                let homeMapped = cleaningSwitch || plan.bindings.values.contains { binding in
-                    switch binding {
-                    case .property(let id, _), .option(let id, _), .adjust(let id, _), .action(let id): return id == c.id
-                    case .legacy: return device.model == "lumi.acpartner.mcn02" && [2, 3].contains(c.siid)
-                    default: return false
+                // A characteristic of a Home service is native; one on a Switch service is a named switch.
+                var native = device.model == "lumi.acpartner.mcn02" && [2, 3].contains(c.siid), switches = false
+                for service in plan.services {
+                    for characteristic in service.characteristics {
+                        switch plan.bindings[characteristic.iid] {
+                        case .property(let id, _)?, .option(let id, _)?, .action(let id)?:
+                            guard id == c.id else { continue }
+                            if service.type == .switch { switches = true } else { native = true }
+                        default: continue
+                        }
                     }
                 }
                 let feedback = c.prepared ? "待选值独立保存；运行后读实际状态" : c.readable ? "逐属性返回码＋回读＋时间" : c.kind == .action ? "动作返回码＋运行状态确认" : "接受回执；完成状态待确认"
                 let mac = [DeviceCapability.Control.toggle: "开关", .number: "精确输入", .choice: "选项", .button: "动作按钮", .reading: "实际读数", .unsupported: "待确认清单"][c.control] ?? ""
-                let home = cleaningSwitch ? "清扫开关（开=开始清扫，关=回充）" : homeMapped ? (c.control == .number ? "原生数值或预设＋增减" : c.control == .choice ? "具名选项开关" : c.kind == .action || c.control == .button ? "回弹按钮" : "原生服务／具名开关") : "Mac 保留"
+                let home = cleaningSwitch ? "清扫开关（开=开始清扫，关=回充）" : !native && !switches ? "Mac 保留"
+                    : native && switches ? "原生服务＋具名开关" : native ? "原生服务"
+                    : c.kind == .action || c.control == .button ? "回弹按钮"
+                    : c.control == .number ? "精选预设开关" : c.control == .choice ? "具名选项开关" : "具名开关"
                 let evidence = c.limitation ?? (c.control == .unsupported ? "规格保留；未启用" : "规格已核对；自动化协议测试；实机待验证")
                 lines.append("| \(c.id) \(clean(c.displayTitle)) | \(c.format) \(access) \(bounds) \(clean(options)) \(c.displayUnit) | \(clean(protocolText)) | \(feedback) | \(mac) | \(home) | \(clean(evidence)) |")
             }
             lines += ["", "不纳入日常控制：设备信息、恢复出厂、工程自检、固件／日志维护、未解析复合计划。原始规格完整保存在 `Sources/MijiaLAN/Resources/Specs/\(device.model).json`。", ""]
         }
-        lines += ["## 兼容与证据边界", "", "- 空调 Home 当前温度来自目标温度占位，不属于实测室温。", "- Fan 速度读取 8.1；四挡预设写 2.2；0% 只关闭电源。", "- 配件标识和服务名称独立持久化；离线不会删除控件。", "- cuco 电量原始值的说明为 0.01 kWh；普通与扩展字段分别保留。未声明单位的厂商数值仍显示原始值。", "- 接受回执和状态确认分开记录。非幂等动作不会自动重发。", ""]
+        lines += ["## 兼容与证据边界", "", "- 空调 Home 当前温度来自目标温度占位，不属于实测室温。", "- 风扇速度读写百分比风速（p28 为 8.1），挡位 2.2 由同一滑块覆盖，不再单列；仅有挡位时滑块按挡位等分。智能风对应 Home 的「自动」，童锁并入风扇服务；0% 只关闭电源。", "- 数值属性只以审核过的预设进入 Home，不再生成最小值、最大值和加减开关；摇头角度留在 Mac。未内置型号的厂商私有字段只在 Mac 显示。", "- 净化器速度读写最爱档位，调节时同时切到最爱模式；空调风速挡位合为速度滑块，滑块最低为自动。童锁并入风扇、净化器、暖风机、空调和加湿器服务。浴霸按 homebridge-miot 映射为只制热的暖风机：开关读写暖风，没有暖风开关时读写「暖风」模式；灯为带亮度的灯泡；设定温度超过 38 °C 的留在 Mac，完全没有温度的以暖风开关为主控件。", "- 未内置型号只为日常控件生成开关：设置类（提示音、指示灯、屏幕、童锁、延时、勿扰、开发者模式等）和超过 6 项的选项留在 Mac，附加开关每台最多 10 个；只有「关闭」和另一项的选项合为一个开关。内置型号保留审核过的开关。", "- 名称取规格注释的首个名称，不带说明和取值列表；同一设备内名称不重复：先用注释里的具体名称，再加服务限定（左键、冷藏室、新风），仍重复时编号。设备主服务以外的电源开关以所在部件命名，如浴霸的「照明」。内置型号保留审核过的名称，只在重复时编号。", "- 配件标识和服务名称独立持久化；离线不会删除控件。", "- cuco 电量原始值的说明为 0.01 kWh；普通与扩展字段分别保留。未声明单位的厂商数值仍显示原始值。", "- 接受回执和状态确认分开记录。非幂等动作不会自动重发。", ""]
         return lines.joined(separator: "\n")
     }
     private static func clean(_ text: String) -> String { text.replacingOccurrences(of: "|", with: "／").replacingOccurrences(of: "\n", with: " ") }
