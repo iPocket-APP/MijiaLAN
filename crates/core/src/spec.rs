@@ -166,9 +166,46 @@ pub struct Specification {
 pub struct Action {
     pub siid: u32,
     pub aiid: u32,
+    #[serde(default)]
+    pub service: String,
     pub name: String,
     pub description: String,
+    #[serde(default)]
+    pub description_en: String,
     pub inputs: Vec<Property>,
+}
+
+impl Action {
+    pub fn label(&self) -> &str {
+        self.label_for(crate::localization::english())
+    }
+    pub fn label_for(&self, english: bool) -> &str {
+        action_label(&self.name, english).unwrap_or_else(|| {
+            if english && !self.description_en.is_empty() {
+                &self.description_en
+            } else {
+                &self.description
+            }
+        })
+    }
+}
+
+pub(crate) fn action_label(name: &str, english: bool) -> Option<&'static str> {
+    let (zh, en) = match name {
+        "start-cook" => ("开始烹饪", "Start Cooking"),
+        "cancel-cooking" => ("停止烹饪", "Stop Cooking"),
+        "pause" => ("暂停", "Pause"),
+        "resume-cook" => ("继续", "Resume"),
+        "start-sweep" => ("开始清扫", "Start Cleaning"),
+        "start-only-sweep" => ("仅扫地", "Vacuum Only"),
+        "start-mop" => ("仅拖地", "Mop Only"),
+        "start-sweep-mop" => ("扫拖", "Vacuum and Mop"),
+        "stop-sweeping" => ("停止清扫", "Stop Cleaning"),
+        "pause-sweeping" => ("暂停清扫", "Pause Cleaning"),
+        "start-charge" => ("回充", "Return to Dock"),
+        _ => return None,
+    };
+    Some(if english { en } else { zh })
 }
 
 pub(crate) fn urn_name(value: &Value) -> String {
@@ -257,10 +294,16 @@ impl Specification {
             }
             for action in service["actions"].as_array().into_iter().flatten() {
                 let name = urn_name(&action["type"]);
-                if !["start-cook", "cancel-cooking", "pause", "resume-cook"]
-                    .contains(&name.as_str())
-                    || service_name != urn_name(&document["type"])
-                {
+                let Some(input_ids) = action["in"].as_array() else {
+                    continue;
+                };
+                let kitchen = service_name == urn_name(&document["type"])
+                    && ["start-cook", "cancel-cooking", "pause", "resume-cook"]
+                        .contains(&name.as_str());
+                let vacuum = urn_name(&document["type"]) == "vacuum"
+                    && crate::vacuum::supports_action(&service_name, &name)
+                    && input_ids.is_empty();
+                if !kitchen && !vacuum {
                     continue;
                 }
                 if name.is_empty()
@@ -270,12 +313,12 @@ impl Specification {
                 {
                     continue;
                 }
-                let Some(aiid) = action["iid"].as_u64() else {
+                let Some(aiid) = action["iid"].as_u64().filter(|id| *id <= u32::MAX as u64) else {
                     continue;
                 };
                 let mut inputs = Vec::new();
                 let mut supported = true;
-                for id in action["in"].as_array().into_iter().flatten() {
+                for id in input_ids {
                     let Some(mut input) = properties
                         .iter()
                         .find(|p| p.siid == siid as u32 && Some(p.piid as u64) == id.as_u64())
@@ -294,8 +337,14 @@ impl Specification {
                     actions.push(Action {
                         siid: siid as u32,
                         aiid: aiid as u32,
+                        service: service_name.clone(),
                         name,
-                        description: action["description"].as_str().unwrap_or("执行动作").into(),
+                        description: action["comment"]
+                            .as_str()
+                            .or(action["description"].as_str())
+                            .unwrap_or("执行动作")
+                            .into(),
+                        description_en: action["description"].as_str().unwrap_or("Action").into(),
                         inputs,
                     });
                 }

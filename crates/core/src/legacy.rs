@@ -17,6 +17,16 @@ pub struct Profile {
     pub chunk: Option<usize>,
     #[serde(rename = "ignoreResult", default)]
     pub ignore_result: bool,
+    #[serde(rename = "statusMethod", default)]
+    pub status_method: Option<String>,
+    #[serde(default)]
+    pub actions: Vec<LegacyAction>,
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct LegacyAction {
+    pub siid: u32,
+    pub aiid: u32,
+    pub methods: Vec<String>,
 }
 
 impl Profile {
@@ -26,7 +36,17 @@ impl Profile {
             let document: Value =
                 serde_json::from_str(include_str!("../../../resources/legacy-miio.json"))
                     .expect("bundled legacy map");
-            serde_json::from_value(document["models"].clone()).expect("bundled profiles")
+            let mut profiles: BTreeMap<String, Profile> =
+                serde_json::from_value(document["models"].clone()).expect("bundled profiles");
+            profiles.insert("rockrobo.vacuum.v1".into(), Self::roborock(true));
+            for model in [
+                "roborock.vacuum.c1",
+                "roborock.vacuum.e2",
+                "roborock.vacuum.s5",
+            ] {
+                profiles.insert(model.into(), Self::roborock(false));
+            }
+            profiles
         });
         profiles.get(model).cloned()
     }
@@ -39,6 +59,12 @@ impl Profile {
             property.writable &= mapped.is_some_and(|p| p.write.is_some());
             property.readable &= mapped.is_some();
         }
+        spec.actions.retain(|action| {
+            action.inputs.is_empty()
+                && self.actions.iter().any(|a| {
+                    a.siid == action.siid && a.aiid == action.aiid && !a.methods.is_empty()
+                })
+        });
     }
     pub fn read(
         &self,
@@ -61,13 +87,28 @@ impl Profile {
             }
         }
         let mut raw = BTreeMap::new();
-        for chunk in names.chunks(self.chunk.filter(|n| *n > 0).unwrap_or(15)) {
-            let values = client.call("get_prop", json!(chunk))?;
-            let values = values
+        if let Some(method) = &self.status_method {
+            let result = client.call(method, json!([]))?;
+            let object = result
                 .as_array()
-                .ok_or_else(|| Error::Response("旧协议属性结果不是数组".into()))?;
-            for (name, value) in chunk.iter().zip(values) {
-                raw.insert(name.clone(), value.clone());
+                .and_then(|items| items.first())
+                .unwrap_or(&result)
+                .as_object()
+                .ok_or_else(|| Error::Response("旧协议状态结果不是对象".into()))?;
+            for name in &names {
+                if let Some(value) = object.get(name) {
+                    raw.insert(name.clone(), value.clone());
+                }
+            }
+        } else {
+            for chunk in names.chunks(self.chunk.filter(|n| *n > 0).unwrap_or(15)) {
+                let values = client.call("get_prop", json!(chunk))?;
+                let values = values
+                    .as_array()
+                    .ok_or_else(|| Error::Response("旧协议属性结果不是数组".into()))?;
+                for (name, value) in chunk.iter().zip(values) {
+                    raw.insert(name.clone(), value.clone());
+                }
             }
         }
         let mut result = BTreeMap::new();
@@ -84,6 +125,20 @@ impl Profile {
         }
         Ok(result)
     }
+    pub fn invoke(&self, client: &mut MiioClient, siid: u32, aiid: u32) -> Result<()> {
+        let action = self
+            .actions
+            .iter()
+            .find(|a| a.siid == siid && a.aiid == aiid && !a.methods.is_empty())
+            .ok_or_else(|| Error::Validation("旧协议没有已确认的动作映射".into()))?;
+        for method in &action.methods {
+            let result = client.call(method, json!([]))?;
+            if !confirmed(&result) {
+                return Err(Error::Response("设备未确认旧协议动作".into()));
+            }
+        }
+        Ok(())
+    }
     pub fn write(&self, client: &mut MiioClient, property: &Property, value: &Value) -> Result<()> {
         let p = self
             .properties
@@ -97,17 +152,75 @@ impl Profile {
         let (method, args) = write_transform(write, value)
             .ok_or_else(|| Error::Validation("无法安全转换此参数".into()))?;
         let result = client.call(&method, json!(args))?;
-        if self.ignore_result
-            || result == json!(["ok"])
-            || result == json!([0])
-            || result == json!([true])
-            || result == json!("ok")
-        {
+        if self.ignore_result || confirmed(&result) {
             Ok(())
         } else {
             Err(Error::Response("设备未确认旧协议写入".into()))
         }
     }
+    fn roborock(pauses_before_dock: bool) -> Self {
+        // Native MijiaLAN's explicit adapter for the first-generation robot and
+        // C1/E2/S5. These protocol values are translated to the spec's status list.
+        let status = json!({"kind":"values","default":1,"table":{
+            "1":2,"2":7,"3":1,"4":6,"5":2,"6":5,"7":6,"8":3,"9":7,
+            "10":4,"11":2,"12":7,"13":7,"15":5,"16":6,"17":2,"18":2,"100":3
+        }});
+        let property = |siid, piid, name: &str, read, write| LegacyProperty {
+            siid,
+            piid,
+            name: name.into(),
+            read,
+            write,
+        };
+        let action = |siid, aiid, methods: Vec<&str>| LegacyAction {
+            siid,
+            aiid,
+            methods: methods.into_iter().map(str::to_owned).collect(),
+        };
+        Self {
+            properties: vec![
+                property(2, 1, "state", status, None),
+                property(
+                    2,
+                    2,
+                    "fan_power",
+                    json!({"kind":"number"}),
+                    Some(json!({"kind":"value","method":"set_custom_mode"})),
+                ),
+                property(3, 1, "battery", json!({"kind":"number"}), None),
+                property(
+                    3,
+                    2,
+                    "state",
+                    json!({"kind":"values","table":{"8":1},"default":2}),
+                    None,
+                ),
+            ],
+            chunk: None,
+            ignore_result: false,
+            status_method: Some("get_status".into()),
+            actions: vec![
+                action(2, 1, vec!["app_start"]),
+                action(2, 2, vec!["app_stop"]),
+                action(
+                    3,
+                    1,
+                    if pauses_before_dock {
+                        vec!["app_pause", "app_charge"]
+                    } else {
+                        vec!["app_charge"]
+                    },
+                ),
+            ],
+        }
+    }
+}
+
+fn confirmed(result: &Value) -> bool {
+    result == &json!(["ok"])
+        || result == &json!([0])
+        || result == &json!([true])
+        || result == &json!("ok")
 }
 
 fn number(v: &Value) -> Option<f64> {
@@ -145,6 +258,11 @@ pub fn read_transform(t: &Value, raw: &Value, format: &str) -> Option<Value> {
             let key = raw
                 .as_str()
                 .map(str::to_owned)
+                .or_else(|| {
+                    number(raw)
+                        .filter(|n| n.is_finite() && n.fract() == 0.)
+                        .map(|n| format!("{n:.0}"))
+                })
                 .unwrap_or_else(|| raw.to_string());
             t["table"]
                 .get(&key)

@@ -45,6 +45,7 @@ pub enum Transform {
     Adjust(f64),
     Fixed(Value),
     Action(u32, u32),
+    Cleaning { start: (u32, u32), dock: (u32, u32) },
     Mapped(Vec<(u8, Value)>),
     FilterChange,
 }
@@ -76,6 +77,9 @@ impl Binding {
         if !stale && !state.online {
             return Err(-70402);
         }
+        if matches!(self.transform, Transform::Cleaning { .. }) && !state.online {
+            return Err(-70402);
+        }
         let value = state.values.get(&self.key).ok_or(-70402)?;
         let property = state
             .spec
@@ -84,6 +88,9 @@ impl Binding {
             .find(|p| p.key() == self.key)
             .ok_or(-70402)?;
         Ok(match &self.transform {
+            Transform::Cleaning { .. } => json!(mijialan_core::vacuum::is_cleaning(
+                mijialan_core::vacuum::status_description(property, value).ok_or(-70402)?
+            )),
             Transform::Direct => value.clone(),
             Transform::Active => json!(if as_bool(value).map_err(|_| -70402)? {
                 1
@@ -155,6 +162,26 @@ impl Binding {
             .iter()
             .find(|p| p.key() == self.key)
             .ok_or(-70402)?;
+        if let Transform::Cleaning { start, dock } = &self.transform {
+            let on = as_bool(value)?;
+            let current = state
+                .values
+                .get(&self.key)
+                .and_then(|v| mijialan_core::vacuum::status_description(property, v));
+            if current.is_some_and(|description| {
+                if on {
+                    mijialan_core::vacuum::is_cleaning(description)
+                } else {
+                    mijialan_core::vacuum::is_docking(description)
+                }
+            }) {
+                return Ok(());
+            }
+            let (siid, aiid) = if on { start } else { dock };
+            return engine
+                .action(&self.did, *siid, *aiid, vec![])
+                .map_err(|_| -70402);
+        }
         let output = match &self.transform {
             Transform::Direct => {
                 if property.format == "bool" {
@@ -671,7 +698,10 @@ fn build_states(engine: &Engine, layout: &mut Layout, states: Vec<DeviceState>) 
         }
         for a in state.spec.actions.iter().filter(|a| a.inputs.is_empty()) {
             let key = format!("action:{}.{}", a.siid, a.aiid);
-            let Some(s) = builder.service(&key, "49", &a.description) else {
+            if builder.consumed.contains(&key) {
+                continue;
+            }
+            let Some(s) = builder.service(&key, "49", a.label()) else {
                 continue;
             };
             builder.characteristic(
@@ -729,6 +759,43 @@ fn native(b: &mut Builder<'_>, state: &DeviceState) -> bool {
         .find(|p| p.name == "on" && p.writable && p.format == "bool");
     let find = |names: &[&str]| props.iter().find(|p| names.contains(&p.name.as_str()));
     let kind = state.spec.kind.as_str();
+    if kind == "vacuum" {
+        let action = |service: &str, name: &str| {
+            state
+                .spec
+                .actions
+                .iter()
+                .find(|a| a.service == service && a.name == name && a.inputs.is_empty())
+        };
+        let (Some(status), Some(start), Some(dock)) = (
+            mijialan_core::vacuum::status_property(&state.spec),
+            action("vacuum", "start-sweep"),
+            action("battery", "start-charge").or_else(|| action("vacuum", "start-charge")),
+        ) else {
+            return false;
+        };
+        let Some(service) = b.service("native", "49", &state.device.name) else {
+            return false;
+        };
+        b.characteristic(
+            service,
+            "native:cleaning",
+            "25",
+            "bool",
+            Some(status),
+            Transform::Cleaning {
+                start: (start.siid, start.aiid),
+                dock: (dock.siid, dock.aiid),
+            },
+            true,
+            None,
+        );
+        b.consumed
+            .insert(format!("action:{}.{}", start.siid, start.aiid));
+        b.consumed
+            .insert(format!("action:{}.{}", dock.siid, dock.aiid));
+        return true;
+    }
     if kind == "curtain" || kind == "window-covering" {
         let Some(target) = find(&["target-position"]).filter(|p| p.writable && p.range.is_some())
         else {

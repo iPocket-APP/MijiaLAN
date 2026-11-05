@@ -9,6 +9,7 @@ pub mod localization;
 pub mod packet;
 pub mod spec;
 pub mod store;
+pub mod vacuum;
 
 pub use client::MiioClient;
 pub use engine::{DeviceState, Engine};

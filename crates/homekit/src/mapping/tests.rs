@@ -54,6 +54,144 @@ fn characteristic<'a>(database: &'a Database, service: &str, characteristic: &st
         .unwrap()
 }
 
+fn vacuum_fixture(model: &str, document: &str) -> (Engine, DeviceState) {
+    let engine = Engine::demo();
+    let mut state = engine.state("1").unwrap();
+    state.device.model = model.into();
+    state.spec = Specification::for_model(model, document).unwrap();
+    state.values.clear();
+    for p in &state.spec.properties {
+        state.values.insert(
+            p.key(),
+            p.choices.first().map_or_else(
+                || p.range.map_or(json!(0), |r| json!(r[0])),
+                |c| c.value.clone(),
+            ),
+        );
+    }
+    (engine, state)
+}
+
+#[test]
+fn vacuum_primary_switch_consumes_actions_but_retains_speed_and_mode_controls() {
+    for (model, document, actions, properties) in [
+        (
+            "roborock.vacuum.c1",
+            include_str!("../../../core/tests/fixtures/roborock-c1.json"),
+            1,
+            4,
+        ),
+        (
+            "ijai.vacuum.v19",
+            include_str!("../../../core/tests/fixtures/ijai-v19.json"),
+            4,
+            3,
+        ),
+    ] {
+        let (engine, state) = vacuum_fixture(model, document);
+        let database = snapshot(&engine, state);
+        assert_eq!(
+            database
+                .bindings
+                .values()
+                .filter(|b| matches!(b.transform, Transform::Cleaning { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            database
+                .bindings
+                .values()
+                .filter(|b| matches!(b.transform, Transform::Action(..)))
+                .count(),
+            actions
+        );
+        assert_eq!(
+            database
+                .bindings
+                .values()
+                .filter(|b| b.key
+                    == if model.starts_with("roborock") {
+                        "2.2"
+                    } else {
+                        "2.4"
+                    })
+                .count(),
+            properties
+        );
+        assert!(!database.bindings.values().any(|b| matches!(
+            b.transform,
+            Transform::Action(2, 1) | Transform::Action(3, 1)
+        )));
+        assert_eq!(characteristic(&database, "49", "25")["value"], false);
+    }
+}
+
+#[test]
+fn vacuum_status_is_model_specific_and_stale_or_unknown_values_are_unavailable() {
+    for (model, document, cleaning) in [
+        (
+            "roborock.vacuum.c1",
+            include_str!("../../../core/tests/fixtures/roborock-c1.json"),
+            true,
+        ),
+        (
+            "ijai.vacuum.v19",
+            include_str!("../../../core/tests/fixtures/ijai-v19.json"),
+            false,
+        ),
+    ] {
+        let (engine, mut state) = vacuum_fixture(model, document);
+        state.values.insert("2.1".into(), json!(2));
+        let database = snapshot(&engine, state.clone());
+        let binding = database
+            .bindings
+            .values()
+            .find(|b| matches!(b.transform, Transform::Cleaning { .. }))
+            .unwrap();
+        assert_eq!(binding.read_state(&state, false), Ok(json!(cleaning)));
+        state.online = false;
+        assert_eq!(binding.read_state(&state, true), Err(-70402));
+        state.online = true;
+        state.values.insert("2.1".into(), json!(255));
+        assert_eq!(binding.read_state(&state, false), Err(-70402));
+    }
+}
+
+#[test]
+fn vacuum_without_dock_or_readable_status_keeps_individual_action_switches() {
+    for missing_status in [false, true] {
+        let (engine, mut state) = vacuum_fixture(
+            "ijai.vacuum.v19",
+            include_str!("../../../core/tests/fixtures/ijai-v19.json"),
+        );
+        if missing_status {
+            state
+                .spec
+                .properties
+                .iter_mut()
+                .find(|p| p.name == "status")
+                .unwrap()
+                .readable = false;
+        } else {
+            state.spec.actions.retain(|a| a.name != "start-charge");
+        }
+        let database = snapshot(&engine, state);
+        assert!(
+            !database
+                .bindings
+                .values()
+                .any(|b| matches!(b.transform, Transform::Cleaning { .. }))
+        );
+        assert!(
+            database
+                .bindings
+                .values()
+                .any(|b| matches!(b.transform, Transform::Action(2, 1)))
+        );
+    }
+}
+
 #[test]
 fn invalid_device_readings_are_unavailable_instead_of_invalid_hap_values() {
     let (engine, state) = fixture(

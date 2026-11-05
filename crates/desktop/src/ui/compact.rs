@@ -1809,6 +1809,7 @@ impl Dashboard {
             let did = did.to_string();
             let siid = action.siid;
             let aiid = action.aiid;
+            let confirms_state = state.spec.kind == "vacuum";
             let inputs: Option<Vec<_>> = action
                 .inputs
                 .iter()
@@ -1823,7 +1824,7 @@ impl Dashboard {
             content = content.child(
                 self.compact_button(
                     SharedString::from(format!("action:{siid}:{aiid}")),
-                    action.description.clone(),
+                    action.label().to_owned(),
                     p,
                     false,
                 )
@@ -1834,7 +1835,11 @@ impl Dashboard {
                         let inputs = inputs.clone().unwrap_or_default();
                         this.run(cx, move |engine| {
                             engine.action(&did, siid, aiid, inputs)?;
-                            Ok(l("设备已确认动作", "Device acknowledged the action"))
+                            Ok(if confirms_state {
+                                l("设备状态已确认", "Device state confirmed")
+                            } else {
+                                l("设备已确认动作", "Device acknowledged the action")
+                            })
                         });
                     }
                 })),

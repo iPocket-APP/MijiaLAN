@@ -175,6 +175,7 @@ pub struct Store {
     pub vault: Vault,
     root: Option<PathBuf>,
     config: Mutex<Config>,
+    memory_specs: Mutex<BTreeMap<String, String>>,
 }
 
 impl Store {
@@ -194,6 +195,7 @@ impl Store {
             vault: Vault::system(&root),
             root: Some(root),
             config: Mutex::new(config),
+            memory_specs: Mutex::new(BTreeMap::new()),
         })
     }
     pub fn memory() -> Self {
@@ -201,6 +203,7 @@ impl Store {
             vault: Vault::memory(),
             root: None,
             config: Mutex::new(Config::default()),
+            memory_specs: Mutex::new(BTreeMap::new()),
         }
     }
     pub fn config(&self) -> Config {
@@ -257,13 +260,17 @@ impl Store {
     }
     pub fn cached_spec(&self, model: &str) -> Option<String> {
         let name = safe_model(model)?;
-        fs::read_to_string(self.root.as_ref()?.join("specs").join(name)).ok()
+        match &self.root {
+            Some(root) => fs::read_to_string(root.join("specs").join(name)).ok(),
+            None => self.memory_specs.lock().unwrap().get(&name).cloned(),
+        }
     }
     pub fn cache_spec(&self, model: &str, text: &str) -> Result<()> {
+        let name = safe_model(model).ok_or_else(|| Error::Spec("无效型号".into()))?;
         let Some(root) = &self.root else {
+            self.memory_specs.lock().unwrap().insert(name, text.into());
             return Ok(());
         };
-        let name = safe_model(model).ok_or_else(|| Error::Spec("无效型号".into()))?;
         let folder = root.join("specs");
         fs::create_dir_all(&folder)?;
         atomic_write(&folder.join(name), text.as_bytes())

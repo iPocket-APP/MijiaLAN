@@ -65,7 +65,10 @@ impl MiioClient {
 
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value> {
         // Read retries are safe. Ambiguous writes/actions are surfaced rather than executed twice.
-        let attempts = if matches!(method, "miIO.info" | "get_properties" | "get_prop") {
+        let attempts = if matches!(
+            method,
+            "miIO.info" | "get_properties" | "get_prop" | "get_status"
+        ) {
             2
         } else {
             1

@@ -427,9 +427,6 @@ impl Engine {
         let state = self
             .state(did)
             .ok_or_else(|| Error::Validation("设备不存在".into()))?;
-        if Profile::for_model(&state.device.model).is_some() {
-            return Err(Error::Validation("旧协议没有已确认的动作映射".into()));
-        }
         let action = state
             .spec
             .actions
@@ -446,18 +443,59 @@ impl Engine {
             return Ok(());
         }
         let client = self.client(&state.device)?;
-        let result = client.lock().unwrap().call(
-            "action",
-            json!({"did":did,"siid":siid,"aiid":aiid,"in":inputs}),
-        )?;
-        match result["code"].as_i64() {
-            Some(0 | 1) => Ok(()),
-            Some(code) => Err(Error::Device {
-                code,
-                message: "设备拒绝动作".into(),
-            }),
-            None => Err(Error::Response("动作响应缺少返回码".into())),
+        let result = {
+            let mut client = client.lock().unwrap();
+            if let Some(profile) = Profile::for_model(&state.device.model) {
+                profile.invoke(&mut client, siid, aiid)
+            } else {
+                client
+                    .call(
+                        "action",
+                        json!({"did":did,"siid":siid,"aiid":aiid,"in":inputs}),
+                    )
+                    .and_then(|result| match result["code"].as_i64() {
+                        Some(0 | 1) => Ok(()),
+                        Some(code) => Err(Error::Device {
+                            code,
+                            message: "设备拒绝动作".into(),
+                        }),
+                        None => Err(Error::Response("动作响应缺少返回码".into())),
+                    })
+            }
+        };
+        if state.spec.kind != "vacuum" {
+            return result;
         }
+        if let Err(error) = result {
+            // An action with an ambiguous reply is never sent again.
+            let _ = self.refresh(did);
+            return Err(error);
+        }
+        let status = crate::vacuum::status_property(&state.spec);
+        let before = status.and_then(|p| {
+            state
+                .values
+                .get(&p.key())
+                .and_then(|v| crate::vacuum::status_description(p, v))
+        });
+        for attempt in 0..6 {
+            if attempt > 0 {
+                std::thread::sleep(Duration::from_millis(350));
+            }
+            let Ok(current) = self.refresh(did) else {
+                break;
+            };
+            let description = crate::vacuum::status_property(&current.spec).and_then(|p| {
+                current
+                    .values
+                    .get(&p.key())
+                    .and_then(|v| crate::vacuum::status_description(p, v))
+            });
+            if crate::vacuum::confirms(&action.name, description, before) {
+                return Ok(());
+            }
+        }
+        Err(Error::Response("设备已接受动作，但尚未确认状态变化".into()))
     }
     pub fn update_discovered_hosts(
         &self,

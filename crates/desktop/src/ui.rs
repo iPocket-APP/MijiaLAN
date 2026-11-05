@@ -828,7 +828,7 @@ impl Dashboard {
             let available = inputs.is_some() && state.online && self.busy == 0;
             content = content.child(
                 Button::new(SharedString::from(format!("action:{siid}.{aiid}")))
-                    .label(format!("执行：{}", action.description))
+                    .label(action.label().to_owned())
                     .disabled(!available)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let did = did.clone();

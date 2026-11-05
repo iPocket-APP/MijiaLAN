@@ -28,6 +28,11 @@ pub struct Capability {
 
 impl Capability {
     pub fn title(&self, english: bool) -> &str {
+        if self.is_action
+            && let Some(label) = crate::spec::action_label(&self.name, english)
+        {
+            return label;
+        }
         let (zh, en) = match self.name.as_str() {
             "mode" if self.service == "light" => ("灯光场景", "Light Scene"),
             "toggle" => ("切换开关状态", "Toggle Power"),
@@ -165,18 +170,20 @@ pub(crate) fn inspect(
             if name.is_empty() {
                 continue;
             }
-            if legacy.is_none()
-                && spec
-                    .actions
-                    .iter()
-                    .any(|a| a.siid == siid && a.aiid == aiid)
+            if spec
+                .actions
+                .iter()
+                .any(|a| a.siid == siid && a.aiid == aiid)
             {
                 continue;
             }
-            let reason = if legacy.is_none()
-                && service_name == spec.kind
-                && ["start-cook", "cancel-cooking", "pause", "resume-cook"].contains(&name.as_str())
-            {
+            let admitted = service_name == spec.kind
+                && ["start-cook", "cancel-cooking", "pause", "resume-cook"]
+                    .contains(&name.as_str())
+                || spec.kind == "vacuum" && crate::vacuum::supports_action(&service_name, &name);
+            let reason = if admitted && legacy.is_some() {
+                Reason::LegacyMapping
+            } else if admitted {
                 Reason::IncompleteParameters
             } else {
                 Reason::UnavailableOperation
