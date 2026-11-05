@@ -53,7 +53,7 @@ bash scripts/package-macos-release.sh
 # 可选：-Profile debug 或 -Target aarch64-pc-windows-msvc
 ```
 
-原生脚本默认生成 ZIP。x64 ZIP 可交给 Linux 构建容器中的 `scripts/package-windows-msi.sh` 生成 MSI；打包工具是 GNOME msitools / wixl。MSI 按当前用户安装至 `%LOCALAPPDATA%\Programs\MijiaLAN Rust`，创建正常与演示模式的开始菜单入口，使用 HKCU 组件记录，没有自定义执行动作。它不会配置开机启动或修改防火墙；卸载目标只有安装文件与入口，用户数据和凭据不在安装组件中。MSVC / ARM64 路径尚未在本轮实际构建。
+原生脚本默认生成 ZIP。x64 ZIP 可交给 Linux 构建容器中的 `scripts/package-windows-msi.sh` 生成 MSI；打包工具是 GNOME msitools / wixl。MSI 按当前用户安装至 `%LOCALAPPDATA%\Programs\MijiaLAN Rust`，创建正常与演示模式的开始菜单入口，使用 HKCU 组件记录；安装提交完成后仅启动已安装的客户端，自动更新可恢复家庭桥接，不执行外部脚本。它不会配置开机启动或修改防火墙；卸载目标只有安装文件与入口，用户数据和凭据不在安装组件中。MSVC / ARM64 路径尚未在本轮实际构建。
 
 最初的 NSIS 安装器被此虚拟机的 Defender 标记为 `Trojan:Win32/Bearfoos.A!ml`，未执行，记录显示已处置；这不能直接认定为误报。初版便携包及嵌入清单 / 着色器修复版均另行完成哈希核对、解包与 Defender 自定义扫描，没有相关新增检测，实时保护保持开启。默认分发入口已切换为标准 MSI；NSIS 仅保留为 `MIJIALAN_BUILD_NSIS=1` 或 PowerShell `-Nsis` 的实验选项，不能将该旧 EXE 视为通过验收的安装包。
 

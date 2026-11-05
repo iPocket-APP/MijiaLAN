@@ -167,7 +167,7 @@ jobs:
           BUILD: ${{ needs.source.outputs.build_number }}
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends wixl
+          sudo apt-get install -y --no-install-recommends wixl msitools
           python3 scripts/ci/release.py collect --source "$SOURCE_SHA" --version "$VERSION" --build "$BUILD" --windows build/windows-input --mac build/signed-macos
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:

@@ -99,6 +99,8 @@ def collect(args):
     portable = args.dist / f'{name}-windows-x86_64.zip'
     updates.repackage_windows(archive, portable, args.version, args.build)
     subprocess.run(['bash', 'scripts/package-windows-msi.sh', str(portable)], check=True)
+    subprocess.run([sys.executable, 'scripts/ci/validate_msi.py', str(portable.with_suffix('.msi')),
+                    '--version', args.version, '--build', str(args.build)], check=True)
     portable.with_suffix('.sha256').unlink()
     for arch in ['arm64', 'x86_64']:
         source = args.mac / arch

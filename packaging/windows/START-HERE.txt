@@ -3,8 +3,8 @@ MijiaLAN (Rust client)
 Extract the complete ZIP, then run mijialan-rust.exe for the tray client.
 The MSI installer is recommended for in-app automatic updates. Portable ZIP copies
 must be updated manually; they will not silently install a second copy elsewhere.
-MSI updates close the running client during installation. Reopen MijiaLAN Rust
-from the Start menu after installation; device and HomeKit data are preserved.
+MSI updates close the running client during installation, then restart it after
+installation completes; device and HomeKit data are preserved.
 mijia-rust.exe is the command-line tool. The --demo option only controls simulated devices.
 
 This x64 MSVC package requires the Microsoft Visual C++ v14 x64 runtime.

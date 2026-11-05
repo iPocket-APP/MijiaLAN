@@ -102,6 +102,15 @@ child(menu_component, "RegistryValue", Root="HKCU", Key=registry_key,
       Name="InstallPath", Type="string", Value="[INSTALLDIR]")
 child(menu_component, "RemoveFolder", Id="RemoveMenu", On="uninstall")
 components.append("MenuShortcuts")
+# WinSparkle closes the old process before the MSI replaces its files. Launch
+# the installed executable only after commit, including during passive updates.
+# asyncNoWait is essential: the tray client and HomeKit bridge run indefinitely.
+child(product, "CustomAction", Id="LaunchApplication",
+      FileKey=stable_id("F", "mijialan-rust.exe"), ExeCommand="",
+      Return="asyncNoWait", Execute="immediate", Impersonate="yes")
+execute = product.find(f"{{{schema}}}InstallExecuteSequence")
+launch = child(execute, "Custom", Action="LaunchApplication", After="InstallFinalize")
+launch.text = 'NOT Installed AND NOT (REMOVE="ALL")'
 feature = child(product, "Feature", Id="Application", Title="MijiaLAN Rust", Level="1")
 for component_id in components:
     child(feature, "ComponentRef", Id=component_id)

@@ -108,6 +108,13 @@ class SigningTests(unittest.TestCase):
         upgrade = root.find('.//w:UpgradeVersion[@Property="PREVIOUSVERSIONS"]', ns)
         self.assertEqual(upgrade.get('Maximum'), '0.1.12')
         self.assertEqual(root.find('.//w:RegistryValue[@Name="InstallPath"]', ns).get('Value'), '[INSTALLDIR]')
+        launch = root.find('.//w:CustomAction[@Id="LaunchApplication"]', ns)
+        self.assertEqual(launch.get('Return'), 'asyncNoWait')
+        self.assertTrue(launch.get('FileKey').startswith('F'))
+        scheduled = root.find('.//w:InstallExecuteSequence/w:Custom[@Action="LaunchApplication"]', ns)
+        self.assertEqual(scheduled.get('After'), 'InstallFinalize')
+        self.assertIn('NOT Installed', scheduled.text)
+        self.assertIn('REMOVE="ALL"', scheduled.text)
 
     def test_invalid_builds_and_foreign_platforms_are_rejected(self):
         for build in [0, -1, 65536, '12.5', '１２', True]:

@@ -11,14 +11,14 @@
 
 Rust 使用独立 Ed25519 公钥，固定在 `updates.json`；共享部署所信任的原生和 Rust 公钥保存在 `update-site.json`。macOS 的 bundle ID、设备凭据、HomeKit 身份和数据目录均不变；Windows 的安装目录、UpgradeCode、凭据和数据目录沿用已有 Rust 版。原生版和 Rust 版不会相互替换。
 
-设置、应用菜单和系统托盘均提供“检查更新”。自动检查可以关闭；应用更新组件与短暂显示的托盘面板分开持有。安装更新会短暂停止 HomeKit 桥。Windows MSI 安装后，从开始菜单重新打开客户端；便携 ZIP 只提供手动更新，不会悄悄另装一份。演示、预览、临时模式和 CLI 不初始化更新组件。
+设置、应用菜单和系统托盘均提供“检查更新”。自动检查可以关闭；应用更新组件与短暂显示的托盘面板分开持有。安装更新会短暂停止 HomeKit 桥。Windows MSI 安装完成后自动启动客户端，恢复已启用的家庭桥；便携 ZIP 只提供手动更新，不会悄悄另装一份。演示、预览、临时模式和 CLI 不初始化更新组件。
 
 ## 发布流程
 
 1. **先合入 main 的共享站点配置**：对应本地工作副本 `MijiaLAN-update-site`，包含 `scripts/update_site.py`、`update-site.json`、`shared-update-site.yml`，以及两个原生发布工作流的合并站点步骤。原生根路径与公钥不变。
 2. 将独立 Rust Ed25519 的 32 字节私钥种子以 Base64 存入 `macos-release` 环境的 `RUST_UPDATE_PRIVATE_KEY`。私钥不得进入 Git、Release、构建产物或日志。轮换密钥需要迁移方案，不能直接替换已发布客户端所信任的公钥。
 3. Rust 的 Build 验证 Windows、Apple Silicon 和 Intel，打包固定校验值的上游运行库，并运行 `--updater-smoke`。该模式加载真实运行库和公钥，但不启动检查、不访问设备或凭据、不保存更新偏好。
-4. Signed desktop release 复用验证过的二进制，分别签名、公证两个 Mac 架构。Ubuntu 收集包时写入发布构建号，生成 MSI、平台 appcast、签名的 `rust-update-feeds.zip` 和总校验清单。Windows CI 程序和 DLL 字节保持不变。
+4. Signed desktop release 复用验证过的二进制，分别签名、公证两个 Mac 架构。Ubuntu 收集包时写入发布构建号，生成并检查 MSI 版本、升级边界和提交后启动动作，随后生成平台 appcast、签名的 `rust-update-feeds.zip` 和总校验清单。Windows CI 程序和 DLL 字节保持不变。
 5. 默认 `publish=false`，只产出可体验的 Actions artifacts。正式发布前检查 main 中的共享服务和 Rust 公钥是否已匹配；发布仍使用 `rs-vVERSION-bBUILD`，不占用原生版 Latest。
 6. Rust Release 公开后，触发 main 的共享站点工作流并等待结果。部署账号和 `github-pages` 环境继续在 main 使用；无需允许 Rust 分支直接部署 Pages。
 

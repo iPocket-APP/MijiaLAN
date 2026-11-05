@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a standard MSI with no custom actions from an existing portable ZIP.
+# Build a per-user MSI from a verified ZIP; restart the client only after commit.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 input="${1:?Pass the Windows x86_64 portable ZIP}"
