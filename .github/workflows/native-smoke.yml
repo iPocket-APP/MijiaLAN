@@ -42,6 +42,7 @@ jobs:
           [[ "$(uname -m)" == "$EXPECTED_ARCH" ]]
           args=()
           if [[ "$NOTARIZED" == true ]]; then args+=(--notarized); fi
+          if [[ "$EXPECTED_ARCH" == x86_64 ]]; then args+=(--startup-only); fi
           python3 scripts/ci/smoke_app.py "$RUNNER_TEMP/native-package" \
             --evidence "$RUNNER_TEMP/native-smoke" "${args[@]}"
       - name: Preserve startup evidence

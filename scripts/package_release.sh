@@ -64,16 +64,8 @@ grep -q '^Authority=Developer ID Application:' "$LOGS/signature.txt"
 grep -q 'flags=.*runtime' "$LOGS/signature.txt"
 grep -q '^Timestamp=' "$LOGS/signature.txt"
 
-# Staple the app first so the ZIP also works without an online ticket lookup.
-ditto -c -k --sequesterRsrc --keepParent "$APP" "$RELEASE/notarization.zip"
-python3 "$ROOT/scripts/notarize.py" "$RELEASE/notarization.zip" \
-    "${NOTARY_ARGS[@]}" --log-prefix "$LOGS/notarization-app"
-staple "$APP"
-codesign --verify --deep --strict "$APP"
-spctl --assess --type execute --verbose=4 "$APP" 2> "$LOGS/gatekeeper-app.txt"
-ditto -c -k --sequesterRsrc --keepParent "$APP" "$DIST/$NAME.zip"
-
-# A simple drag-to-Applications disk image, signed and independently notarized.
+# Notarize the outermost container once. Apple issues tickets for both the DMG
+# and its nested app; the same app ticket can then be stapled before ZIP creation.
 IMAGE_ROOT="$RELEASE/dmg-root"
 rm -rf "$IMAGE_ROOT"
 mkdir -p "$IMAGE_ROOT"
@@ -90,6 +82,10 @@ staple "$DIST/$NAME.dmg"
 hdiutil verify "$DIST/$NAME.dmg"
 spctl --assess --type open --context context:primary-signature --verbose=4 \
     "$DIST/$NAME.dmg" 2> "$LOGS/gatekeeper-dmg.txt"
+staple "$APP"
+codesign --verify --deep --strict "$APP"
+spctl --assess --type execute --verbose=4 "$APP" 2> "$LOGS/gatekeeper-app.txt"
+ditto -c -k --sequesterRsrc --keepParent "$APP" "$DIST/$NAME.zip"
 
 cd "$DIST"
 shasum -a 256 "$NAME.dmg" "$NAME.zip" > SHA256SUMS.txt

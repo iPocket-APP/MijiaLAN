@@ -8,8 +8,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ci'))
 import notarize
 import release_metadata
+import ci_artifact
+import find_ci_artifact
 
 
 class ReleaseMetadataTests(unittest.TestCase):
@@ -60,6 +63,49 @@ class NotarizationTests(unittest.TestCase):
 
     def test_timed_out_submission_keeps_the_id_and_fails(self):
         self.check_submission('In Progress', 1, False)
+
+
+class ArtifactPromotionTests(unittest.TestCase):
+    def prepare(self, directory):
+        data = release_metadata.metadata()
+        paths = [directory / f"MijiaLAN-{data['version']}-universal.zip", directory / 'symbols.tar.gz']
+        for path in paths:
+            path.write_bytes(b'test-build-payload')
+        record = {**data, 'source_commit': 'a' * 40, 'run_id': '42',
+                  'files': {p.name: ci_artifact.sha256(p) for p in paths}}
+        (directory / 'provenance.json').write_text(json.dumps(record))
+        return record, paths
+
+    def test_matching_commit_run_and_payload_are_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record, _ = self.prepare(root)
+            self.assertEqual(ci_artifact.validate(root, 'a' * 40, '42'), record)
+
+    def test_another_commit_or_run_cannot_be_promoted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.prepare(root)
+            for commit, run_id in [('b' * 40, '42'), ('a' * 40, '43')]:
+                with self.subTest(commit=commit, run_id=run_id), self.assertRaises(AssertionError):
+                    ci_artifact.validate(root, commit, run_id)
+
+    def test_modified_payload_cannot_be_promoted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, paths = self.prepare(root)
+            paths[0].write_bytes(b'changed')
+            with self.assertRaises(AssertionError):
+                ci_artifact.validate(root, 'a' * 40, '42')
+
+    def test_forks_pull_requests_and_other_refs_are_not_release_inputs(self):
+        repository, commit = 'iPocket-APP/MijiaLAN', 'a' * 40
+        base = {'head_sha': commit, 'head_branch': 'main', 'event': 'push', 'head_repository': {'full_name': repository}}
+        self.assertTrue(find_ci_artifact.trusted(base, repository, commit))
+        for change in [{'event': 'pull_request'}, {'head_branch': 'feature'}, {'head_sha': 'b' * 40},
+                       {'head_repository': None}, {'head_repository': {'full_name': 'fork/MijiaLAN'}}]:
+            with self.subTest(change=change):
+                self.assertFalse(find_ci_artifact.trusted({**base, **change}, repository, commit))
 
 
 if __name__ == '__main__':
