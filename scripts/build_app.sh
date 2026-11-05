@@ -46,6 +46,9 @@ cp "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$APP/Contents/Resources/Licen
 mkdir -p "$APP/Contents/Resources/Licenses/lucide"
 cp "$ROOT/Resources/Licenses/lucide/LICENSE" "$APP/Contents/Resources/Licenses/lucide/"
 cp "$ROOT/PRIVACY.md" "$ROOT/PRIVACY.en.md" "$APP/Contents/Resources/"
+mkdir -p "$APP/Contents/Frameworks"
+# ditto preserves the versioned framework's symlinks and executable permissions.
+ditto "$BIN_DIR/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 while IFS= read -r -d '' NOTICE; do
     RELATIVE="${NOTICE#"$ROOT/"}"
     RELATIVE="${RELATIVE#.build/checkouts/}"
@@ -99,6 +102,7 @@ PLIST
 
 /usr/libexec/PlistBuddy -c "Merge '$APP/Contents/Resources/AppIcon-info.plist'" "$APP/Contents/Info.plist"
 rm "$APP/Contents/Resources/AppIcon-info.plist"
+python3 "$ROOT/scripts/sparkle_updates.py" configure-app "$APP"
 plutil -lint "$APP/Contents/Info.plist"
 if [[ "${MIJIALAN_UNIVERSAL:-0}" == 1 ]]; then
     for ARCH in arm64 x86_64; do
@@ -130,10 +134,5 @@ PY
     strip -S -x "$APP/Contents/MacOS/MijiaLAN"
 fi
 python3 "$ROOT/scripts/swift_runtime.py" embed "$APP" --sign "$SIGN_IDENTITY"
-if [[ "$SIGN_IDENTITY" == - ]]; then
-    codesign --force --sign - --timestamp=none "$APP"
-else
-    codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp "$APP"
-fi
-codesign --verify --deep --strict "$APP"
+bash "$ROOT/scripts/sign_app.sh" "$APP" "$SIGN_IDENTITY"
 echo "$APP"

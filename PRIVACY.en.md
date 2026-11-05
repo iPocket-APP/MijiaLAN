@@ -12,8 +12,11 @@
 | Apple Home bridge | LAN HAP and Bonjour / mDNS | Bridge identity, selected device names, services, readings and controls |
 | Credential persistence | macOS Keychain | Device registry and tokens, bridge identity, setup code and pairing keys |
 | Preferences | Local UserDefaults | Appearance, HomeKit inclusion choices and related identifiers |
+| Software updates | GitHub Pages at `mijialan-updates.ipocket.xyz`, GitHub Releases and its download CDN | Update feed, release notes and packages; hosting services receive the IP address and ordinary HTTP request information |
 
 The app has no project operated backend, advertising or analytics SDK. Xiaomi cloud sessions are used for the current import only; the app does not call the dependency's session persistence API. HTTP uses ephemeral URLSession with automatic cookie storage disabled.
+
+Sparkle checks for updates once per day by default. You can disable automatic checks or check manually in Settings. Automatic downloads and installation on quit are off by default. Updates do not upload device registries, tokens or HomeKit pairing material; Sparkle system profile reporting is disabled. The ephemeral URLSession description above applies to device import and specification requests; Sparkle uses its own download mechanism.
 
 The Keychain item uses `AfterFirstUnlockThisDeviceOnly`. Device names, IPs and tokens are stored with bridge pairing material in one item. Denying Keychain access does not replace existing credentials with an empty registry. Device names, rooms and activity readings can also be private data.
 

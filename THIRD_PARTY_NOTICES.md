@@ -7,6 +7,7 @@ Original project code is MIT licensed. Dependencies retain their original copyri
 
 | 组件 / Component | 固定版本 / Revision | 许可证 / License |
 | --- | --- | --- |
+| [Sparkle](https://github.com/sparkle-project/Sparkle) | `2.10.1` | [Sparkle license (MIT and bundled notices)](https://github.com/sparkle-project/Sparkle/blob/2.10.1/LICENSE) |
 | [hap-swift](https://github.com/acumen-dev/hap-swift)（内置并修改 / vendored and modified） | `638001bd3590082a8909fd4046ec226ab1349f20` | [Apache-2.0](Vendor/hap-swift/LICENSE.md) |
 | [hass-xiaomi-miot](https://github.com/al-one/hass-xiaomi-miot)（转换后的设备映射数据 / converted device mapping data） | `75bc74f67275bde6a8742b6638039819e10eaea5` | [Apache-2.0](Vendor/hass-xiaomi-miot/LICENSE) |
 | [homebridge-miot](https://github.com/merdok/homebridge-miot)（移植的 HomeKit 映射规则 / ported HomeKit mapping rules） | `2186f61f2081ec1a51c0388e3072b79741aebb0a` | [MIT](Vendor/homebridge-miot/LICENSE) |

@@ -16,7 +16,7 @@ struct MijiaLANApp: App {
         let model = AppModel()
         _model = State(initialValue: model)
         delegate.model = model
-        DevSnapshot.scheduleIfRequested(model: model)
+        DevSnapshot.scheduleIfRequested(model: model, updater: delegate.updater)
     }
 
     var body: some Scene {
@@ -32,6 +32,7 @@ final class MijiaLANApplicationDelegate: NSObject, NSApplicationDelegate {
     var model: AppModel?
     private var menuBar: MenuBarPanelController?
     private let lifetime = BackgroundApplicationLifetime()
+    let updater = AppUpdater()
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         lifetime.start()
@@ -39,7 +40,8 @@ final class MijiaLANApplicationDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         lifetime.start()
-        if let model { menuBar = MenuBarPanelController(model: model) }
+        if let model { menuBar = MenuBarPanelController(model: model, updater: updater) }
+        updater.start()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }

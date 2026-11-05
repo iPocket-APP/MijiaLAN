@@ -7,6 +7,7 @@ import SwiftUI
 struct ControlCenterSettings: View {
     @Bindable var model: AppModel
     @Bindable var bridge: HomeKitBridgeController
+    let updater: AppUpdater?
     @Binding var appearance: String
     let navigate: (ControlCenterRoute) -> Void
 
@@ -85,6 +86,12 @@ struct ControlCenterSettings: View {
             }
 
             Divider()
+
+            if let updater {
+                SoftwareUpdateSettings(updater: updater)
+                Divider()
+            }
+
             HStack {
                 Label(L10n.tr("仅局域网控制", "LAN Control Only"), systemImage: "lock.fill").foregroundStyle(.secondary)
                 Spacer(minLength: 8)
@@ -94,6 +101,49 @@ struct ControlCenterSettings: View {
         }
         .font(.system(size: 13))
         .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 14)
+    }
+}
+
+private struct SoftwareUpdateSettings: View {
+    @Bindable var updater: AppUpdater
+
+    var body: some View {
+        SettingsSection(L10n.tr("软件更新", "Software Updates")) {
+            SettingsGroup {
+                HStack(spacing: 10) {
+                    SettingsSymbol("arrow.triangle.2.circlepath")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("MijiaLAN")
+                        Text(version).font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 4)
+                    Button(updater.availableVersion == nil ? L10n.tr("检查更新…", "Check for Updates…") : L10n.tr("查看更新…", "View Update…")) {
+                        updater.checkForUpdates()
+                    }
+                    .controlSize(.small).disabled(!updater.canCheckForUpdates)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 11)
+                SettingsDivider()
+                SettingsToggleRow(L10n.tr("自动检查更新", "Automatically Check for Updates"), symbol: "clock.arrow.circlepath",
+                                  isOn: $updater.automaticallyChecksForUpdates)
+                    .disabled(updater.startupError != nil)
+                SettingsDivider()
+                SettingsToggleRow(L10n.tr("退出时自动安装", "Install Automatically on Quit"), symbol: "arrow.down.circle",
+                                  isOn: $updater.automaticallyDownloadsUpdates,
+                                  subtitle: L10n.tr("提前下载，在退出 App 时安装", "Download ahead and install when the app quits"))
+                    .disabled(!updater.automaticallyChecksForUpdates || updater.startupError != nil)
+            }
+            Text(updater.startupError ?? L10n.tr("安装更新需要重启 App，家庭桥接会短暂离线。设备与配对资料会保留。", "Installing an update restarts the app and briefly interrupts the Home bridge. Devices and pairing are preserved."))
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var version: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let version = info["CFBundleShortVersionString"] as? String ?? "—"
+        let build = info["CFBundleVersion"] as? String ?? "—"
+        return "\(version) (\(build))"
     }
 }
 

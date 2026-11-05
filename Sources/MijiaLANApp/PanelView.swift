@@ -8,6 +8,7 @@ import SwiftUI
 
 struct PanelView: View {
     @Bindable var model: AppModel
+    let updater: AppUpdater?
     var scrolls = true
     @State private var session: PanelSession
     @State private var panelHeight: CGFloat?
@@ -24,9 +25,9 @@ struct PanelView: View {
     nonisolated static let maxHeight: CGFloat = 660
     nonisolated static let width: CGFloat = 360
 
-    init(model: AppModel, scrolls: Bool = true, initialRoute: ControlCenterRoute = .home,
+    init(model: AppModel, updater: AppUpdater? = nil, scrolls: Bool = true, initialRoute: ControlCenterRoute = .home,
          reduceMotionOverride: Bool? = nil, session: PanelSession? = nil) {
-        self.model = model; self.scrolls = scrolls
+        self.model = model; self.updater = updater; self.scrolls = scrolls
         self.reduceMotionOverride = reduceMotionOverride
         let state = session ?? PanelSession(route: initialRoute)
         _session = State(initialValue: state)
@@ -35,7 +36,7 @@ struct PanelView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            PanelPage(model: model, session: session, route: route, scrolls: scrolls, appearance: $appearance,
+            PanelPage(model: model, updater: updater, session: session, route: route, scrolls: scrolls, appearance: $appearance,
                       cachedLayout: session.layouts[route], navigate: navigate, measured: recordLayout)
                 .background(ControlCenterPalette(scheme: scheme).panel)
                 // Separate identities keep native controls from morphing into
@@ -122,6 +123,7 @@ struct PanelView: View {
 /// This keeps outgoing geometry, scroll offsets and controls out of the new page.
 private struct PanelPage: View {
     @Bindable var model: AppModel
+    let updater: AppUpdater?
     let session: PanelSession
     let route: ControlCenterRoute
     let scrolls: Bool
@@ -134,10 +136,10 @@ private struct PanelPage: View {
     @Environment(\.panelPresented) private var panelPresented
     private var headerSideWidth: CGFloat { L10n.isEnglish ? 80 : 62 }
 
-    init(model: AppModel, session: PanelSession, route: ControlCenterRoute, scrolls: Bool, appearance: Binding<String>,
+    init(model: AppModel, updater: AppUpdater?, session: PanelSession, route: ControlCenterRoute, scrolls: Bool, appearance: Binding<String>,
          cachedLayout: PanelPageLayout?, navigate: @escaping (ControlCenterRoute) -> Void,
          measured: @escaping (ControlCenterRoute, PanelPageLayout) -> Void) {
-        self.model = model; self.session = session; self.route = route; self.scrolls = scrolls
+        self.model = model; self.updater = updater; self.session = session; self.route = route; self.scrolls = scrolls
         self._appearance = appearance; self.navigate = navigate; self.measured = measured
         _contentHeight = State(initialValue: cachedLayout?.contentHeight)
         _headerHeight = State(initialValue: cachedLayout?.headerHeight)
@@ -242,7 +244,7 @@ private struct PanelPage: View {
                 ControlCenterDeviceDetail(model: model, device: device).id(did)
             }
         case .settings:
-            ControlCenterSettings(model: model, bridge: model.bridge, appearance: $appearance, navigate: navigate)
+            ControlCenterSettings(model: model, bridge: model.bridge, updater: updater, appearance: $appearance, navigate: navigate)
         case .settingsHomeKit:
             SettingsHomeKitManagement(model: model, bridge: model.bridge)
         case .settingsDevices:
@@ -256,7 +258,15 @@ private struct PanelPage: View {
 
     private var footer: some View {
         HStack {
-            Label(L10n.tr("控制只走局域网", "LAN Control Only"), systemImage: "lock").font(.system(size: 11))
+            if let updater, let version = updater.availableVersion {
+                Button { updater.checkForUpdates() } label: {
+                    Label(L10n.tr("更新至 \(version)", "Update to \(version)"), systemImage: "arrow.down.circle.fill")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain).foregroundStyle(.blue)
+            } else {
+                Label(L10n.tr("控制只走局域网", "LAN Control Only"), systemImage: "lock").font(.system(size: 11))
+            }
             Spacer()
             TimelineView(PanelTimelineSchedule(interval: 30, isActive: panelPresented)) { context in
                 Text(model.lastRediscoveryAt.map { context.date.timeIntervalSince($0) < 60 ? L10n.tr("上次扫描 刚刚", "Scanned just now") : L10n.tr("扫描 ", "Scanned ") + $0.formatted(.relative(presentation: .named)) } ?? L10n.tr("尚未扫描", "Not Scanned Yet"))
