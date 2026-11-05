@@ -36,6 +36,24 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+      - name: Reject mismatched or already published versions early
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+        run: |
+          args=()
+          if [[ "$REF_TYPE" == tag ]]; then args+=(--tag "$REF_NAME"); fi
+          python3 scripts/release_metadata.py "${args[@]}"
+          version="$(python3 scripts/release_metadata.py version)"
+          test -s "docs/releases/v$version.md"
+          state="$(gh release view "v$version" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
+          if [[ "$PUBLISH" == true && "$state" == false ]]; then
+            echo 'This version is already public; bump release.json first.' >&2
+            exit 1
+          fi
       - name: Reuse the exact commit's successful CI build
         id: lookup
         env:
@@ -50,7 +68,7 @@ jobs:
   package:
     needs: [resolve, compile]
     if: >-
-      always() && needs.resolve.result == 'success' &&
+      !cancelled() && needs.resolve.result == 'success' &&
       (needs.compile.result == 'success' || needs.compile.result == 'skipped')
     runs-on: macos-26
     environment: macos-release
@@ -146,6 +164,7 @@ jobs:
 
   compatibility:
     needs: package
+    if: ${{ !cancelled() && needs.package.result == 'success' }}
     uses: ./.github/workflows/native-smoke.yml
     with:
       artifact_name: native-release-universal
@@ -153,7 +172,10 @@ jobs:
 
   publish:
     needs: [package, compatibility]
-    if: github.event_name == 'push' || inputs.publish
+    if: >-
+      !cancelled() && needs.package.result == 'success' &&
+      needs.compatibility.result == 'success' &&
+      (github.event_name == 'push' || inputs.publish)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

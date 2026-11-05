@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import subprocess
 import time
 import urllib.parse
 import urllib.request
@@ -27,7 +28,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--github-output', required=True, type=Path)
     args = parser.parse_args()
-    repository, commit = os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_SHA']
+    repository = os.environ['GITHUB_REPOSITORY']
+    # Normalize annotated tags to the checked-out commit before looking up CI.
+    commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     started, deadline = time.monotonic(), time.monotonic() + 1800
     while True:
         query = urllib.parse.urlencode({'head_sha': commit, 'per_page': 20})
