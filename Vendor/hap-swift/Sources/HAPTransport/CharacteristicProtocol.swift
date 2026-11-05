@@ -243,9 +243,16 @@ public struct CharacteristicProtocol: Sendable {
             characteristics.append(charDict)
         }
 
+        let hasError = characteristics.contains { $0["status"] != nil }
+        if hasError {
+            // HAP §6.7.4.4: in a 207 every characteristic carries a status. iOS treats a successful read
+            // without one as failed, so one unreachable accessory would mark the whole bridge No Response.
+            for i in characteristics.indices where characteristics[i]["status"] == nil {
+                characteristics[i]["status"] = HAPStatus.success.rawValue
+            }
+        }
         let responseDict: [String: Any] = ["characteristics": characteristics]
         let json = try JSONSerialization.data(withJSONObject: responseDict)
-        let hasError = characteristics.contains { $0["status"] != nil }
         return HTTPResponse(statusCode: hasError ? 207 : 200, statusMessage: hasError ? "Multi-Status" : "OK",
             headers: [("Content-Type", HTTPProtocol.hapJSON)], body: json)
     }

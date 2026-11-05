@@ -101,4 +101,37 @@ struct CapabilitySecurityTests {
         let chars = (bridged["services"] as? [[String: Any]] ?? []).flatMap { $0["characteristics"] as? [[String: Any]] ?? [] }
         #expect(chars.first { $0["iid"] as? Int == 9 }?["value"] is NSNull)
     }
+
+    @Test("A partly failed read gives every characteristic a status, so reachable accessories keep their values")
+    func multiStatusRead() async throws {
+        let identity = HAPIdentity(), store = InMemoryPairingStore()
+        let verify = PairVerifyStateMachine(identity: identity, pairingStore: store, deviceID: "test")
+        let info = AccessoryInfo(name: "test", manufacturer: "test", model: "test", serialNumber: "test", firmwareRevision: "1")
+        let bridge = HAPBridge(info: info)
+        for aid: UInt64 in [2, 3] {
+            await bridge.addAccessory(info: info, services: [HAPService(iid: 8, type: .switch, characteristics: [
+                HAPCharacteristic(iid: 9, type: .on, value: .bool(true), permissions: [.read, .write, .notify], format: .bool),
+            ])], aid: aid, servicesHaveStableIIDs: true)
+        }
+        await bridge.setReadStatus(aid: 3, iid: 9, status: .communicationFailure)
+        let handler = CharacteristicProtocol(bridge: bridge,
+            pairingStateMachine: PairingStateMachine(setupCode: "031-45-154", identity: identity, pairingStore: store, deviceID: "test"),
+            pairVerifyStateMachine: verify, pairingStore: store, identity: identity)
+        try await VerifiedTestController.authenticate(verify, store: store)
+
+        let mixed = try await handler.handleRequest(HTTPRequest(method: "GET", path: "/characteristics?id=2.9,3.9"))
+        #expect(mixed.statusCode == 207)
+        let entries = try #require((JSONSerialization.jsonObject(with: mixed.body) as? [String: Any])?["characteristics"] as? [[String: Any]])
+        let reachable = try #require(entries.first { $0["aid"] as? Int == 2 })
+        let unreachable = try #require(entries.first { $0["aid"] as? Int == 3 })
+        #expect(reachable["status"] as? Int == 0)
+        #expect(reachable["value"] as? Bool == true)
+        #expect(unreachable["status"] as? Int == -70402)
+        #expect(unreachable["value"] == nil)
+
+        // A fully successful read stays a plain 200 without status fields.
+        let good = try await handler.handleRequest(HTTPRequest(method: "GET", path: "/characteristics?id=2.9"))
+        #expect(good.statusCode == 200)
+        #expect(!String(decoding: good.body, as: UTF8.self).contains("status"))
+    }
 }
