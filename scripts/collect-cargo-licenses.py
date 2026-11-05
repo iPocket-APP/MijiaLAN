@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 import sys
 
-metadata = json.loads(Path(sys.argv[1]).read_text())
+metadata = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8-sig"))
 destination = Path(sys.argv[2])
 destination.mkdir(parents=True, exist_ok=True)
 rows = ["# Cargo dependency licenses", "", "| Package | SPDX expression | Notices |", "| --- | --- | --- |"]
@@ -29,5 +29,5 @@ for package in sorted(metadata["packages"], key=lambda item: (item["name"], item
         shutil.copyfile(path, target)
         links.append(f"[{path.name}]({name}/{path.name})")
     rows.append(f'| {name} | {package.get("license") or "See notices"} | {", ".join(links)} |')
-(destination / "README.md").write_text("\n".join(rows) + "\n")
+(destination / "README.md").write_text("\n".join(rows) + "\n", encoding="utf-8")
 print(f"Collected license inventory for {len(rows) - 4} Cargo packages")

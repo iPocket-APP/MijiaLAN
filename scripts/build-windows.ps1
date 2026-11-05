@@ -33,6 +33,12 @@ try {
     Copy-Item LICENSE, README.md, PRIVACY.md, THIRD_PARTY_NOTICES.md $stage
     Copy-Item licenses (Join-Path $stage 'licenses') -Recurse
     Copy-Item docs (Join-Path $stage 'docs') -Recurse
+    Copy-Item packaging/windows/START-HERE.txt $stage
+    $licenseMetadata = Join-Path $scratch 'cargo-metadata.json'
+    & cargo metadata --locked --format-version 1 --filter-platform $Target | Set-Content -Encoding utf8 $licenseMetadata
+    if ($LASTEXITCODE -ne 0) { throw 'Cargo license metadata failed' }
+    & python scripts/collect-cargo-licenses.py $licenseMetadata (Join-Path $stage 'licenses/Cargo')
+    if ($LASTEXITCODE -ne 0) { throw 'Cargo license collection failed' }
     $zip = Join-Path $out "$name.zip"
     Compress-Archive -Path $stage -DestinationPath $zip -Force
     $compiler = Get-Command makensis.exe -ErrorAction SilentlyContinue

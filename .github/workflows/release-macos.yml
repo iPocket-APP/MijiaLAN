@@ -1,160 +1,185 @@
-name: Signed macOS release
+name: Signed desktop release
 
 on:
   workflow_dispatch:
     inputs:
       build_number:
-        description: Positive build number for this experience package
-        required: true
-        default: '10'
+        description: Positive build number (unused when source_ref already contains the build)
         type: string
+        default: ''
+      source_ref:
+        description: Optional rs-vVERSION-bBUILD tag; empty uses current MijiaLAN-rs commit
+        type: string
+        default: ''
+      ci_run_id:
+        description: Optional exact Build run ID for this source commit
+        type: string
+        default: '0'
+      publish:
+        description: Publish a public Rust prerelease after verification (false produces preview artifacts only)
+        type: boolean
+        default: false
   push:
-    tags:
-      - 'rs-v*'
+    tags: ['rs-v*']
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: signed-macos-${{ github.ref }}
+  group: signed-desktop-${{ inputs.source_ref || github.ref }}-${{ inputs.build_number }}
   cancel-in-progress: false
 
 jobs:
-  release:
+  source:
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/MijiaLAN-rs') ||
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rs-v'))
-    runs-on: ${{ vars.MIJIALAN_MACOS_RUNNER || 'macos-26-intel' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    outputs:
+      run_id: ${{ steps.source.outputs.run_id }}
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      version: ${{ steps.source.outputs.version }}
+      build_number: ${{ steps.source.outputs.build_number }}
+      tag: ${{ steps.source.outputs.tag }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: MijiaLAN-rs
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve tested source packages
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ inputs.source_ref || (github.ref_type == 'tag' && github.ref_name) || '' }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+          CI_RUN_ID: ${{ inputs.ci_run_id || '0' }}
+        run: python3 scripts/ci/release.py resolve --ref "$SOURCE_REF" --build "$BUILD_NUMBER" --run "$CI_RUN_ID"
+
+  macos:
+    needs: source
+    runs-on: ${{ vars.MIJIALAN_MACOS_RUNNER || 'macos-26' }}
     concurrency:
-      group: ${{ vars.MIJIALAN_MACOS_RUNNER || 'mijialan-macos-hosted' }}
+      group: mijialan-macos-signing
       cancel-in-progress: false
     environment: macos-release
-    timeout-minutes: 90
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
     env:
-      CARGO_TERM_COLOR: always
-      CARGO_BUILD_JOBS: '2'
-      CARGO_INCREMENTAL: '0'
-      CARGO_PROFILE_DEV_DEBUG: '0'
-      CARGO_PROFILE_TEST_DEBUG: '0'
-      MACOSX_DEPLOYMENT_TARGET: '11.0'
-      MIJIALAN_MACOS_TARGET: aarch64-apple-darwin
-      MIJIALAN_TEST_PROFILE: debug
+      MIJIALAN_BUILD_NUMBER: ${{ needs.source.outputs.build_number }}
       MIJIALAN_SIGNING_IDENTITY: ${{ vars.MIJIALAN_SIGNING_IDENTITY }}
       APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
       APPLE_API_ISSUER_ID: ${{ vars.APPLE_API_ISSUER_ID }}
     steps:
-      - name: Check out source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          fetch-depth: 0
+          ref: ${{ needs.source.outputs.source_sha }}
           persist-credentials: false
-
-      - name: Validate release source and version
-        env:
-          REQUESTED_BUILD_NUMBER: ${{ inputs.build_number }}
-        run: |
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/MijiaLAN-rs
-          version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            [[ "$GITHUB_REF_NAME" =~ ^rs-v([0-9]+\.[0-9]+\.[0-9]+)-b([1-9][0-9]*)$ ]] || { echo 'Use rs-vVERSION-bBUILD tags' >&2; exit 1; }
-            [[ "${BASH_REMATCH[1]}" == "$version" ]] || { echo 'Tag does not match Cargo version' >&2; exit 1; }
-            build_number="${BASH_REMATCH[2]}"
-          else
-            build_number="$REQUESTED_BUILD_NUMBER"
-          fi
-          [[ "$build_number" =~ ^[1-9][0-9]*$ ]] || { echo 'Expected a positive build number' >&2; exit 1; }
-          echo "MIJIALAN_BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
-          echo "MIJIALAN_RELEASE_VERSION=$version" >> "$GITHUB_ENV"
-
-      - name: Install Rust
-        if: runner.environment == 'github-hosted'
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+      - name: Set up packaging Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          toolchain: '1.98.1'
-          components: rustfmt, clippy
-          targets: aarch64-apple-darwin
-
-      - name: Verify local Rust toolchain
-        if: runner.environment == 'self-hosted'
-        run: |
-          [[ "$(uname -m)" == arm64 ]] || { echo 'Use an Apple Silicon Mac for the local runner' >&2; exit 1; }
-          [[ "$(rustc --version)" == 'rustc 1.98.1 '* ]] || { echo 'Install Rust 1.98.1 before starting the local runner' >&2; exit 1; }
-          cargo --version
-          cargo fmt --version
-          cargo clippy --version
-          echo 'CARGO_BUILD_JOBS=4' >> "$GITHUB_ENV"
-          echo 'MIJIALAN_TEST_PROFILE=release' >> "$GITHUB_ENV"
-
-      - name: Cache Rust dependencies
-        if: runner.environment == 'github-hosted'
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+          python-version: '3.12'
+      - name: Download validated macOS binary
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
-          key: signed-macos-aarch64-apple-darwin
-          cache-on-failure: true
-
-      - name: Set up Xcode and Metal
+          name: MijiaLAN-Rust-macOS-arm64
+          path: build/ci-input
+          run-id: ${{ needs.source.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Select signing tools
         run: |
-          if [[ "$RUNNER_ENVIRONMENT" == github-hosted ]]; then
-            export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
-          else
-            export DEVELOPER_DIR="$(xcode-select -p)"
-          fi
+          [[ "$(uname -m)" == arm64 ]] || { echo 'Use an Apple Silicon signing runner' >&2; exit 1; }
+          export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
           echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
-          xcodebuild -version
-          if ! xcrun --sdk macosx metal --version; then
-            xcodebuild -downloadComponent MetalToolchain
-          fi
-          echo "LIBCLANG_PATH=$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/lib" >> "$GITHUB_ENV"
-
+          xcrun notarytool --version
       - name: Import temporary signing materials
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
         run: bash scripts/ci/setup-macos-signing.sh
-
-      - name: Build, sign and notarize
-        run: bash scripts/package-macos-release.sh
-
-      - name: Upload distribution files
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
-        with:
-          name: MijiaLAN-rs-${{ env.MIJIALAN_RELEASE_VERSION }}-b${{ env.MIJIALAN_BUILD_NUMBER }}-macos-arm64
-          path: |
-            build/releases/v${{ env.MIJIALAN_RELEASE_VERSION }}-rs.${{ env.MIJIALAN_BUILD_NUMBER }}/dist/*.dmg
-            build/releases/v${{ env.MIJIALAN_RELEASE_VERSION }}-rs.${{ env.MIJIALAN_BUILD_NUMBER }}/dist/*.zip
-            build/releases/v${{ env.MIJIALAN_RELEASE_VERSION }}-rs.${{ env.MIJIALAN_BUILD_NUMBER }}/dist/SHA256SUMS.txt
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
-
+      - name: Sign and notarize existing CI program
+        env:
+          SOURCE_SHA: ${{ needs.source.outputs.source_sha }}
+          VERSION: ${{ needs.source.outputs.version }}
+        run: |
+          python3 scripts/ci/build_artifact.py prepare-mac --folder build/ci-input --source "$SOURCE_SHA" --build "$MIJIALAN_BUILD_NUMBER"
+          bash scripts/package-macos-release.sh --package-existing
+          cli="build/releases/v$VERSION-rs.$MIJIALAN_BUILD_NUMBER/staging/MijiaLAN.app/Contents/MacOS/mijia-rust"
+          "$cli" --help
+          "$cli" --demo list > "$RUNNER_TEMP/demo.json"
+          python3 -c 'import json,sys; assert len(json.load(open(sys.argv[1]))) == 4' "$RUNNER_TEMP/demo.json"
       - name: Clean up signing materials
         if: always()
         run: bash scripts/ci/cleanup-macos-signing.sh
-
-      - name: Preserve signed app after packaging failure
-        if: failure()
-        run: |
-          [[ -n "${MIJIALAN_RELEASE_VERSION:-}" && -n "${MIJIALAN_BUILD_NUMBER:-}" ]] || exit 0
-          release="build/releases/v${MIJIALAN_RELEASE_VERSION}-rs.${MIJIALAN_BUILD_NUMBER}"
-          app="$release/staging/MijiaLAN.app"
-          if [[ -d "$app" ]] && codesign --verify --deep --strict "$app"; then
-            mkdir -p "$release/recovery"
-            ditto -c -k --sequesterRsrc --keepParent "$app" "$release/recovery/MijiaLAN-signed-app.zip"
-            (cd "$release/recovery" && shasum -a 256 MijiaLAN-signed-app.zip > SHA256SUMS.txt)
-          fi
-
-      - name: Upload packaging recovery
-        if: failure()
+      - name: Upload signed distribution
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: MijiaLAN-rs-${{ env.MIJIALAN_RELEASE_VERSION }}-b${{ env.MIJIALAN_BUILD_NUMBER }}-recovery
-          path: |
-            build/releases/v${{ env.MIJIALAN_RELEASE_VERSION }}-rs.${{ env.MIJIALAN_BUILD_NUMBER }}/recovery/*.zip
-            build/releases/v${{ env.MIJIALAN_RELEASE_VERSION }}-rs.${{ env.MIJIALAN_BUILD_NUMBER }}/recovery/SHA256SUMS.txt
-          if-no-files-found: ignore
+          name: signed-macos
+          path: build/releases/v${{ needs.source.outputs.version }}-rs.${{ needs.source.outputs.build_number }}/dist/*
+          if-no-files-found: error
           compression-level: 0
-          retention-days: 3
+          retention-days: 14
+          overwrite: true
+
+  distribution:
+    needs: [source, macos]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: signed-macos
+          path: build/signed-macos
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: MijiaLAN-Rust-Windows-x86_64
+          path: build/windows-input
+          run-id: ${{ needs.source.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify and collect distribution
+        env:
+          SOURCE_SHA: ${{ needs.source.outputs.source_sha }}
+          VERSION: ${{ needs.source.outputs.version }}
+          BUILD: ${{ needs.source.outputs.build_number }}
+        run: python3 scripts/ci/release.py collect --source "$SOURCE_SHA" --version "$VERSION" --build "$BUILD" --windows build/windows-input --mac build/signed-macos
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: MijiaLAN-rs-${{ needs.source.outputs.version }}-b${{ needs.source.outputs.build_number }}-preview
+          path: distribution/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+          overwrite: true
+
+  publish:
+    needs: [source, distribution]
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: MijiaLAN-rs-${{ needs.source.outputs.version }}-b${{ needs.source.outputs.build_number }}-preview
+          path: distribution
+      - name: Publish verified Rust prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.source.outputs.source_sha }}
+          VERSION: ${{ needs.source.outputs.version }}
+          BUILD: ${{ needs.source.outputs.build_number }}
+          BUILD_RUN: ${{ needs.source.outputs.run_id }}
+        run: python3 scripts/ci/release.py publish --source "$SOURCE_SHA" --version "$VERSION" --build "$BUILD" --run "$BUILD_RUN"

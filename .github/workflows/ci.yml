@@ -1,118 +1,155 @@
 name: Build
+run-name: Build · ${{ inputs.platform || 'all' }} · ${{ github.sha }}
 
 on:
   push:
-    branches:
-      - '**'
+    branches: [MijiaLAN-rs]
   pull_request:
+    branches: [MijiaLAN-rs]
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Platforms to verify and package
+        type: choice
+        default: all
+        options: [all, release, windows, macos-arm64, macos-intel]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: build-${{ github.event.pull_request.number || github.ref }}-${{ inputs.platform || 'all' }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: "0"
-  CARGO_BUILD_JOBS: "2"
-  CARGO_PROFILE_DEV_DEBUG: "0"
-  CARGO_PROFILE_TEST_DEBUG: "0"
-
-defaults:
-  run:
-    shell: bash
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  MACOSX_DEPLOYMENT_TARGET: '11.0'
 
 jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: '1.98.1'
+          components: rustfmt
+      - name: Check formatting and release helper tests
+        run: |
+          cargo fmt --all --check
+          python3 -m unittest discover -s scripts/ci/tests -v
+      - id: matrix
+        env:
+          PLATFORM: ${{ inputs.platform || 'all' }}
+        run: python3 scripts/ci/build_artifact.py matrix "$PLATFORM"
+
   build:
+    needs: plan
     name: ${{ matrix.platform }} (${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
     concurrency:
-      group: ${{ matrix.platform == 'macOS' && 'mijialan-macos-hosted' || format('mijialan-windows-{0}', github.run_id) }}
-      cancel-in-progress: false
-    defaults:
-      run:
-        shell: ${{ matrix.shell }}
+      group: build-${{ github.ref }}-${{ matrix.target }}
+      cancel-in-progress: true
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      max-parallel: 1
-      matrix:
-        include:
-          - os: windows-2022
-            platform: Windows
-            arch: x86_64
-            target: x86_64-pc-windows-msvc
-            shell: pwsh
-          - os: macos-26-intel
-            platform: macOS
-            arch: arm64
-            target: aarch64-apple-darwin
-            shell: bash
-          - os: macos-26-intel
-            platform: macOS
-            arch: x86_64
-            target: x86_64-apple-darwin
-            shell: bash
+      max-parallel: 3
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    env:
+      CARGO_BUILD_JOBS: ${{ matrix.jobs }}
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+      - name: Set up packaging Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          toolchain: "1.98.1"
-          components: rustfmt, clippy
-          targets: ${{ matrix.target }}
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: ${{ matrix.target }}
-          save-if: ${{ github.event_name != 'pull_request' }}
+          python-version: '3.12'
 
       - name: Set up Xcode and Metal
         if: runner.os == 'macOS'
         run: |
-          sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
+          echo 'DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer' >> "$GITHUB_ENV"
+          export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
           xcodebuild -version
           if ! xcrun --sdk macosx metal --version; then
             xcodebuild -downloadComponent MetalToolchain
           fi
-          xcrun --sdk macosx metal --version
-          echo "LIBCLANG_PATH=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/lib" >> "$GITHUB_ENV"
 
       - name: Set up MSVC
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
         with:
           arch: x64
+      - name: Locate shader compiler
+        if: runner.os == 'Windows'
+        run: |
+          $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+          $fxc = Get-ChildItem $sdk -Filter fxc.exe -Recurse |
+            Where-Object { $_.Directory.Name -eq 'x64' } | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $fxc) { throw 'Windows SDK fxc.exe is required' }
+          "GPUI_FXC_PATH=$($fxc.FullName)" >> $env:GITHUB_ENV
 
-      - name: Check formatting
-        run: cargo fmt --all --check
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: '1.98.1'
+          components: clippy
+          targets: ${{ matrix.target }}
+      - name: Normalize unchanged vendored sources
+        id: vendor
+        run: ${{ matrix.python }} scripts/ci/build_artifact.py vendor
+      - name: Cache Rust release dependencies
+        id: rust-cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: release-v3-${{ matrix.target }}-xcode26.3-${{ steps.vendor.outputs.tree }}
+          cache-workspace-crates: true
+          cache-all-crates: true
+          cache-bin: false
+          cache-on-failure: true
+          env-vars: MACOSX_DEPLOYMENT_TARGET DEVELOPER_DIR VCToolsVersion WindowsSDKVersion GPUI_FXC_PATH
+          save-if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/MijiaLAN-rs' }}
 
-      - name: Clippy
-        run: cargo clippy --locked --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
-
-      - name: Test
-        run: cargo test --locked --workspace
+      - name: Clippy Release
+        run: cargo clippy --locked --release --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
+      - name: Test Release on native target
+        if: runner.os == 'macOS'
+        run: cargo test --locked --release --workspace --target ${{ matrix.target }} --timings 2>&1 | tee "$RUNNER_TEMP/tests.log"
+      - name: Test Release on native target
+        if: runner.os == 'Windows'
+        run: |
+          cargo test --locked --release --workspace --target ${{ matrix.target }} --timings 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/tests.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Release tests failed' }
 
       - name: Package macOS Release
         if: runner.os == 'macOS'
         env:
-          MACOSX_DEPLOYMENT_TARGET: "11.0"
           MIJIALAN_BUILD_NUMBER: ${{ github.run_number }}
-          MIJIALAN_APP_OUTPUT: ${{ github.workspace }}/build/ci/MijiaLAN Rust.app
-          MIJIALAN_SIGNING_IDENTITY: "-"
+          MIJIALAN_APP_OUTPUT: ${{ github.workspace }}/build/ci/MijiaLAN.app
+          MIJIALAN_APP_NAME: MijiaLAN
+          MIJIALAN_SIGNING_IDENTITY: '-'
           MIJIALAN_MACOS_TARGET: ${{ matrix.target }}
           CI_ARCH: ${{ matrix.arch }}
         run: |
           bash scripts/build-macos.sh release
           app="$MIJIALAN_APP_OUTPUT"
+          cargo metadata --locked --format-version 1 --filter-platform "$MIJIALAN_MACOS_TARGET" > "$RUNNER_TEMP/cargo-metadata.json"
+          python3 scripts/collect-cargo-licenses.py "$RUNNER_TEMP/cargo-metadata.json" "$app/Contents/Resources/Licenses/Cargo"
+          codesign --force --sign - --timestamp=none "$app"
           for binary in mijialan-rust mijia-rust; do
             lipo "$app/Contents/MacOS/$binary" -verify_arch "$CI_ARCH"
           done
@@ -123,18 +160,13 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent "$app" "artifacts/$name.zip"
           (cd artifacts && shasum -a 256 "$name.zip" > "$name.sha256")
           ditto -x -k "artifacts/$name.zip" "$RUNNER_TEMP/package-smoke"
-          cli="$RUNNER_TEMP/package-smoke/MijiaLAN Rust.app/Contents/MacOS/mijia-rust"
-          if [[ "$CI_ARCH" == "$(uname -m)" ]]; then
-            "$cli" --help
-            "$cli" --demo list > "$RUNNER_TEMP/demo-devices.json"
-            python3 -c 'import json, sys; devices = json.load(open(sys.argv[1])); assert isinstance(devices, list) and devices' "$RUNNER_TEMP/demo-devices.json"
-          else
-            echo "Cross-compiled $CI_ARCH binaries verified; runtime smoke requires an Apple Silicon Mac."
-          fi
+          cli="$RUNNER_TEMP/package-smoke/MijiaLAN.app/Contents/MacOS/mijia-rust"
+          "$cli" --help
+          "$cli" --demo list > "$RUNNER_TEMP/demo-devices.json"
+          python3 -c 'import json,sys; assert len(json.load(open(sys.argv[1]))) == 4' "$RUNNER_TEMP/demo-devices.json"
 
       - name: Package Windows Release
         if: runner.os == 'Windows'
-        shell: pwsh
         run: |
           ./scripts/build-windows.ps1 -Profile release -Target x86_64-pc-windows-msvc
           $zip = Get-Item artifacts/*-windows-x86_64.zip
@@ -146,8 +178,11 @@ jobs:
           $output = & $cli --demo list
           if ($LASTEXITCODE -ne 0) { throw 'Packaged CLI demo failed' }
           $devices = ConvertFrom-Json -InputObject ($output -join "`n")
-          if (-not $devices -or $devices.Count -eq 0) { throw 'Demo returned no devices' }
-
+          if ($devices.Count -ne 4) { throw 'Demo returned unexpected devices' }
+      - name: Record verified package provenance
+        env:
+          RUST_CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+        run: ${{ matrix.python }} scripts/ci/build_artifact.py record --target ${{ matrix.target }} --tests "${{ runner.temp }}/tests.log"
       - name: Upload packages
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
@@ -155,6 +190,8 @@ jobs:
           path: |
             artifacts/*.zip
             artifacts/*.sha256
+            artifacts/build-info.json
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+          overwrite: true

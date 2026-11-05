@@ -125,17 +125,9 @@ GPUI 固定为 0.2.2，GPUI Component / Assets 固定为与其兼容的 0.5.1，
 
 ### GitHub 自动构建
 
-[Build 工作流](.github/workflows/ci.yml) 在 push、Pull Request 和手动运行时执行格式检查、Clippy、完整工作区测试，并构建桌面 App 与 CLI 的 Release 包：
+[Build 工作流](.github/workflows/ci.yml) 并行验证 Windows x64、Mac ARM64 和 Mac Intel，使用统一 Release profile 与原生 target，并缓存 GPUI 和依赖。每个平台的 Artifact 包含程序、许可、校验值及源码验证记录；Mac ARM 使用原生 Apple Silicon runner。
 
-| 平台 | 架构 | 下载产物 |
-| --- | --- | --- |
-| macOS | Apple Silicon / arm64 | 含 `.app` 的 ZIP 和 SHA-256 清单 |
-| macOS | Intel / x86_64 | 含 `.app` 的 ZIP 和 SHA-256 清单 |
-| Windows | x86_64 / MSVC | 便携 ZIP 和 SHA-256 清单 |
-
-在仓库 **Actions → Build → 对应运行 → Artifacts** 下载，保留 14 天。手动构建使用 **Run workflow**；该入口需要工作流先进入仓库默认分支。macOS 两种架构分别打包，CLI 包含在 `.app/Contents/MacOS/` 中。
-
-CI 固定 Rust 1.98.1 和锁文件依赖，不需要签名密钥。macOS 包使用临时签名、未公证，Windows 包未签名；工作流仅上传 Actions 产物，不自动发布 GitHub Release。Linux 暂不进入此构建矩阵。更多细节见 [打包说明](docs/packaging.md#github-actions-自动构建)。
+[Signed desktop release](.github/workflows/release-macos.yml) 复用同一提交的 Build 产物，完成 Mac 签名、公证和双平台封装，避免在 tag 上重复编译。手动运行默认仅生成预览；显式发布或 push rs tag 后自动发布 Rust prerelease，保留 Swift Latest。Windows 包未签名，需 Microsoft Visual C++ v14 x64 运行库。缓存命中、操作步骤和验证边界见 [CI 与发布说明](docs/ci-performance.md)。
 
 ### 本地检查
 
