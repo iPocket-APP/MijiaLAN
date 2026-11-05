@@ -137,6 +137,40 @@ fn encrypted_fan_speed_commands_and_same_value_error_recovery_match_native() {
     device.phase.store(1, Ordering::SeqCst);
     engine.refresh("77").unwrap();
     assert_eq!(event(&mut stream, &mut session)["status"], -70402);
+    // Native 0.1.5 corrected this envelope. Rust already emitted status:0 for
+    // successful entries: keep that guarantee across devices and value types.
+    let child_lock = service["characteristics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["type"] == "A7")
+        .unwrap()["iid"]
+        .as_u64()
+        .unwrap();
+    let path = format!("/characteristics?id={aid}.{iid},{aid}.{child_lock},1.9");
+    let (status, bytes) = encrypted_request(&mut stream, &mut session, "GET", &path, &[]);
+    assert_eq!(status, 207);
+    let mixed: Value = serde_json::from_slice(&bytes).unwrap();
+    let items = mixed["characteristics"].as_array().unwrap();
+    assert_eq!(items[0]["status"], -70402);
+    assert!(items[0].get("value").is_none());
+    for item in &items[1..] {
+        assert_eq!(item["status"], 0);
+        assert!(item.get("value").is_some());
+    }
+    assert_eq!(items[1]["value"], 0);
+    assert_eq!(items[2]["value"], "1.1.0");
+    let path = format!("/characteristics?id={aid}.{child_lock},1.9");
+    let (status, bytes) = encrypted_request(&mut stream, &mut session, "GET", &path, &[]);
+    assert_eq!(status, 200);
+    let good: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        good["characteristics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|v| v.get("status").is_none())
+    );
     device.phase.store(0, Ordering::SeqCst);
     engine.refresh("77").unwrap();
     assert_eq!(
