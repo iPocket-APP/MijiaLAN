@@ -9,8 +9,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="${1:-release}"
-VERSION="${MIJIALAN_VERSION:-0.1.2}"
-BUILD_NUMBER="${MIJIALAN_BUILD_NUMBER:-3}"
+VERSION="${MIJIALAN_VERSION:-$(python3 "$ROOT/scripts/release_metadata.py" version)}"
+BUILD_NUMBER="${MIJIALAN_BUILD_NUMBER:-$(python3 "$ROOT/scripts/release_metadata.py" build-number)}"
 SIGN_IDENTITY="${MIJIALAN_SIGN_IDENTITY:--}"
 APP="${MIJIALAN_APP_OUTPUT:-$ROOT/build/MijiaLAN.app}"
 
@@ -106,7 +106,28 @@ if [[ "${MIJIALAN_UNIVERSAL:-0}" == 1 ]]; then
     done
 fi
 if [[ "$CONFIG" == release ]]; then
-    strip -S "$APP/Contents/MacOS/MijiaLAN"
+    # Keep matching symbols outside the distributable app for crash diagnosis.
+    if [[ -n "${MIJIALAN_DSYM_OUTPUT:-}" ]]; then
+        [[ "$MIJIALAN_DSYM_OUTPUT" == /*.dSYM ]] || { echo "dSYM output must be an absolute .dSYM path" >&2; exit 1; }
+        rm -rf "$MIJIALAN_DSYM_OUTPUT"
+        mkdir -p "$(dirname "$MIJIALAN_DSYM_OUTPUT")"
+        if [[ -d "$BIN_DIR/MijiaLANApp.dSYM" ]]; then
+            ditto "$BIN_DIR/MijiaLANApp.dSYM" "$MIJIALAN_DSYM_OUTPUT"
+        else
+            xcrun dsymutil "$BIN_DIR/MijiaLANApp" -o "$MIJIALAN_DSYM_OUTPUT"
+        fi
+        python3 - "$BIN_DIR/MijiaLANApp" "$MIJIALAN_DSYM_OUTPUT" <<'PY'
+import re, subprocess, sys
+def uuids(path):
+    return set(re.findall(r"UUID: ([0-9A-F-]+) \(([^)]+)\)",
+        subprocess.check_output(["xcrun", "dwarfdump", "--uuid", path], text=True)))
+binary, symbols = map(uuids, sys.argv[1:])
+assert binary and binary == symbols, "dSYM UUIDs do not match the release executable"
+PY
+    fi
+    # Drop local symbols as well as debug entries, retaining exported symbols
+    # and Swift/Objective-C runtime metadata.
+    strip -S -x "$APP/Contents/MacOS/MijiaLAN"
 fi
 python3 "$ROOT/scripts/swift_runtime.py" embed "$APP" --sign "$SIGN_IDENTITY"
 if [[ "$SIGN_IDENTITY" == - ]]; then

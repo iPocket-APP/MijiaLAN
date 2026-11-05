@@ -1,0 +1,4 @@
+# Official hosted label newly introduced in runner-images, not yet in actionlint's catalog.
+self-hosted-runner:
+  labels:
+    - xcode-27

@@ -1,7 +1,69 @@
 # Release packaging
 
-The current native Swift release is **0.1.2 (build 3)**. Rust releases use a
-separate branch and `rs-` tags.
+The native Swift version and build number are defined once in `release.json`.
+Native releases use `v<version>` tags. Rust uses a separate branch and `rs-` tags.
+
+## GitHub Actions
+
+- **Native macOS CI** runs Release tests and builds the Universal app in parallel,
+  with separate compiler caches. Pull requests also run macOS 15 package checks.
+  It runs for `main`, `codex/**`, pull requests targeting `main`, and manual dispatch.
+- **Native signed release** runs for `v*` tags. It requires a matching `release.json`,
+  a release note at `docs/releases/v<version>.md`, and a source commit contained in `main`.
+  It reuses the exact commit's successful `main` CI build, signs it and notarizes
+  its DMG once. Both signed macOS 15 startup checks must pass before publication.
+- Manual dispatch on `main` defaults to packaging only. With `publish=true`,
+  the version tag is created only after signing and both startup checks pass.
+  If that tag already exists, it must point to the exact source commit being built.
+
+The signing job uses the repository's existing `macos-release` environment, shared
+with Rust. Its deployment rules must allow branch `main` and tags `v*`, in addition
+to the existing Rust rules. Required environment secrets:
+
+| Secret | Value |
+| --- | --- |
+| `MACOS_CERTIFICATE_P12_BASE64` | Base64 Developer ID Application certificate and private key |
+| `MACOS_CERTIFICATE_PASSWORD` | Password protecting that PKCS#12 export |
+| `APPLE_API_KEY_P8_BASE64` | Base64 App Store Connect API key authorized for notarization |
+
+Environment variables: `MIJIALAN_SIGNING_IDENTITY` (certificate SHA-1 or identity),
+`APPLE_API_KEY_ID`, and `APPLE_API_ISSUER_ID`. No credentials are needed for ordinary CI.
+Signing materials are imported into a temporary keychain, validated, and removed
+by an `always()` cleanup step. They are outside the workspace, cache and uploaded logs.
+
+The release starts with a small Ubuntu job that finds a successful native CI run
+for the exact source SHA on `main`. If that run is still building, it waits for it
+instead of starting another build. Only first-party `push`/manual `main` runs are
+eligible; fork and pull-request artifacts are never signing inputs. If the build
+has expired or does not exist, the reusable CI workflow runs once as a fallback.
+An existing failed CI run blocks release.
+
+CI archives the ZIP, matching dSYM and a provenance record with source commit,
+run ID, toolchain, executable UUIDs and payload hashes. Promotion checks those
+values before signing and retains the already embedded Swift runtime libraries.
+It never replaces them with the signing runner's older toolchain libraries.
+The signing runner only re-signs the verified app and invokes
+`package_release.sh --package-existing`; it does not run Swift compilation or tests again.
+
+For the next release, update `release.json`, add its notes, commit to `main`, then:
+
+```bash
+version="$(python3 scripts/release_metadata.py version)"
+git tag -a "v$version" -m "MijiaLAN $version"
+git push origin "v$version"
+```
+
+Actions builds with Xcode 27.1 on the `xcode-27` hosted image; signing-only packaging
+uses the stable `macos-26` image's default Xcode. Package startup is
+checked with the native CPU on `macos-15` and `macos-15-intel`, exercising older
+system Swift runtimes rather than relying only on a new SDK's dependency audit.
+Apple Silicon also renders the settings view. Intel hosted VMs can assert inside
+Metal rendering despite successful app initialization, so their check waits for
+the running app's existing MainActor diagnostics instead of forcing a GPU screenshot.
+It validates startup with an empty ephemeral profile and then terminates that test app.
+These checks do not control the user's physical devices.
+
+## Local packaging
 
 `scripts/package_release.sh` builds a universal macOS 15+ app, signs it with
 Developer ID and Hardened Runtime, notarizes and staples the app and DMG,
@@ -10,7 +72,7 @@ It runs Release tests before packaging and does not publish anything to GitHub.
 
 Requirements:
 
-- Xcode 26 or later, providing Swift 6.4 or later and the Icon Composer asset compiler.
+- Xcode 27.1 or later, including the Icon Composer asset compiler.
 - Python 3 (provided by the Xcode command line tools) for the runtime dependency audit.
 - An installed Developer ID Application certificate with its private key.
 - An existing `notarytool` Keychain credential profile for that certificate's team.
@@ -18,8 +80,6 @@ Requirements:
 ```bash
 MIJIALAN_SIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
 MIJIALAN_NOTARY_PROFILE='your-notary-profile' \
-MIJIALAN_VERSION=0.1.2 \
-MIJIALAN_BUILD_NUMBER=3 \
 ./scripts/package_release.sh
 ```
 
@@ -29,15 +89,48 @@ directory. Only the DMG, ZIP and `SHA256SUMS.txt` are intended as release
 attachments. Real device registries, pairing data and diagnostic exports are
 not part of the app bundle.
 
+Local overrides `MIJIALAN_VERSION` and `MIJIALAN_BUILD_NUMBER` are still supported.
+Set `MIJIALAN_NOTARY_KEYCHAIN` when the notary profile belongs to a specific file-based
+keychain, as Actions does. `MIJIALAN_DSYM_OUTPUT` optionally selects a `.dSYM` output
+for direct `build_app.sh` builds; release packaging always keeps it under `symbols/`.
+
+## Packaging optimizations and evidence
+
+- Release executables use `strip -S -x` to remove debug and non-global symbols,
+  while preserving exported symbols and runtime metadata. Matching dSYMs remain
+  separate; their UUIDs must match every executable architecture before stripping.
+- Tests and Universal compilation run on separate runners in parallel. Their
+  `.build` caches are separate and keyed by compiler, architecture, dependency graph
+  and source content, with an incremental restore prefix for source changes.
+  Main-branch release packaging consumes the successful CI result directly.
+- Already compressed ZIP, DMG and symbol archives use Actions artifact compression
+  level 0. DMGs retain the macOS-compatible UDZO format with zlib level 9.
+- One notarization of the signed outer DMG issues tickets for the DMG and nested
+  app. Staple the DMG, then staple the staging app using that same submission's
+  app ticket and create the ZIP. The DMG carries its container ticket; the ZIP
+  contains a stapled app. No separate app ZIP submission or second Apple queue is needed.
+- Rejected or timed-out notarizations preserve submission IDs and available Apple
+  details. Stapling retries briefly for ticket propagation; failed submissions are
+  not silently resubmitted. Build/test logs stream during CI and upload on failure.
+- `logs/release-info.json` records source commit, dirty-tree state, Xcode, sizes
+  and hashes. CI stores dSYMs and release logs separately from the three public assets.
+
+These choices follow [GitHub's temporary-keychain signing example](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications),
+[Apple's notarization and stapling workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow),
+[Apple's instruction to notarize only the outermost container](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution),
+[Apple's symbol-stripping settings](https://developer.apple.com/documentation/xcode/build-settings-reference),
+and [upload-artifact's compression guidance](https://github.com/actions/upload-artifact#altering-compressions-level-speed-v-size).
+Available toolchains are recorded in the [official runner image inventory](https://github.com/actions/runner-images/blob/main/images/macos/xcode-27-arm64-Readme.md).
+
 If packaging stops after the staging app has been built and signed, rerun with
 `--package-existing` and the same environment to retry notarization without
 rebuilding. This verifies the staging app's version, build number, architectures,
 Developer ID signature, Hardened Runtime and timestamp. Use it only for the
 unchanged app whose Release tests already passed.
 
-After checking the packages, commit the release scripts and documentation,
-tag the matching source commit, and upload the three artifacts to a GitHub
-Release. Describe hardware validation limits in the release notes; passing
+For local-only packaging, commit the matching source before manually uploading
+the three artifacts to a GitHub Release. Actions handles tagging and upload for
+CI releases. Describe hardware validation limits in the release notes; passing
 automated tests and Apple notarization do not verify every device or firmware.
 
 For a local universal build without notarization:

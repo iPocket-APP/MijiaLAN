@@ -210,6 +210,38 @@ struct ProbeSchedulingIntegrationTests {
         await fixture.api.shutdown()
     }
 
+    @Test("An online device publishes its changed state while another device's poll is blocked")
+    @MainActor
+    func independentPollPublication() async throws {
+        let fixture = ProbeFixture(includeSecond: true)
+        let controller = DeviceController(api: fixture.api, config: { fixture.config.value })
+        await controller.refreshNow()
+        for _ in 0..<10 { await Task.yield() }
+        let revision = controller.valuesRevision
+        await fixture.transport.setProperty("2.1", value: .bool(false), host: "1")
+        await fixture.transport.hold("2")
+        let refresh = Task { await controller.refreshNow() }
+        do {
+            try await eventually { await fixture.transport.heldCount > 0 }
+            try await eventually { controller.snapshots["1"]?.value("p:2:1") == .bool(false) }
+            try await eventually { controller.valuesRevision > revision }
+            let device = try #require(controller.synthesizedHome().devices.first { $0.id == "1" })
+            if case .fan(let fan) = device.kind { #expect(!fan.isOn) }
+            else { Issue.record("The published home must contain the updated fan") }
+        } catch {
+            await fixture.transport.release("2")
+            await refresh.value
+            controller.shutdown()
+            await fixture.api.shutdown()
+            throw error
+        }
+        #expect(await fixture.transport.heldCount > 0)
+        await fixture.transport.release("2")
+        await refresh.value
+        controller.shutdown()
+        await fixture.api.shutdown()
+    }
+
     @Test("Timestamp-only refreshes retain accurate readings without publishing revisions or waking hidden views")
     @MainActor
     func semanticPublication() async throws {
@@ -376,6 +408,7 @@ private actor ProbeTestTransport: MiioTransport {
     init(network: FakeMiioNetwork, token: Data) { self.network = network; self.token = token }
     func setSilent(_ value: Bool, host: String) { if value { silent.insert(host) } else { silent.remove(host) } }
     func hold(_ host: String) { holds.insert(host) }
+    func setProperty(_ key: String, value: JSONValue, host: String) { network.device(host)?.props[key] = value }
     var heldCount: Int { waiters.values.reduce(0) { $0 + $1.count } }
     func release(_ host: String) {
         holds.remove(host)
