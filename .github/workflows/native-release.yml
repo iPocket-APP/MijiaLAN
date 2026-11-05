@@ -200,6 +200,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+      actions: read
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -214,6 +215,10 @@ jobs:
         with:
           name: native-release-universal
           path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: native-update-feed
+          path: updates
       - name: Publish verified assets
         run: |
           if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
@@ -221,7 +226,8 @@ jobs:
           else
             [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
           fi
-          (cd dist && sha256sum --check SHA256SUMS.txt)
+          cp updates/appcast.xml dist/native-appcast.xml
+          (cd dist && sha256sum native-appcast.xml >> SHA256SUMS.txt && sha256sum --check SHA256SUMS.txt)
           stem="MijiaLAN-$RELEASE_VERSION-universal"
           state="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
           if [[ "$state" == false ]]; then
@@ -235,8 +241,8 @@ jobs:
             gh release edit "$RELEASE_TAG" --target "$GITHUB_SHA" \
               --title "MijiaLAN $RELEASE_VERSION" --notes-file "docs/releases/$RELEASE_TAG.md"
           fi
-          gh release upload "$RELEASE_TAG" "dist/$stem.dmg" "dist/$stem.zip" dist/SHA256SUMS.txt --clobber
-          [[ "$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')" == 3 ]]
+          gh release upload "$RELEASE_TAG" "dist/$stem.dmg" "dist/$stem.zip" dist/native-appcast.xml dist/SHA256SUMS.txt --clobber
+          [[ "$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')" == 4 ]]
           gh release edit "$RELEASE_TAG" --draft=false --latest
           gh release view "$RELEASE_TAG" --json url --jq '.url' >> "$GITHUB_STEP_SUMMARY"
 

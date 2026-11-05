@@ -2,7 +2,7 @@
 
 原生客户端继续读取 `https://mijialan-updates.ipocket.xyz/appcast.xml`，原生签名公钥和客户端配置不变。Rust 客户端分别读取 `/rs/macos-arm64/appcast.xml`、`/rs/macos-x86_64/appcast.xml`、`/rs/windows-x86_64/appcast.xml`，并使用独立 Rust 更新公钥。
 
-`update-site.json` 只包含域名、仓库和两套公钥，不含私钥。`scripts/update_site.py` 从已公开的 Release 附件重建完整站点，验证签名、长度、版本和平台路径。Rust feed bundle 同样有独立 Ed25519 签名，只有其三个规定的路径可以进入站点。各平台保留自己的最新更新；原生与 Rust 不会互相覆盖。
+`update-site.json` 只包含域名、仓库和两套公钥，不含私钥。`scripts/update_site.py` 从已公开的 Release 附件重建完整站点，验证签名、长度、版本和平台路径。后续原生 Release 保存 `native-appcast.xml` 快照，旧版兼容现有线上根源；即使部署排队被替代，其他发布也能从公开 Release 恢复最新原生源。Rust feed bundle 同样有独立 Ed25519 签名，只有其三个规定的路径可以进入站点。各平台保留自己的最新更新；原生与 Rust 不会互相覆盖。
 
 `native-release.yml`、`native-update-feed.yml` 和新增 `shared-update-site.yml` 使用相同的部署并发组，在锁内收集全部更新源。原生发布传入本次已经验证的根 appcast；Rust 发布后通过 Actions API 请求 main 的 `Refresh shared update feeds`，等待实际部署与公开路径验证完成。Pages 环境继续由 main 使用。
 

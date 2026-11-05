@@ -36,7 +36,7 @@ class SharedSiteTests(unittest.TestCase):
         path.write_bytes(content)
 
     def feed(self, tag, platform, build):
-        version = '0.1.6' if platform == 'native' else '0.1.0'
+        version = tag[1:] if platform == 'native' else '0.1.0'
         extension = 'msi' if platform.startswith('windows') else 'zip'
         name = f'MijiaLAN-{version}-universal.zip' if platform == 'native' else f'MijiaLAN-rs-{version}-b{build}-{platform}.{extension}'
         url = f'https://github.com/iPocket-APP/MijiaLAN/releases/download/{tag}/{name}'
@@ -98,6 +98,20 @@ class SharedSiteTests(unittest.TestCase):
         for relative in ['appcast.xml', *(f'rs/{p}/appcast.xml' for p in site.PLATFORMS)]:
             self.assertEqual((first / relative).read_bytes(), (second / relative).read_bytes())
         self.assertEqual((second / 'appcast.xml').read_bytes(), native)
+
+    def test_a_superseded_native_deployment_does_not_lose_a_new_public_release(self):
+        older = self.feed('v0.1.6', 'native', 6)
+        self.files[self.settings['origin'] + '/appcast.xml'] = older
+        newer = self.feed('v0.1.7', 'native', 7)
+        url = 'https://github.com/iPocket-APP/MijiaLAN/releases/download/v0.1.7/native-appcast.xml'
+        self.files[url] = newer
+        self.releases['v0.1.7']['assets'].append(dict(name='native-appcast.xml', size=len(newer), browser_download_url=url))
+        stale = self.root / 'older-native.xml'
+        stale.write_bytes(older)
+        self.bundle(12, site.PLATFORMS)
+        site.assemble(self.root / 'site', stale)
+        self.assertEqual((self.root / 'site/appcast.xml').read_bytes(), newer)
+        self.assertTrue((self.root / 'site/rs/windows-x86_64/appcast.xml').exists())
 
     def test_foreign_bundle_paths_or_untrusted_signatures_stage_nothing(self):
         native = self.feed('v0.1.6', 'native', 6)
