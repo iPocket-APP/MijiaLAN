@@ -193,6 +193,22 @@ def main():
             prompt = check.probe_json('press', 'all', 'Open', '打开')
             if prompt.get('pressed') or (check.pid(executable) and 'Cancel' not in prompt.get('buttons', [])):
                 break
+        if not (prompt and prompt.get('pressed')):
+            # The prompt is not in the accessibility tree on macOS 15; its Open button sits at the right of its foot.
+            dialog = None
+            for _ in range(10):
+                windows = check.probe_json('onscreen').get('windows', [])
+                report['onscreenDuringPrompt'] = windows
+                dialog = next((w for w in windows if 'CoreServicesUIAgent' in str(w.get('owner'))), None)
+                if dialog:
+                    break
+                time.sleep(1)
+            if dialog:
+                check.screenshot('prompt.png')
+                b = dialog['bounds']
+                run(check.probe, 'click', b['X'] + b['Width'] * 0.728, b['Y'] + b['Height'] * 0.886)
+                prompt = dict(prompt or {}, clicked=b)
+                time.sleep(2)
         report['gatekeeperPrompt'] = prompt
         check.screenshot('gatekeeper.png')
         check.started = time.time()

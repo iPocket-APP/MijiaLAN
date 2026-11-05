@@ -1,5 +1,6 @@
 // Reads what a process has on screen and acts like a person, for install checks on hosted runners.
 //   window_probe windows <pid>            the process's windows (layer, bounds, alpha) and the displays, as JSON
+//   window_probe onscreen                 every on-screen window with its owner's name, as JSON
 //   window_probe statusitems <pid>        the process's menu-bar items, read through Accessibility, as JSON
 //   window_probe press <pid|all> <title>...  presses the first button with one of these titles in the process's
 //                                         windows, or in those of any process with a window on screen
@@ -45,6 +46,12 @@ case "windows":
                 "x": bounds.minX, "y": bounds.minY, "width": bounds.width, "height": bounds.height]
     }
     emit(["windows": windows, "displays": displays])
+case "onscreen":
+    let all = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+    emit(["windows": all.map { window in
+        ["owner": window[kCGWindowOwnerName as String] ?? "", "pid": window[kCGWindowOwnerPID as String] ?? 0,
+         "layer": window[kCGWindowLayer as String] ?? 0, "bounds": window[kCGWindowBounds as String] ?? [:]]
+    }])
 case "statusitems":
     // macOS 26 hosts menu-bar icons outside the app's own windows; Accessibility sees them on every version.
     guard arguments.count == 2, let pid = Int32(arguments[1]) else { exit(2) }
