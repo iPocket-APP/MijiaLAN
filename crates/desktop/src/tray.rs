@@ -14,6 +14,7 @@ pub enum Command {
         y: f64,
     },
     Settings,
+    CheckForUpdates,
     Quit,
 }
 pub struct Tray {
@@ -26,13 +27,16 @@ pub fn create() -> anyhow::Result<Tray> {
     let open = MenuItem::new(t("打开 MijiaLAN Rust"), true, None);
     let quit = MenuItem::new(t("退出"), true, None);
     let settings = MenuItem::new(t("设置…"), true, None);
+    let updates = MenuItem::new(t("检查更新…"), true, None);
     menu.append(&open)?;
     menu.append(&settings)?;
+    menu.append(&updates)?;
     menu.append(&quit)?;
     let (sender, receiver) = async_channel::unbounded();
     let open_id = open.id().clone();
     let quit_id = quit.id().clone();
     let settings_id = settings.id().clone();
+    let updates_id = updates.id().clone();
     let events = sender.clone();
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
         if event.id == open_id {
@@ -41,6 +45,8 @@ pub fn create() -> anyhow::Result<Tray> {
             let _ = events.try_send(Command::Quit);
         } else if event.id == settings_id {
             let _ = events.try_send(Command::Settings);
+        } else if event.id == updates_id {
+            let _ = events.try_send(Command::CheckForUpdates);
         }
     }));
     let clicks = sender.clone();

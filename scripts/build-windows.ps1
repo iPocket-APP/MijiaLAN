@@ -34,6 +34,11 @@ try {
     Copy-Item licenses (Join-Path $stage 'licenses') -Recurse
     Copy-Item docs (Join-Path $stage 'docs') -Recurse
     Copy-Item packaging/windows/START-HERE.txt $stage
+    if ($architecture -eq 'x86_64') {
+        $buildNumber = if ($env:MIJIALAN_BUILD_NUMBER) { $env:MIJIALAN_BUILD_NUMBER } else { '1' }
+        & python scripts/updates.py configure-windows $stage --version $version --build $buildNumber
+        if ($LASTEXITCODE -ne 0) { throw 'Updater packaging failed' }
+    }
     $licenseMetadata = Join-Path $scratch 'cargo-metadata.json'
     & cargo metadata --locked --format-version 1 --filter-platform $Target | Set-Content -Encoding utf8 $licenseMetadata
     if ($LASTEXITCODE -ne 0) { throw 'Cargo license metadata failed' }

@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
-# Build a signed, notarized Apple Silicon experience package. Does not publish it.
+# Build a signed, notarized macOS experience package. Does not publish it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
 source scripts/lib/notarization.sh
 [[ "$(uname -s)" == Darwin ]] || { echo "Run on a Mac" >&2; exit 1; }
-if [[ "$(uname -m)" != arm64 && "${MIJIALAN_MACOS_TARGET:-}" != aarch64-apple-darwin ]]; then
-  echo "Set MIJIALAN_MACOS_TARGET=aarch64-apple-darwin to build the Apple Silicon package on Intel" >&2
-  exit 1
-fi
-[[ "${MIJIALAN_MACOS_TARGET:-aarch64-apple-darwin}" == aarch64-apple-darwin ]] || { echo "This package requires the Apple Silicon target" >&2; exit 1; }
+arch="${MIJIALAN_MACOS_ARCH:-$(uname -m)}"
+[[ "$arch" == arm64 || "$arch" == x86_64 ]] || { echo "Unsupported Mac architecture" >&2; exit 1; }
 : "${MIJIALAN_SIGNING_IDENTITY:?Set a Developer ID Application signing identity}"
 [[ "$MIJIALAN_SIGNING_IDENTITY" != - ]] || { echo "Distribution requires Developer ID signing" >&2; exit 1; }
 if [[ -n "${APPLE_API_KEY_PATH:-}" ]]; then
@@ -29,7 +26,7 @@ staging="$release/staging"
 dist="$release/dist"
 logs="$release/logs"
 app="$staging/MijiaLAN.app"
-name="MijiaLAN-rs-$version-b$build_number-macos-arm64"
+name="MijiaLAN-rs-$version-b$build_number-macos-$arch"
 mkdir -p "$staging" "$dist" "$logs"
 
 case "${1:-}" in
@@ -44,7 +41,9 @@ case "${1:-}" in
     cargo "${test_args[@]}" 2>&1 | tee "$logs/tests.log"
     MIJIALAN_BUILD_NUMBER="$build_number" MIJIALAN_APP_OUTPUT="$app" MIJIALAN_APP_NAME=MijiaLAN \
       bash scripts/build-macos.sh release 2>&1 | tee "$logs/bundle.log"
-    cargo metadata --locked --format-version 1 --filter-platform aarch64-apple-darwin > "$release/cargo-metadata.json"
+    rust_target=aarch64-apple-darwin
+    [[ "$arch" != x86_64 ]] || rust_target=x86_64-apple-darwin
+    cargo metadata --locked --format-version 1 --filter-platform "$rust_target" > "$release/cargo-metadata.json"
     python3 scripts/collect-cargo-licenses.py "$release/cargo-metadata.json" "$app/Contents/Resources/Licenses/Cargo"
     ;;
   --package-existing) echo "Packaging the existing signed app: $app" ;;
@@ -56,13 +55,13 @@ esac
 find "$app" -type d -exec chmod 755 {} +
 find "$app" -type f -exec chmod u=rwX,go=rX {} +
 # Notices are part of the sealed resources; sign again after adding them.
-codesign --force --sign "$MIJIALAN_SIGNING_IDENTITY" --options runtime --timestamp "$app"
+bash scripts/sign-macos.sh "$app" "$MIJIALAN_SIGNING_IDENTITY"
 
 [[ "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" == xyz.ipocket.MijiaLAN.Rust ]]
 [[ "$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")" == "$version" ]]
 [[ "$(plutil -extract CFBundleVersion raw "$app/Contents/Info.plist")" == "$build_number" ]]
 for binary in mijialan-rust mijia-rust; do
-  lipo "$app/Contents/MacOS/$binary" -verify_arch arm64
+  lipo "$app/Contents/MacOS/$binary" -verify_arch "$arch"
   codesign --verify --strict "$app/Contents/MacOS/$binary"
 done
 codesign --verify --deep --strict "$app"
@@ -86,7 +85,7 @@ ditto "$app" "$image_root/MijiaLAN.app"
 ln -sfn /Applications "$image_root/Applications"
 cp LICENSE THIRD_PARTY_NOTICES.md PRIVACY.md "$image_root/"
 cat > "$image_root/体验说明.txt" <<'NOTE'
-MijiaLAN · Rust 版 · Apple Silicon
+MijiaLAN · Rust 版
 
 将 MijiaLAN.app 拖入 Applications，或在磁盘映像中直接打开。
 本版本使用独立于 Swift 版的数据目录，保留此前 Rust 版导入的设备和配对资料。

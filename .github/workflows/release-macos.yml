@@ -60,9 +60,17 @@ jobs:
 
   macos:
     needs: source
-    runs-on: ${{ vars.MIJIALAN_MACOS_RUNNER || 'macos-26' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-26
+          - arch: x86_64
+            runner: macos-26-intel
+    runs-on: ${{ matrix.runner }}
     concurrency:
-      group: mijialan-macos-signing
+      group: mijialan-macos-signing-${{ matrix.arch }}
       cancel-in-progress: false
     environment: macos-release
     timeout-minutes: 60
@@ -71,6 +79,7 @@ jobs:
         shell: bash
     env:
       MIJIALAN_BUILD_NUMBER: ${{ needs.source.outputs.build_number }}
+      MIJIALAN_MACOS_ARCH: ${{ matrix.arch }}
       MIJIALAN_SIGNING_IDENTITY: ${{ vars.MIJIALAN_SIGNING_IDENTITY }}
       APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
       APPLE_API_ISSUER_ID: ${{ vars.APPLE_API_ISSUER_ID }}
@@ -86,13 +95,13 @@ jobs:
       - name: Download validated macOS binary
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
-          name: MijiaLAN-Rust-macOS-arm64
+          name: MijiaLAN-Rust-macOS-${{ matrix.arch }}
           path: build/ci-input
           run-id: ${{ needs.source.outputs.run_id }}
           github-token: ${{ github.token }}
       - name: Select signing tools
         run: |
-          [[ "$(uname -m)" == arm64 ]] || { echo 'Use an Apple Silicon signing runner' >&2; exit 1; }
+          [[ "$(uname -m)" == "$MIJIALAN_MACOS_ARCH" ]] || { echo 'Signing runner architecture mismatch' >&2; exit 1; }
           export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
           echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
           xcrun notarytool --version
@@ -107,7 +116,7 @@ jobs:
           SOURCE_SHA: ${{ needs.source.outputs.source_sha }}
           VERSION: ${{ needs.source.outputs.version }}
         run: |
-          python3 scripts/ci/build_artifact.py prepare-mac --folder build/ci-input --source "$SOURCE_SHA" --build "$MIJIALAN_BUILD_NUMBER"
+          python3 scripts/ci/build_artifact.py prepare-mac --folder build/ci-input --source "$SOURCE_SHA" --build "$MIJIALAN_BUILD_NUMBER" --arch "$MIJIALAN_MACOS_ARCH"
           bash scripts/package-macos-release.sh --package-existing
           cli="build/releases/v$VERSION-rs.$MIJIALAN_BUILD_NUMBER/staging/MijiaLAN.app/Contents/MacOS/mijia-rust"
           "$cli" --help
@@ -119,7 +128,7 @@ jobs:
       - name: Upload signed distribution
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: signed-macos
+          name: signed-macos-${{ matrix.arch }}
           path: build/releases/v${{ needs.source.outputs.version }}-rs.${{ needs.source.outputs.build_number }}/dist/*
           if-no-files-found: error
           compression-level: 0
@@ -129,6 +138,7 @@ jobs:
   distribution:
     needs: [source, macos]
     runs-on: ubuntu-24.04
+    environment: macos-release
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -136,8 +146,12 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
-          name: signed-macos
-          path: build/signed-macos
+          name: signed-macos-arm64
+          path: build/signed-macos/arm64
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: signed-macos-x86_64
+          path: build/signed-macos/x86_64
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: MijiaLAN-Rust-Windows-x86_64
@@ -146,10 +160,14 @@ jobs:
           github-token: ${{ github.token }}
       - name: Verify and collect distribution
         env:
+          RUST_UPDATE_PRIVATE_KEY: ${{ secrets.RUST_UPDATE_PRIVATE_KEY }}
           SOURCE_SHA: ${{ needs.source.outputs.source_sha }}
           VERSION: ${{ needs.source.outputs.version }}
           BUILD: ${{ needs.source.outputs.build_number }}
-        run: python3 scripts/ci/release.py collect --source "$SOURCE_SHA" --version "$VERSION" --build "$BUILD" --windows build/windows-input --mac build/signed-macos
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends wixl
+          python3 scripts/ci/release.py collect --source "$SOURCE_SHA" --version "$VERSION" --build "$BUILD" --windows build/windows-input --mac build/signed-macos
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: MijiaLAN-rs-${{ needs.source.outputs.version }}-b${{ needs.source.outputs.build_number }}-preview
@@ -183,3 +201,21 @@ jobs:
           BUILD: ${{ needs.source.outputs.build_number }}
           BUILD_RUN: ${{ needs.source.outputs.run_id }}
         run: python3 scripts/ci/release.py publish --source "$SOURCE_SHA" --version "$VERSION" --build "$BUILD" --run "$BUILD_RUN"
+
+  refresh-updates:
+    needs: [source, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.source_sha }}
+          persist-credentials: false
+      - name: Refresh and verify the shared domain from main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.source.outputs.tag }}
+        run: python3 scripts/ci/release.py refresh-site --tag "$RELEASE_TAG"

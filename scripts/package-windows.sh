@@ -24,6 +24,7 @@ done
 cp LICENSE README.md PRIVACY.md THIRD_PARTY_NOTICES.md "$stage/"
 cp -R licenses "$stage/licenses"
 cp -R docs "$stage/docs"
+python3 scripts/updates.py configure-windows "$stage" --version "$version" --build "${MIJIALAN_BUILD_NUMBER:-1}"
 # GNU test builds must remain self-contained if a native library needs these DLLs.
 if command -v x86_64-w64-mingw32-objdump >/dev/null; then
   # Inspect both binaries and any copied runtime's dependencies.

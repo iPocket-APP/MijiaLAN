@@ -9,3 +9,5 @@
 CLI 输出和错误不包含 Token；但设备名称、IP、ID 和状态也可能是私密信息，分享诊断记录前请自行检查。扫码二维码和 HomeKit 配对码也应视为凭据，不要公开发布。
 
 应用没有自建云服务、遥测或广告 SDK。退出应用会停止桥接；面板收起时后台功能继续运行。
+
+正式桌面包通过 `mijialan-updates.ipocket.xyz` 检查 Rust 版更新，更新包从 GitHub Releases 下载。macOS 使用 Sparkle，Windows MSI 安装版使用 WinSparkle；两者会验证更新包的 Ed25519 签名。可以在设置中关闭自动检查，安装更新前会提示确认。更新检查不发送设备清单、Token 或 HomeKit 配对信息；演示、预览和 CLI 不检查更新。Windows 便携版保留手动更新方式。

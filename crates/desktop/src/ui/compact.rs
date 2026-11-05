@@ -2948,6 +2948,84 @@ impl Dashboard {
                 ),
             ),
         );
+        let updater = cx.global::<crate::updater::Updater>();
+        let updates_enabled = updater.enabled();
+        let can_check = updater.can_check();
+        let automatically_checks = updater.automatically_checks();
+        let update_description = if updates_enabled {
+            l(
+                "仅更新 Rust 版；安装前会提示确认。",
+                "Rust updates only. Installation requires confirmation.",
+            )
+        } else {
+            updater.reason().to_string()
+        };
+        body = body.child(divider(p)).child(
+            section(l("软件更新", "Software Update"), p).child(
+                group(p)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .px(px(12.))
+                            .py(px(11.))
+                            .child(label(
+                                format!("MijiaLAN · Rust {}", env!("CARGO_PKG_VERSION")),
+                                13.,
+                                p.primary,
+                            ))
+                            .child(
+                                self.compact_button(
+                                    "check-updates",
+                                    l("检查更新…", "Check for Updates…"),
+                                    p,
+                                    false,
+                                )
+                                .when(!can_check, |button| button.opacity(0.5))
+                                .when(can_check, |button| {
+                                    button.on_click(|_, _, cx| crate::updater::check(cx))
+                                }),
+                            ),
+                    )
+                    .when(updates_enabled, |group| {
+                        group.child(divider(p).mx(px(12.))).child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .px(px(12.))
+                                .py(px(11.))
+                                .child(label(
+                                    l("自动检查更新", "Automatically Check for Updates"),
+                                    13.,
+                                    p.primary,
+                                ))
+                                .child(
+                                    self.compact_toggle(
+                                        "automatic-updates",
+                                        automatically_checks,
+                                        true,
+                                        false,
+                                        p,
+                                    )
+                                    .on_click(|_, _, cx| {
+                                        let updater = cx.global::<crate::updater::Updater>();
+                                        updater.set_automatically_checks(
+                                            !updater.automatically_checks(),
+                                        );
+                                        cx.refresh_windows();
+                                    }),
+                                ),
+                        )
+                    })
+                    .child(
+                        label(update_description, 11., p.secondary)
+                            .px(px(12.))
+                            .pb(px(11.)),
+                    ),
+            ),
+        );
         body.child(divider(p))
             .child(
                 div()

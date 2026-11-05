@@ -31,6 +31,14 @@ pub fn text(value: impl AsRef<str>) -> String {
         }
         "设备" => "Devices",
         "设置…" => "Settings…",
+        "检查更新…" => "Check for Updates…",
+        "演示和预览模式不检查更新" => "Updates are disabled in demo and preview modes",
+        "请安装正式发布包以启用自动更新" => {
+            "Install the official app bundle or Windows MSI to enable updates"
+        }
+        "此平台暂不支持应用内更新" => {
+            "In-app updates are not available on this platform yet"
+        }
         "打开 MijiaLAN Rust" => "Open MijiaLAN Rust",
         "退出" => "Quit",
         "退出 MijiaLAN Rust" => "Quit MijiaLAN Rust",

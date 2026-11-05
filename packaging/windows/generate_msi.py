@@ -6,8 +6,17 @@ from pathlib import Path
 import sys
 import uuid
 import xml.etree.ElementTree as ET
+import json
 
 stage, version, output = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
+metadata = json.loads((stage / 'mijialan-update.json').read_text())
+if metadata['product'] != 'mijialan-rs' or metadata['version'] != version:
+    raise ValueError('Installer payload identity does not match its version')
+build = metadata['build']
+major, minor, _ = map(int, version.split('.'))
+if type(build) is not int or not 1 <= build <= 65535 or not (0 <= major <= 255 and 0 <= minor <= 255):
+    raise ValueError('Version or build does not fit MSI version limits')
+msi_version = f'{major}.{minor}.{build}'
 namespace = uuid.uuid5(uuid.NAMESPACE_DNS, "xyz.ipocket.MijiaLAN.Rust.windows.x64")
 schema = "http://schemas.microsoft.com/wix/2006/wi"
 ET.register_namespace("", schema)
@@ -24,7 +33,7 @@ def stable_id(prefix, relative):
 root = ET.Element(f"{{{schema}}}Wix")
 product = child(
     root, "Product", Id="*", Name="MijiaLAN Rust", Language="1033",
-    Version=version, Manufacturer="iPocket",
+    Version=msi_version, Manufacturer="iPocket",
     UpgradeCode=str(namespace).upper(),
 )
 child(product, "Package", InstallerVersion="500", Compressed="yes",
@@ -33,8 +42,8 @@ child(product, "Package", InstallerVersion="500", Compressed="yes",
 upgrade = child(product, "Upgrade", Id=str(namespace).upper())
 # Find existing test builds of the same version too. The separate detection
 # rule and launch condition below prevent downgrading a newer version.
-child(upgrade, "UpgradeVersion", Minimum="0.0.0", Property="PREVIOUSVERSIONS")
-child(upgrade, "UpgradeVersion", Minimum=version, IncludeMinimum="no",
+child(upgrade, "UpgradeVersion", Minimum="0.0.0", Maximum=msi_version, IncludeMaximum="yes", Property="PREVIOUSVERSIONS")
+child(upgrade, "UpgradeVersion", Minimum=msi_version, IncludeMinimum="no",
       OnlyDetect="yes", Property="NEWERPRODUCTFOUND")
 condition = child(product, "Condition", Message="A newer version of MijiaLAN Rust is already installed.")
 condition.text = "NOT NEWERPRODUCTFOUND"
@@ -89,6 +98,8 @@ child(menu_component, "Shortcut", Id="LaunchDemo", Name="MijiaLAN Rust Demo",
       Target="[INSTALLDIR]mijialan-rust.exe", Arguments="--demo", WorkingDirectory="INSTALLDIR")
 child(menu_component, "RegistryValue", Root="HKCU", Key=registry_key,
       Name="Shortcuts", Type="integer", Value="1", KeyPath="yes")
+child(menu_component, "RegistryValue", Root="HKCU", Key=registry_key,
+      Name="InstallPath", Type="string", Value="[INSTALLDIR]")
 child(menu_component, "RemoveFolder", Id="RemoveMenu", On="uninstall")
 components.append("MenuShortcuts")
 feature = child(product, "Feature", Id="Application", Title="MijiaLAN Rust", Level="1")

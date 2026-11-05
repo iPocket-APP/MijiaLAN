@@ -10,6 +10,7 @@ mod menu_selection;
 mod panel_placement;
 mod tray;
 mod ui;
+mod updater;
 #[cfg(target_os = "windows")]
 mod windows_icons;
 #[cfg(target_os = "windows")]
@@ -33,6 +34,7 @@ actions!(
         Refresh,
         AddDevice,
         Settings,
+        CheckForUpdates,
         Dismiss,
         Back,
         LanguageSystem,
@@ -133,6 +135,13 @@ fn trace_panel(event: &str) {
     }
 }
 fn run() -> anyhow::Result<()> {
+    if std::env::args().any(|arg| arg == "--updater-smoke") {
+        updater::smoke()?;
+        println!(
+            "Bundled Rust updater loaded successfully; no update check or device access performed"
+        );
+        return Ok(());
+    }
     trace_panel("startup_engine");
     let demo = std::env::args().any(|a| a == "--demo");
     let engine = Arc::new(if demo {
@@ -180,6 +189,20 @@ fn run() -> anyhow::Result<()> {
             "zh-CN"
         });
         cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
+        cx.on_action(|_: &CheckForUpdates, cx: &mut App| updater::check(cx));
+        #[cfg(target_os = "windows")]
+        cx.spawn(async move |cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(250))
+                    .await;
+                if updater::take_shutdown_request() {
+                    let _ = cx.update(|cx| cx.quit());
+                    break;
+                }
+            }
+        })
+        .detach();
         cx.bind_keys([
             KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("ctrl-q", Quit, None),
@@ -387,6 +410,7 @@ fn run() -> anyhow::Result<()> {
             }
         };
         let show: Rc<dyn Fn(&mut App)> = Rc::new(reopen);
+        cx.set_global(updater::Updater::start(demo));
         if let Some(receiver) = receiver {
             let show = show.clone();
             cx.spawn(async move |cx| {
@@ -430,6 +454,7 @@ fn run() -> anyhow::Result<()> {
                             show(cx);
                         }
                         tray::Command::Quit => cx.quit(),
+                        tray::Command::CheckForUpdates => updater::check(cx),
                     });
                 }
             })
@@ -471,6 +496,7 @@ fn install_menus(cx: &mut App) {
             name: "MijiaLAN Rust".into(),
             items: vec![
                 MenuItem::action(t("设置…"), Settings),
+                MenuItem::action(t("检查更新…"), CheckForUpdates),
                 MenuItem::submenu(Menu {
                     name: "语言 / Language".into(),
                     items: vec![

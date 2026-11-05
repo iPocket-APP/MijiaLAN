@@ -70,12 +70,11 @@ if [[ "${2:-}" == preview ]]; then
   plutil -replace CFBundleDisplayName -string "MijiaLAN Rust Preview" "$bundle/Contents/Info.plist"
 fi
 plutil -lint "$bundle/Contents/Info.plist"
-if [[ "$signing_identity" == - ]]; then
-  codesign --force --sign - --timestamp=none "$bundle/Contents/MacOS/mijia-rust"
-  codesign --force --sign - --timestamp=none "$bundle"
-else
-  codesign --force --sign "$signing_identity" --options runtime --timestamp "$bundle/Contents/MacOS/mijia-rust"
-  codesign --force --sign "$signing_identity" --options runtime --timestamp "$bundle"
+if [[ "${2:-}" != preview ]]; then
+  arch="$(uname -m)"
+  [[ "$macos_target" != aarch64-apple-darwin ]] || arch=arm64
+  [[ "$macos_target" != x86_64-apple-darwin ]] || arch=x86_64
+  python3 scripts/updates.py configure-mac "$bundle" --arch "$arch"
 fi
-codesign --verify --strict "$bundle"
+bash scripts/sign-macos.sh "$bundle" "$signing_identity"
 echo "$bundle"

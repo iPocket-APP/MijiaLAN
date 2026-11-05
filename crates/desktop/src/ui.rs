@@ -1231,6 +1231,12 @@ impl Dashboard {
                 "凭据保存在本项目独立的系统凭据存储中。扫码登录会话不持久化。",
             )))
             .child(
+                Button::new("desktop-check-updates")
+                    .label(t("检查更新…"))
+                    .disabled(!cx.global::<crate::updater::Updater>().can_check())
+                    .on_click(|_, _, cx| crate::updater::check(cx)),
+            )
+            .child(
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)

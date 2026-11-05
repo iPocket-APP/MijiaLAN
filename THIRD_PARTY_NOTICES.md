@@ -6,6 +6,8 @@
 - **homebridge-miot** — MIT. Native HomeKit category mapping follows the rules already ported into MijiaLAN, with independent Rust implementation. See `licenses/homebridge-miot/`.
 
 - **GPUI 0.2.2**, **GPUI Component / Assets 0.5.1** — Apache-2.0. GPU rendering, widgets and widget SVG icons. GPUI is vendored with Windows Debug shader packaging, popup-frame and tray-lifecycle patches; see `vendor/gpui/PATCHES.md` and `licenses/gpui/`.
+- **Sparkle 2.10.1** — MIT. The macOS updater is bundled as `Contents/Frameworks/Sparkle.framework`; its notices and bundled component licenses are retained with the framework.
+- **WinSparkle 0.9.4** — MIT, copyright Václav Slavík and contributors. The Windows MSI updater bundles the upstream DLL; its notices and wxWidgets license are retained under `licenses/WinSparkle/` in Windows packages.
 - **xattr 0.2.3** — MIT OR Apache-2.0, copyright Steven Allen. Vendored with a Linux/Android `ENOATTR` compatibility alias to `ENODATA`; the macOS/BSD behavior is unchanged. See `licenses/xattr/` and `vendor/xattr/PATCHES.md`.
 - **hap-crypto 1.4.0** — Apache-2.0. The HAP-compatible SRP server helper is used; the application implements the accessory pairing orchestration and transport. The independent controller implementation is also used for interoperability tests.
 - **RustCrypto**, **ed25519-dalek**, **x25519-dalek**, **mdns-sd**, **reqwest**, **keyring**, **tray-icon**, **keepawake**, **qrcode**, and other Cargo dependencies retain their individual licenses. Exact resolved versions are recorded in `Cargo.lock`.

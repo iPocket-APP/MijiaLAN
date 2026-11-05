@@ -56,7 +56,8 @@ def record(args):
 
 
 def prepare_mac(args):
-    _, archive = verify(args.folder, args.source, 'aarch64-apple-darwin', os.environ['GITHUB_REPOSITORY'])
+    target = 'aarch64-apple-darwin' if args.arch == 'arm64' else 'x86_64-apple-darwin'
+    _, archive = verify(args.folder, args.source, target, os.environ['GITHUB_REPOSITORY'])
     version = tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
     release = Path(f'build/releases/v{version}-rs.{args.build}').resolve()
     stage = release / 'staging'
@@ -70,7 +71,7 @@ def prepare_mac(args):
         raise ValueError('Unexpected application identity or version')
     for name in ['mijialan-rust', 'mijia-rust']:
         binary = app / 'Contents/MacOS' / name
-        subprocess.run(['lipo', str(binary), '-verify_arch', 'arm64'], check=True)
+        subprocess.run(['lipo', str(binary), '-verify_arch', args.arch], check=True)
         subprocess.run(['codesign', '--force', '--sign', os.environ['MIJIALAN_SIGNING_IDENTITY'],
                         '--options', 'runtime', '--timestamp', str(binary)], check=True)
     info.update(CFBundleName='MijiaLAN', CFBundleDisplayName='MijiaLAN', CFBundleVersion=str(args.build))
@@ -79,7 +80,7 @@ def prepare_mac(args):
 
 
 def program_hash():
-    paths = ['crates', 'vendor', 'resources', 'Cargo.toml', 'Cargo.lock']
+    paths = ['crates', 'vendor', 'resources', 'Cargo.toml', 'Cargo.lock', 'updates.json']
     paths += [p for p in ['.cargo/config', '.cargo/config.toml'] if Path(p).exists()]
     identities = [subprocess.check_output(['git', 'rev-parse', 'HEAD:' + p], text=True).strip() for p in paths]
     return hashlib.sha256('\n'.join(identities).encode()).hexdigest()
@@ -124,7 +125,7 @@ def freshness():
     marker = Path('target/ci-source.json')
     cached = json.loads(marker.read_text()) if marker.exists() else {}
     if cached.get('program') == program_hash():
-        normalize(tracked('crates', 'vendor', 'resources', 'Cargo.toml', 'Cargo.lock', '.cargo'))
+        normalize(tracked('crates', 'vendor', 'resources', 'Cargo.toml', 'Cargo.lock', 'updates.json', '.cargo'))
         print('Exact compiler-input content match; preserving Cargo freshness for unchanged sources')
     else:
         print('Compiler inputs changed or no source marker; normal Cargo rebuilds remain enabled')
@@ -136,7 +137,7 @@ def matrix(platform):
         dict(os='macos-26', platform='macOS', arch='arm64', target='aarch64-apple-darwin', shell='bash', python='python3', jobs=1),
         dict(os='macos-26-intel', platform='macOS', arch='x86_64', target='x86_64-apple-darwin', shell='bash', python='python3', jobs=2),
     ]
-    selected = {'all': rows, 'release': rows[:2], 'windows': rows[:1], 'macos-arm64': rows[1:2], 'macos-intel': rows[2:]}[platform]
+    selected = {'all': rows, 'release': rows, 'windows': rows[:1], 'macos-arm64': rows[1:2], 'macos-intel': rows[2:]}[platform]
     with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
         f.write('matrix=' + json.dumps({'include': selected}) + '\n')
 
@@ -145,7 +146,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest='command', required=True)
     p = sub.add_parser('record'); p.add_argument('--folder', type=Path, default=Path('artifacts')); p.add_argument('--target', required=True); p.add_argument('--tests', type=Path, required=True)
-    p = sub.add_parser('prepare-mac'); p.add_argument('--folder', type=Path, required=True); p.add_argument('--source', required=True); p.add_argument('--build', type=int, required=True)
+    p = sub.add_parser('prepare-mac'); p.add_argument('--folder', type=Path, required=True); p.add_argument('--source', required=True); p.add_argument('--build', type=int, required=True); p.add_argument('--arch', choices=['arm64', 'x86_64'], default='arm64')
     sub.add_parser('vendor')
     p = sub.add_parser('cache-keys'); p.add_argument('--target', required=True); p.add_argument('--compiler', required=True)
     sub.add_parser('freshness')

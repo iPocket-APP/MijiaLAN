@@ -1,6 +1,20 @@
 use std::{env, path::PathBuf, process::Command};
 
 fn main() {
+    println!("cargo:rerun-if-changed=../../updates.json");
+    let config: serde_json::Value = serde_json::from_slice(
+        &std::fs::read("../../updates.json").expect("Missing Rust update configuration"),
+    )
+    .expect("Invalid Rust update configuration");
+    for (name, key) in [
+        ("MIJIALAN_UPDATE_ORIGIN", "base_url"),
+        ("MIJIALAN_UPDATE_PUBLIC_KEY", "public_key"),
+    ] {
+        println!(
+            "cargo:rustc-env={name}={}",
+            config[key].as_str().expect("Missing updater setting")
+        );
+    }
     println!("cargo:rerun-if-changed=resources/windows/app.manifest");
     println!("cargo:rerun-if-changed=resources/windows/app.rc");
     println!("cargo:rerun-if-changed=resources/windows/app.ico");
