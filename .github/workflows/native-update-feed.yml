@@ -1,0 +1,77 @@
+name: Redeploy native update feed
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_run_id:
+        description: Successful Native signed release run for the current version
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: mijialan-update-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify the source release and its successful publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          sys.path.insert(0, 'scripts')
+          from release_metadata import metadata
+          identifier = os.environ['RELEASE_RUN_ID']
+          assert identifier.isascii() and identifier.isdigit(), 'Expected a numeric run ID'
+          def api(path):
+              return json.loads(subprocess.check_output(['gh', 'api', f"repos/{os.environ['GH_REPO']}/{path}"]))
+          run = api(f'actions/runs/{identifier}')
+          assert run['path'].split('@')[0] == '.github/workflows/native-release.yml'
+          assert run['head_repository']['full_name'] == os.environ['GH_REPO']
+          assert run['event'] in ('push', 'workflow_dispatch') and run['conclusion'] == 'success'
+          jobs = {job['name']: job['conclusion'] for job in api(f'actions/runs/{identifier}/jobs?per_page=100')['jobs']}
+          for name in ('package', 'publish', 'compatibility / macOS 15 (arm64)', 'compatibility / macOS 15 (x86_64)'):
+              assert jobs.get(name) == 'success', f'Missing successful {name}'
+          release = metadata()
+          tag = 'v' + release['version']
+          subprocess.run(['git', 'merge-base', '--is-ancestor', run['head_sha'], 'origin/main'], check=True)
+          assert subprocess.check_output(['git', 'rev-list', '-n', '1', tag], text=True).strip() == run['head_sha']
+          assert json.loads(subprocess.check_output(['git', 'show', run['head_sha'] + ':release.json'])) == release
+          published = api('releases/tags/' + tag)
+          assert not published['draft'] and not published['prerelease']
+          PY
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: native-update-feed
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+          path: updates
+      - name: Verify the published archive signature before deploying the feed
+        run: python3 scripts/sparkle_updates.py verify-public-feed updates/appcast.xml
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        with:
+          path: updates
+      - name: Deploy the existing signed feed without changing release assets
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5
