@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish the existing version tag after all package checks pass
+        description: Publish after all package checks pass, creating the version tag if needed
         type: boolean
         default: false
 
@@ -135,7 +135,11 @@ jobs:
           path: dist
       - name: Publish verified assets
         run: |
-          [[ "$(git rev-parse HEAD)" == "$(git rev-list -n 1 "$RELEASE_TAG")" ]]
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            [[ "$(git rev-parse HEAD)" == "$(git rev-list -n 1 "$RELEASE_TAG")" ]]
+          else
+            [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
+          fi
           (cd dist && sha256sum --check SHA256SUMS.txt)
           stem="MijiaLAN-$RELEASE_VERSION-universal"
           state="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
@@ -144,7 +148,10 @@ jobs:
             exit 1
           fi
           if [[ "$state" != true ]]; then
-            gh release create "$RELEASE_TAG" --draft --verify-tag --target "$GITHUB_SHA" \
+            gh release create "$RELEASE_TAG" --draft --target "$GITHUB_SHA" \
+              --title "MijiaLAN $RELEASE_VERSION" --notes-file "docs/releases/$RELEASE_TAG.md"
+          else
+            gh release edit "$RELEASE_TAG" --target "$GITHUB_SHA" \
               --title "MijiaLAN $RELEASE_VERSION" --notes-file "docs/releases/$RELEASE_TAG.md"
           fi
           gh release upload "$RELEASE_TAG" "dist/$stem.dmg" "dist/$stem.zip" dist/SHA256SUMS.txt --clobber

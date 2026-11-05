@@ -12,8 +12,9 @@ Native releases use `v<version>` tags. Rust uses a separate branch and `rs-` tag
   a release note at `docs/releases/v<version>.md`, and a source commit contained in `main`.
   It tests, signs, notarizes and staples a Universal app, ZIP and DMG. Both macOS 15
   startup checks must pass before a separate job publishes the three release files.
-- Manual dispatch on `main` defaults to packaging only. The optional `publish`
-  input also requires an existing version tag pointing to that source commit.
+- Manual dispatch on `main` defaults to packaging only. With `publish=true`,
+  the version tag is created only after signing and both startup checks pass.
+  If that tag already exists, it must point to the exact source commit being built.
 
 The signing job uses the repository's existing `macos-release` environment, shared
 with Rust. Its deployment rules must allow branch `main` and tags `v*`, in addition
