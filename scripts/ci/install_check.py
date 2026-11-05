@@ -4,6 +4,13 @@
 Steps: download the DMG and mark it as a browser download; assess it with Gatekeeper; copy the app to
 /Applications; open it; then look for the menu-bar icon, click it, and open the app again while it runs.
 Evidence (Gatekeeper output, windows, panel events, logs, crash reports, screenshots) goes to --evidence.
+
+Scenarios vary one thing a person's Mac may differ in:
+  standard    as above
+  gatekeeper  the copy keeps its quarantine, so the first open shows Gatekeeper's prompt, answered with Open
+  dmg         opened straight from the mounted image, so macOS runs it translocated
+  crowded     40 other menu-bar items are open first, so the menu bar has no room left for the icon
+  chinese     opened with Simplified Chinese as the language and region
 """
 
 import argparse
@@ -21,6 +28,7 @@ import uuid
 from pathlib import Path
 
 POPUP_LAYER = 101  # NSWindow.Level.popUpMenu: the native app's panel
+SCENARIOS = ('standard', 'gatekeeper', 'dmg', 'crowded', 'chinese')
 
 
 def run(*args, check=False, timeout=120):
@@ -39,7 +47,12 @@ class Check:
         self.evidence = evidence
         self.probe = probe
         self.report = {'macos': platform.mac_ver()[0], 'build': run('sw_vers', '-buildVersion').stdout.strip(),
-                       'architecture': platform.machine(), 'timeline': []}
+                       'architecture': platform.machine(), 'timeline': [],
+                       'environment': {'sip': captured(run('csrutil', 'status'))['output'],
+                                       'bootArgs': captured(run('nvram', 'boot-args'))['output'],
+                                       'model': run('sysctl', '-n', 'hw.model').stdout.strip(),
+                                       'cpu': run('sysctl', '-n', 'machdep.cpu.brand_string').stdout.strip(),
+                                       'translated': run('sysctl', '-n', 'sysctl.proc_translated').stdout.strip()}}
         self.started = time.time()
 
     def probe_json(self, *args):
@@ -50,7 +63,8 @@ class Check:
             return {'error': captured(result)}
 
     def pid(self, executable):
-        result = run('pgrep', '-f', f'^{executable}( |$)')
+        # By name: a translocated copy runs from a random path.
+        result = run('pgrep', '-x', Path(executable).name)
         pids = [int(p) for p in result.stdout.split()]
         return pids[0] if pids else None
 
@@ -58,6 +72,7 @@ class Check:
         pid = self.pid(executable)
         entry = {'label': label, 'seconds': round(time.time() - self.started, 1), 'pid': pid}
         if pid:
+            entry['path'] = run('ps', '-o', 'comm=', '-p', pid).stdout.strip()
             entry['windows'] = self.probe_json('windows', str(pid))
             entry['statusItems'] = self.probe_json('statusitems', str(pid)).get('items', [])
         self.report['timeline'].append(entry)
@@ -66,6 +81,15 @@ class Check:
 
     def screenshot(self, name):
         run('screencapture', '-x', self.evidence / name, timeout=30)
+
+
+def icon_on_screen(entry):
+    displays = (entry.get('windows') or {}).get('displays') or []
+    def shown(item):
+        return item.get('width', 0) > 0 and any(
+            d['x'] <= item['x'] + item['width'] / 2 <= d['x'] + d['width'] and d['y'] <= item['y'] < d['y'] + d['height']
+            for d in displays)
+    return any(shown(item) for item in entry.get('statusItems') or [])
 
 
 def panel_visible(entry):
@@ -95,11 +119,13 @@ def main():
     parser.add_argument('--probe', required=True, type=Path)
     parser.add_argument('--evidence', required=True, type=Path)
     parser.add_argument('--no-click', action='store_true', help='Do not post mouse events')
+    parser.add_argument('--scenario', choices=SCENARIOS, default='standard')
     args = parser.parse_args()
     args.evidence.mkdir(parents=True, exist_ok=True)
     check = Check(args.evidence.resolve(), args.probe.resolve())
     report = check.report
     report['tag'] = args.tag
+    report['scenario'] = args.scenario
     report['access'] = check.probe_json('access')
     report['displays'] = check.probe_json('windows', '0').get('displays')
     work = Path(tempfile.mkdtemp(prefix='install-check-'))
@@ -117,19 +143,25 @@ def main():
         mount.mkdir()
         run('hdiutil', 'attach', '-nobrowse', '-readonly', '-mountpoint', mount, image, check=True)
         source = next(mount.glob('*.app'))
-        app = Path('/Applications') / source.name
-        if app.exists():
-            shutil.rmtree(app)
-        run('ditto', source, app, check=True)
-        run('hdiutil', 'detach', mount, '-force')
-        # Finder carries the image's quarantine onto the copy.
-        run('xattr', '-w', 'com.apple.quarantine', quarantine, app, check=True)
+        if args.scenario == 'dmg':
+            app = source
+        else:
+            app = Path('/Applications') / source.name
+            if app.exists():
+                shutil.rmtree(app)
+            run('ditto', source, app, check=True)
+            run('hdiutil', 'detach', mount, '-force')
+            # Finder carries the image's quarantine onto the copy.
+            run('xattr', '-w', 'com.apple.quarantine', quarantine, app, check=True)
+        report['quarantine'] = captured(run('xattr', '-p', 'com.apple.quarantine', app))
         report['codesign'] = captured(run('codesign', '--verify', '--deep', '--strict', '-vv', app))
+        report['signature'] = captured(run('codesign', '--display', '--verbose=4', '--entitlements', '-', '--xml', app))
         report['appAssessment'] = captured(run('spctl', '--assess', '--type', 'execute', '-vv', app))
         if shutil.which('syspolicy_check'):
             report['syspolicyCheck'] = captured(run('syspolicy_check', 'distribution', app, timeout=300))
-        # The first-open confirmation needs a person; its verdict is the assessment above.
-        run('xattr', '-d', 'com.apple.quarantine', app)
+        if args.scenario in ('standard', 'crowded', 'chinese'):
+            # The first-open confirmation is the gatekeeper scenario's; here its verdict is the assessment above.
+            run('xattr', '-d', 'com.apple.quarantine', app)
 
     info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
     executable = str(app / 'Contents/MacOS' / info['CFBundleExecutable'])
@@ -139,11 +171,36 @@ def main():
     report['app']['architectures'] = run('lipo', '-archs', executable).stdout.split()
     report['app']['linked'] = run('otool', '-L', executable).stdout.splitlines()[1:]
 
+    filler = None
+    if args.scenario == 'crowded':
+        filler = subprocess.Popen([str(check.probe), 'fill', '40'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(4)
+        check.screenshot('crowded.png')
+
     panel_events = check.evidence / 'panel-events.json'
     check.started = time.time()
     since = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(check.started - 5))
     # Only diagnostics output is added; the profile, keychain and defaults are what a person gets.
-    report['open'] = captured(run('open', app, '--env', f'MIJIALAN_NAV_DIAGNOSTICS_OUTPUT={panel_events}'))
+    command = ['open', str(app), '--env', f'MIJIALAN_NAV_DIAGNOSTICS_OUTPUT={panel_events}']
+    if args.scenario == 'chinese':
+        command += ['--args', '-AppleLanguages', '(zh-Hans)', '-AppleLocale', 'zh_CN']
+    opener = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if args.scenario in ('gatekeeper', 'dmg'):
+        # A quarantined app waits for the person to confirm the first open.
+        prompt = None
+        for _ in range(20):
+            time.sleep(1)
+            agent = run('pgrep', '-x', 'CoreServicesUIAgent').stdout.split()
+            prompt = check.probe_json('press', agent[0], 'Open', '打开') if agent else None
+            if (prompt and prompt.get('pressed')) or (check.pid(executable) and not (prompt and prompt.get('buttons'))):
+                break
+        report['gatekeeperPrompt'] = prompt
+        check.screenshot('gatekeeper.png')
+        check.started = time.time()
+    try:
+        report['open'] = {'status': opener.wait(timeout=30), 'output': opener.stdout.read().strip()[-4000:]}
+    except subprocess.TimeoutExpired:
+        report['open'] = {'status': None, 'output': 'open was still waiting after 30 s'}
     for delay in (1, 3, 6, 10):
         time.sleep(max(0, check.started + delay - time.time()))
         launched = check.observe(f'launch+{delay}s', executable)
@@ -151,7 +208,7 @@ def main():
 
     clicked = None
     item = (launched.get('statusItems') or [None])[0]
-    if launched.get('pid') and item and not args.no_click:
+    if launched.get('pid') and icon_on_screen(launched) and not args.no_click:
         run(check.probe, 'click', item['x'] + item['width'] / 2, item['y'] + item['height'] / 2)
         time.sleep(2.5)
         clicked = check.observe('after icon click', executable)
@@ -175,6 +232,10 @@ def main():
         time.sleep(2)
         if check.pid(executable):
             run('kill', '-KILL', pid)
+    if filler:
+        filler.kill()
+    if opener.poll() is None:
+        opener.kill()
 
     name = info['CFBundleExecutable']
     logs = run('log', 'show', '--style', 'compact', '--info', '--debug', '--start', since, '--predicate',
@@ -193,7 +254,7 @@ def main():
     report['crashReports'] = crashes
 
     alive = bool(launched.get('pid'))
-    icon = bool(launched.get('statusItems'))
+    icon = icon_on_screen(launched)
     if not alive:
         verdict = 'exited right after opening'
     elif native and not icon:
@@ -205,6 +266,7 @@ def main():
     else:
         verdict = 'ok'
     report['result'] = {'verdict': verdict, 'stayedRunning': alive, 'menuBarIcon': icon,
+                        'menuBarItems': len(launched.get('statusItems') or []),
                         'panelOnClick': None if clicked is None else panel_visible(clicked),
                         'panelOnReopen': None if reopened is None else panel_visible(reopened)}
     (check.evidence / 'report.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
@@ -214,7 +276,7 @@ def main():
     if summary:
         r = report['result']
         with open(summary, 'a') as out:
-            out.write(f"### {args.tag or app.name} on macOS {report['macos']} ({report['architecture']})\n\n"
+            out.write(f"### {args.tag or app.name} · {args.scenario} on macOS {report['macos']} ({report['architecture']})\n\n"
                       f"**{verdict}**\n\n| Check | Result |\n|---|---|\n"
                       f"| Gatekeeper (app) | `{report.get('appAssessment', {}).get('output', '-').splitlines()[0] if report.get('appAssessment') else '-'}` |\n"
                       f"| Stayed running | {r['stayedRunning']} |\n| Menu-bar icon | {r['menuBarIcon']} |\n"

@@ -19,35 +19,75 @@ defaults:
     shell: bash
 
 jobs:
+  imports:
+    # Whether a release needs a system library or symbol that an earlier macOS 15 lacks: dyld would stop
+    # it before main(), leaving no process. The runner's older Xcodes carry the macOS 15.0–15.5 SDKs.
+    name: ${{ matrix.tag }} · imports vs macOS 15.x SDKs
+    runs-on: macos-15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: [v0.1.2, v0.1.3]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Check ${{ matrix.tag }} against each macOS 15 SDK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ matrix.tag }}
+        run: |
+          work="$RUNNER_TEMP/release"
+          mkdir -p "$work/mount" "$RUNNER_TEMP/evidence"
+          gh release download "$TAG" --pattern '*-universal.dmg' --dir "$work"
+          hdiutil attach -nobrowse -readonly -mountpoint "$work/mount" "$work"/*.dmg
+          sdks=()
+          for sdk in /Applications/Xcode*.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX*.sdk; do
+            real=$(realpath "$sdk")
+            echo "$sdk -> $real"
+            case "$real" in */MacOSX15.*.sdk) sdks+=(--sdk "$real") ;; esac
+          done
+          lipo -archs "$work"/mount/*.app/Contents/MacOS/*
+          python3 -I scripts/ci/check_imports.py "$work"/mount/*.app "${sdks[@]}" --report "$RUNNER_TEMP/evidence/imports.json"
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: imports-${{ matrix.tag }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/evidence/
+          if-no-files-found: ignore
+          retention-days: 14
+
   install:
-    name: ${{ matrix.tag }} · ${{ matrix.runner }}
+    name: ${{ matrix.tag }} · ${{ matrix.scenario }} · ${{ matrix.runner }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-15, macos-15-intel, macos-26]
-        tag: [v0.1.1, v0.1.2, v0.1.3]
-        include:
-          - { runner: macos-15, tag: rs-v0.1.0-b11 }
-          - { runner: macos-26, tag: rs-v0.1.0-b11 }
+        runner: [macos-15, macos-15-intel]
+        tag: [v0.1.3]
+        scenario: [standard, gatekeeper, dmg, crowded, chinese]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
       - name: Build the window probe
         run: xcrun swiftc -O scripts/ci/window_probe.swift -o "$RUNNER_TEMP/window_probe"
-      - name: Install and open ${{ matrix.tag }}
+      - name: Install and open ${{ matrix.tag }} (${{ matrix.scenario }})
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ matrix.tag }}
-        run: python3 scripts/ci/install_check.py --tag "$TAG" --probe "$RUNNER_TEMP/window_probe" --evidence "$RUNNER_TEMP/evidence"
+          SCENARIO: ${{ matrix.scenario }}
+        run: python3 scripts/ci/install_check.py --tag "$TAG" --scenario "$SCENARIO" --probe "$RUNNER_TEMP/window_probe" --evidence "$RUNNER_TEMP/evidence"
       - name: Preserve evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: install-${{ matrix.tag }}-${{ matrix.runner }}-attempt${{ github.run_attempt }}
+          name: install-${{ matrix.tag }}-${{ matrix.scenario }}-${{ matrix.runner }}-attempt${{ github.run_attempt }}
           path: ${{ runner.temp }}/evidence/
           if-no-files-found: ignore
           retention-days: 14
