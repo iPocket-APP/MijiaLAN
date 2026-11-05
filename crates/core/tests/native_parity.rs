@@ -361,6 +361,31 @@ fn a_completed_read_does_not_restore_a_device_removed_while_it_was_pending() {
     assert!(engine.state("77").is_none());
     assert!(engine.store.config().devices.is_empty());
 }
+
+#[test]
+fn missing_credentials_publish_an_offline_reason_before_any_network_request() {
+    let store = Arc::new(Store::memory());
+    store.cache_spec("test.light.poll", SPEC).unwrap();
+    store
+        .update(|c| {
+            c.devices.push(Device {
+                did: "77".into(),
+                name: "Missing credentials".into(),
+                model: "test.light.poll".into(),
+                host: Ipv4Addr::LOCALHOST,
+                room: String::new(),
+                port: 54321,
+                bridged: true,
+            })
+        })
+        .unwrap();
+    let engine = Engine::new(store, false);
+    assert!(engine.refresh("77").is_err());
+    let state = engine.state("77").unwrap();
+    assert!(!state.online);
+    assert!(state.error.is_some_and(|s| !s.is_empty()));
+    assert_eq!(state.revision, 1);
+}
 #[test]
 fn oversized_result_codes_and_wrapped_property_ids_cannot_be_accepted() {
     for code in [json!(1e300), json!(u64::MAX), json!("0"), Value::Null] {

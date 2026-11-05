@@ -314,7 +314,9 @@ impl Engine {
                 .ok_or_else(|| Error::Validation("设备不存在".into()));
         }
         let device = self.device(did)?;
-        let client = self.client(&device)?;
+        let client = self
+            .client(&device)
+            .inspect_err(|error| self.mark_unavailable(did, error))?;
         // Keep I/O and its publication in the same per-device order. Otherwise
         // an old failed read can publish after a successful command/recovery.
         let mut client = client.lock().unwrap();
@@ -394,13 +396,16 @@ impl Engine {
                 Ok(state)
             }
             Err(error) => {
-                if let Some(state) = self.states.write().unwrap().get_mut(did) {
-                    state.online = false;
-                    state.error = Some(error.to_string());
-                    state.revision += 1;
-                }
+                self.mark_unavailable(did, &error);
                 Err(error)
             }
+        }
+    }
+    fn mark_unavailable(&self, did: &str, error: &Error) {
+        if let Some(state) = self.states.write().unwrap().get_mut(did) {
+            state.online = false;
+            state.error = Some(error.to_string());
+            state.revision += 1;
         }
     }
     pub fn write(&self, did: &str, key: &str, value: Value) -> Result<()> {
