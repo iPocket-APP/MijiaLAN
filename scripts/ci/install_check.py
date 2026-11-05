@@ -190,9 +190,8 @@ def main():
         prompt = None
         for _ in range(20):
             time.sleep(1)
-            agent = run('pgrep', '-x', 'CoreServicesUIAgent').stdout.split()
-            prompt = check.probe_json('press', agent[0], 'Open', '打开') if agent else None
-            if (prompt and prompt.get('pressed')) or (check.pid(executable) and not (prompt and prompt.get('buttons'))):
+            prompt = check.probe_json('press', 'all', 'Open', '打开')
+            if prompt.get('pressed') or (check.pid(executable) and 'Cancel' not in prompt.get('buttons', [])):
                 break
         report['gatekeeperPrompt'] = prompt
         check.screenshot('gatekeeper.png')

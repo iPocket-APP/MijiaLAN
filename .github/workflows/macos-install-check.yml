@@ -44,10 +44,9 @@ jobs:
           gh release download "$TAG" --pattern '*-universal.dmg' --dir "$work"
           hdiutil attach -nobrowse -readonly -mountpoint "$work/mount" "$work"/*.dmg
           sdks=()
-          for sdk in /Applications/Xcode*.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX*.sdk; do
-            real=$(realpath "$sdk")
-            echo "$sdk -> $real"
-            case "$real" in */MacOSX15.*.sdk) sdks+=(--sdk "$real") ;; esac
+          # Versioned names are links to MacOSX.sdk; the checker reads each SDK's own version and drops repeats.
+          for sdk in /Applications/Xcode*.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.*.sdk; do
+            sdks+=(--sdk "$sdk")
           done
           lipo -archs "$work"/mount/*.app/Contents/MacOS/*
           python3 -I scripts/ci/check_imports.py "$work"/mount/*.app "${sdks[@]}" --report "$RUNNER_TEMP/evidence/imports.json"
