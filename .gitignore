@@ -4,6 +4,8 @@
 /build
 *.app
 xcuserdata/
+__pycache__/
+*.pyc
 
 # Local credentials and provisioning material.
 .env
