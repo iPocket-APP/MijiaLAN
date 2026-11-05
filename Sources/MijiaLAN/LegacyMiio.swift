@@ -7,7 +7,8 @@ import MijiaCore
 ///
 /// The tables come from hass-xiaomi-miot's `miio2miot_specs.py`, the mapping most Home Assistant users run. A few
 /// models were checked on real devices here and keep a hand-written table; the rest are converted from the Python
-/// file by `scripts/import_hass_xiaomi_miot.py` into `hass-xiaomi-miot-miio2miot.json`.
+/// file by `scripts/import_hass_xiaomi_miot.py` into `hass-xiaomi-miot-miio2miot.json`. Roborock vacuums are ported
+/// by hand too: they report through `get_status`, which the converter does not read.
 public struct LegacyMiioProfile: Sendable {
     public enum Source: Equatable, Sendable {
         /// Written and checked against a real device in this project.
@@ -201,15 +202,35 @@ public struct LegacyMiioProfile: Sendable {
         }
     }
 
+    /// A MIoT action carried out by legacy methods without arguments, called in order.
+    public struct Action: Sendable, Equatable {
+        public var siid: Int
+        public var aiid: Int
+        public var methods: [String]
+    }
+
     public var properties: [Property]
     public var source: Source = .verified
     /// Most properties one `get_prop` may ask for; nil means all at once.
     public var chunkSize: Int?
     /// The device answers setters with something other than `"ok"`; any reply counts as done.
     public var ignoresResult = false
+    /// Set when the device reports every value through one call instead of `get_prop`, such as Roborock's
+    /// `get_status`. Values are looked up by `Property.name` in the reply's first object.
+    public var statusMethod: String?
+    public var actions: [Action] = []
 
     public func property(siid: Int, piid: Int) -> Property? {
         properties.first { $0.siid == siid && $0.piid == piid }
+    }
+
+    public func action(siid: Int, aiid: Int) -> Action? {
+        actions.first { $0.siid == siid && $0.aiid == aiid }
+    }
+
+    /// Whether a setter or action reply means done.
+    func accepts(_ result: JSONValue) -> Bool {
+        result == .array([.string("ok")]) || result == .string("ok") || (ignoresResult && result.arrayValue != nil)
     }
 
     /// `.auto` reads made exact by the MIoT format, as hass-xiaomi-miot does: a bool property turns `1` / `"on"`
@@ -263,11 +284,42 @@ public struct LegacyMiioProfile: Sendable {
         Property(3, 1, "wifi_led", .onOff, setter: "set_wifi_led"),
     ])
 
+    /// Roborock vacuums from before MIoT: 米家扫地机器人 and 石头 C1 / E2 / S5. Ported from hass-xiaomi-miot's
+    /// `rockrobo.vacuum.v1` table, with python-miio's Roborock driver (`9a00e08`) where that table falls short:
+    /// docking (15) and charging complete (100) count as returning and charging rather than idle, and the first
+    /// generation has to pause before it can be sent home. Not checked on a real device here.
+    static func roborock(base: String?, pausesBeforeDock: Bool) -> LegacyMiioProfile {
+        // Roborock state → MIoT status: 1 idle, 2 sweeping, 3 charging, 4 paused, 5 go charging, 6 remote control, 7 error.
+        let status = ["1": 2, "2": 7, "3": 1, "4": 6, "5": 2, "6": 5, "7": 6, "8": 3, "9": 7, "10": 4, "11": 2, "12": 7,
+                      "13": 7, "15": 5, "16": 6, "17": 2, "18": 2, "100": 3]
+        let number = Property.Read.number(ratio: 1, offset: 0, strip: nil)
+        return LegacyMiioProfile(
+            properties: [
+                Property(siid: 2, piid: 1, name: "state", read: .values(status, fallback: 1), setter: nil, write: nil, suffix: []),
+                Property(siid: 2, piid: 2, name: "fan_power", read: number, setter: "set_custom_mode", write: .value, suffix: []),
+                Property(siid: 3, piid: 1, name: "battery", read: number, setter: nil, write: nil, suffix: []),
+                // MIoT charging state: 1 charging, 2 not charging.
+                Property(siid: 3, piid: 2, name: "state", read: .values(["8": 1], fallback: 2), setter: nil, write: nil, suffix: []),
+            ],
+            source: .hassXiaomiMiot(base: base),
+            statusMethod: "get_status",
+            actions: [
+                Action(siid: 2, aiid: 1, methods: ["app_start"]),
+                Action(siid: 2, aiid: 2, methods: ["app_stop"]),
+                Action(siid: 3, aiid: 1, methods: pausesBeforeDock ? ["app_pause", "app_charge"] : ["app_charge"]),
+            ]
+        )
+    }
+
     static let profiles: [String: LegacyMiioProfile] = [
         "lumi.acpartner.mcn02": acPartnerMcn02,
         "yeelink.light.lamp4": yeelightWhite,
         "chuangmi.plug.m1": chuangmiPlug,
         "chuangmi.plug.m3": chuangmiPlug,
+        "rockrobo.vacuum.v1": roborock(base: nil, pausesBeforeDock: true),
+        "roborock.vacuum.c1": roborock(base: "rockrobo.vacuum.v1", pausesBeforeDock: false),
+        "roborock.vacuum.e2": roborock(base: "rockrobo.vacuum.v1", pausesBeforeDock: false),
+        "roborock.vacuum.s5": roborock(base: "rockrobo.vacuum.v1", pausesBeforeDock: false),
     ]
 
     static var importedTableURL: URL? { Bundle.module.url(forResource: "hass-xiaomi-miot-miio2miot", withExtension: "json") }
@@ -381,19 +433,28 @@ enum ImportedTables {
 }
 
 extension MiioClient {
-    /// MIoT reads answered through the device's legacy `get_prop`. Keys the profile does not cover are left out,
-    /// like properties a MIoT device reports as failed.
+    /// MIoT reads answered through the device's legacy `get_prop`, or its status method. Keys the profile does not
+    /// cover are left out, like properties a MIoT device reports as failed.
     public func getProperties(did: String, _ props: [(siid: Int, piid: Int)], legacy profile: LegacyMiioProfile) async throws -> [MiotPropKey: JSONValue] {
         let mapped = props.compactMap { profile.property(siid: $0.siid, piid: $0.piid) }
         guard !mapped.isEmpty else { return [:] }
-        var names: [String] = []
-        for property in mapped where !names.contains(property.name) { names.append(property.name) }
-        let size = profile.chunkSize ?? names.count
         var raw: [String: JSONValue] = [:]
-        for start in stride(from: 0, to: names.count, by: size) {
-            let chunk = Array(names[start..<min(start + size, names.count)])
-            let result = try await call("get_prop", params: .array(chunk.map(JSONValue.string)))
-            for (name, value) in zip(chunk, result.arrayValue ?? []) { raw[name] = value }
+        if let method = profile.statusMethod {
+            // `[{"state": 8, "battery": 100, …}]`.
+            let result = try await call(method)
+            guard case .object(let status) = result.arrayValue?.first ?? result else {
+                throw MiioError.badResponse(L10n.tr("旧 miIO 状态没有返回对象", "The legacy miIO status reply is not an object."))
+            }
+            raw = status
+        } else {
+            var names: [String] = []
+            for property in mapped where !names.contains(property.name) { names.append(property.name) }
+            let size = profile.chunkSize ?? names.count
+            for start in stride(from: 0, to: names.count, by: size) {
+                let chunk = Array(names[start..<min(start + size, names.count)])
+                let result = try await call("get_prop", params: .array(chunk.map(JSONValue.string)))
+                for (name, value) in zip(chunk, result.arrayValue ?? []) { raw[name] = value }
+            }
         }
         var out: [MiotPropKey: JSONValue] = [:]
         for property in mapped {
@@ -411,10 +472,20 @@ extension MiioClient {
                 throw MiioError.unsupportedByLegacyDevice
             }
             let result = try await call(legacyCall.method, params: .array(legacyCall.params))
-            let accepted = result == .array([.string("ok")]) || result == .string("ok")
-                || (profile.ignoresResult && result.arrayValue != nil)
-            guard accepted else {
+            guard profile.accepts(result) else {
                 throw MiioError.badResponse(L10n.tr("旧 miIO 写入没有返回 ok", "The legacy miIO write did not return ok."))
+            }
+        }
+    }
+
+    /// A MIoT action through the legacy methods the profile lists for it. Like MIoT actions, none is retried.
+    public func action(_ action: MiotActionCall, legacy profile: LegacyMiioProfile) async throws {
+        guard action.inputs.isEmpty, let mapped = profile.action(siid: action.siid, aiid: action.aiid) else {
+            throw MiioError.unsupportedByLegacyDevice
+        }
+        for method in mapped.methods {
+            guard profile.accepts(try await call(method, retryCount: 0)) else {
+                throw MiioError.badResponse(L10n.tr("旧 miIO 动作没有返回 ok", "The legacy miIO action did not return ok."))
             }
         }
     }

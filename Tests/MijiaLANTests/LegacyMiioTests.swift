@@ -182,6 +182,59 @@ struct LegacyLANTests {
         #expect(plug.legacyCalls == ["set_usb_on []"])
     }
 
+    @Test("A first-generation Roborock is read with get_status and driven with its app methods")
+    func roborock() async throws {
+        let network = FakeMiioNetwork()
+        let robot = network.add(host: "192.168.1.50", token: token, deviceID: 50)
+        let ok = JSONValue.array([.string("ok")])
+        robot.legacyProps = [:]
+        robot.legacyReplies = [
+            "get_status": .array([.object(["msg_ver": .number(2), "state": .number(8), "battery": .number(100), "fan_power": .number(60)])]),
+            "app_start": ok, "app_pause": ok, "app_charge": ok, "app_stop": .array([.string("busy")]),
+        ]
+        let config = ConfigBox(LocalHomeConfig(devices: [device("50", "rockrobo.vacuum.v1", host: "192.168.1.50")]))
+        let api = LANMiotAPI(config: { config.value }, transport: network)
+        _ = try await api.deviceList()
+
+        let keys = [(2, 1), (2, 2), (3, 1), (3, 2)].map { MiotPropKey(did: "50", siid: $0.0, piid: $0.1) }
+        let values = try await api.getProps(keys)
+        // Roborock's charging (8) is MIoT status 3 and charging state 1; one get_status answers all four.
+        #expect(values == [keys[0]: .number(3), keys[1]: .number(60), keys[2]: .number(100), keys[3]: .number(1)])
+        #expect(robot.receivedMethods.filter { $0 == "get_status" }.count == 1)
+        #expect(!robot.receivedMethods.contains("get_prop"))
+        #expect(!robot.receivedMethods.contains("get_properties"))
+
+        try await api.setProps([MiotPropWrite(did: "50", siid: 2, piid: 2, value: .number(77))])
+        try await api.action(MiotActionCall(did: "50", siid: 2, aiid: 1, inputs: []))
+        try await api.action(MiotActionCall(did: "50", siid: 3, aiid: 1, inputs: []))
+        // The first generation is paused before it is sent home.
+        #expect(robot.legacyCalls == ["set_custom_mode [77]", "app_start []", "app_pause []", "app_charge []"])
+
+        // A reply other than ok fails the action, which is never resent.
+        await #expect(throws: MiioError.self) { try await api.action(MiotActionCall(did: "50", siid: 2, aiid: 2, inputs: [])) }
+        #expect(robot.legacyCalls.filter { $0.hasPrefix("app_stop") }.count == 1)
+        // Identify has no legacy method.
+        await #expect(throws: MiioError.unsupportedByLegacyDevice) {
+            try await api.action(MiotActionCall(did: "50", siid: 4, aiid: 1, inputs: []))
+        }
+        #expect(robot.receivedMethods.filter { $0 == "action" }.isEmpty)
+    }
+
+    @Test("Roborock states follow python-miio where hass-xiaomi-miot shows them idle; later models go straight home")
+    func roborockStates() throws {
+        let v1 = try #require(LegacyMiioProfile.forModel("rockrobo.vacuum.v1"))
+        let status = try #require(v1.property(siid: 2, piid: 1))
+        for (state, miot) in [(5.0, 2.0), (6, 5), (15, 5), (10, 4), (100, 3), (12, 7), (14, 1)] {
+            #expect(status.miotValue(.number(state)) == .number(miot), "\(state)")
+        }
+        #expect(v1.action(siid: 3, aiid: 1)?.methods == ["app_pause", "app_charge"])
+        for model in ["roborock.vacuum.c1", "roborock.vacuum.e2", "roborock.vacuum.s5"] {
+            let profile = try #require(LegacyMiioProfile.forModel(model))
+            #expect(profile.source == .hassXiaomiMiot(base: "rockrobo.vacuum.v1"))
+            #expect(profile.action(siid: 3, aiid: 1)?.methods == ["app_charge"])
+        }
+    }
+
     @Test("An IP with nothing behind it is offline right away, with a plain explanation")
     func hostUnreachable() async throws {
         let network = FakeMiioNetwork()

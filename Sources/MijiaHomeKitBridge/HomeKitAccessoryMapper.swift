@@ -121,7 +121,8 @@ public struct HomeKitAccessoryPlan: Sendable {
 /// | Climate (AC, heater) | Heater cooler: on, auto / heat / cool, target temperature, fan speed and swing (when the device has them); switches for dry and fan only |
 /// | Sensor | Temperature and humidity sensors, battery |
 ///
-/// Vacuums, speakers, TVs and fridges are not exposed: Apple Home has no matching HAP service.
+/// Vacuums, speakers, TVs and fridges are not exposed here: Apple Home has no matching HAP service.
+/// `CapabilityHomeKitMapper` gives vacuums a switch from their spec.
 public enum HomeKitAccessoryMapper {
     /// A bridge carries at most 150 accessories, itself included.
     public static let maxBridgedAccessories = 149

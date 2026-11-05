@@ -390,13 +390,15 @@ public final class DeviceController {
                 throw error
             }
             snapshots[did]?.lastCommand = L10n.tr("设备已接受动作，正在确认状态", "Action accepted. Confirming device state.")
+            let status = snapshot.capability(snapshot.schema.category, "status")
+            let before = status.flatMap { snapshot.value($0.id)?.intValue }
             var confirmed = false
-            for attempt in 0..<3 {
+            // A robot vacuum reports its new status only once it starts moving: allow it about two seconds.
+            for attempt in 0..<(snapshot.schema.category == "vacuum" ? 6 : 3) {
                 if attempt > 0 { try await Task.sleep(for: .milliseconds(350)) }
                 await refresh(did: did, capabilities: snapshot.capabilities.filter { $0.readable && !$0.lowFrequency })
-                if let status = snapshot.capability(snapshot.schema.category, "status"),
-                   let actual = snapshots[did]?.value(status.id)?.intValue,
-                   Self.actionConfirmed(cap.name, category: snapshot.schema.category, status: actual) {
+                if let status, let actual = snapshots[did]?.value(status.id)?.intValue,
+                   Self.actionConfirmed(cap.name, category: snapshot.schema.category, status: actual, before: before, in: status) {
                     snapshots[did]?.lastCommand = L10n.tr("状态已确认：\(status.formatted(.number(Double(actual))))", "State confirmed: \(status.formatted(.number(Double(actual))))")
                     snapshots[did]?.commandReceipt?.confirmedAt = Date()
                     confirmed = true; break
@@ -412,7 +414,13 @@ public final class DeviceController {
         if let a = actual?.doubleValue, let b = requested.doubleValue { return abs(a - b) < 0.00001 }
         return false
     }
-    private static func actionConfirmed(_ action: String, category: String, status: Int) -> Bool {
+    /// `before` is the status read before the action; `capability` is the status property, whose option
+    /// descriptions say what a vacuum's numbers mean.
+    static func actionConfirmed(_ action: String, category: String, status: Int, before: Int?, in capability: DeviceCapability) -> Bool {
+        if category == "vacuum" {
+            func description(_ value: Int?) -> String? { capability.options.first { $0.value == value }?.description }
+            return VacuumStatus.confirms(action, status: description(status), before: description(before))
+        }
         switch (category, action) {
         case ("air-fryer", "start-cook"), ("air-fryer", "resume-cook"): return [3, 4, 5, 10, 13, 14].contains(status)
         case ("air-fryer", "pause"): return [2, 8, 9, 11].contains(status)

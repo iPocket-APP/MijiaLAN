@@ -27,7 +27,9 @@ public enum DeviceInterfaceReport {
                 let options = c.options.map { "\($0.value)=\($0.title)" }.joined(separator: "、")
                 let access = (c.readable ? "R" : "") + (c.writable ? "W" : "") + (c.prepared ? " 待应用" : "")
                 let protocolText: String
-                if c.kind == .action {
+                if c.kind == .action, let legacy = LegacyMiioProfile.forModel(device.model) {
+                    protocolText = legacy.action(siid: c.siid, aiid: c.iid).map { $0.methods.joined(separator: " → ") + "（旧 miIO）" } ?? "旧 miIO 映射待确认"
+                } else if c.kind == .action {
                     protocolText = "action \(c.siid).\(c.iid), in=\(c.inputs), out=\(c.outputs)"
                 } else if let legacy = LegacyMiioProfile.forModel(device.model) {
                     if let property = legacy.property(siid: c.siid, piid: c.iid) {
@@ -40,7 +42,7 @@ public enum DeviceInterfaceReport {
                         case .boolChoice(let on, let off): "\(on.compactJSONString)/\(off.compactJSONString)"
                         case .methodSwitch(let on, let off): "\(on)/\(off)"
                         }
-                        protocolText = "get_prop [\(property.name)]; " + (property.setter.map { "\($0) [\(argument)\(property.setterSuffix.isEmpty ? "" : ", " + property.setterSuffix.map(\.compactJSONString).joined(separator: ", "))]" } ?? "只读")
+                        protocolText = (legacy.statusMethod.map { "\($0) → \(property.name)" } ?? "get_prop [\(property.name)]") + "; " + (property.setter.map { "\($0) [\(argument)\(property.setterSuffix.isEmpty ? "" : ", " + property.setterSuffix.map(\.compactJSONString).joined(separator: ", "))]" } ?? "只读")
                             + (legacy.source == .verified ? "" : "（hass-xiaomi-miot 映射）")
                     } else { protocolText = "旧 miIO 映射待确认" }
                 } else if c.prepared && !c.writable && !c.readable {
@@ -48,7 +50,10 @@ public enum DeviceInterfaceReport {
                 } else {
                     protocolText = ([c.readable ? "get_properties" : nil, c.writable ? "set_properties" : nil].compactMap { $0 }.joined(separator: " / ")) + " \(c.siid).\(c.iid)"
                 }
-                let homeMapped = plan.bindings.values.contains { binding in
+                let cleaningSwitch = plan.bindings.values.contains { binding in
+                    if case .cleaning(let start, let dock, _) = binding { [start, dock].contains(c.id) } else { false }
+                }
+                let homeMapped = cleaningSwitch || plan.bindings.values.contains { binding in
                     switch binding {
                     case .property(let id, _), .option(let id, _), .adjust(let id, _), .action(let id): return id == c.id
                     case .legacy: return device.model == "lumi.acpartner.mcn02" && [2, 3].contains(c.siid)
@@ -57,7 +62,7 @@ public enum DeviceInterfaceReport {
                 }
                 let feedback = c.prepared ? "待选值独立保存；运行后读实际状态" : c.readable ? "逐属性返回码＋回读＋时间" : c.kind == .action ? "动作返回码＋运行状态确认" : "接受回执；完成状态待确认"
                 let mac = [DeviceCapability.Control.toggle: "开关", .number: "精确输入", .choice: "选项", .button: "动作按钮", .reading: "实际读数", .unsupported: "待确认清单"][c.control] ?? ""
-                let home = homeMapped ? (c.control == .number ? "原生数值或预设＋增减" : c.control == .choice ? "具名选项开关" : c.kind == .action || c.control == .button ? "回弹按钮" : "原生服务／具名开关") : "Mac 保留"
+                let home = cleaningSwitch ? "清扫开关（开=开始清扫，关=回充）" : homeMapped ? (c.control == .number ? "原生数值或预设＋增减" : c.control == .choice ? "具名选项开关" : c.kind == .action || c.control == .button ? "回弹按钮" : "原生服务／具名开关") : "Mac 保留"
                 let evidence = c.limitation ?? (c.control == .unsupported ? "规格保留；未启用" : "规格已核对；自动化协议测试；实机待验证")
                 lines.append("| \(c.id) \(clean(c.displayTitle)) | \(c.format) \(access) \(bounds) \(clean(options)) \(c.displayUnit) | \(clean(protocolText)) | \(feedback) | \(mac) | \(home) | \(clean(evidence)) |")
             }

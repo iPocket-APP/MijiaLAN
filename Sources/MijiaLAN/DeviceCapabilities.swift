@@ -347,14 +347,17 @@ public enum DeviceCapabilityCatalog {
             }
             for a in service.actions {
                 guard seen.insert(DeviceCapability.actionID(service.iid, a.iid)).inserted else { continue }
-                let supported = legacy == nil && actionNames.contains(a.name) && service.name == schema.category
+                // A legacy device runs only the actions its profile maps to methods.
+                let reachable = legacy.map { $0.action(siid: service.iid, aiid: a.iid) != nil } ?? true
+                let supported = reachable && (actionNames.contains(a.name) && service.name == schema.category
+                    || schema.category == "vacuum" && VacuumStatus.isSupported(a, service: service.name))
                 result.append(DeviceCapability(
                     id: DeviceCapability.actionID(service.iid, a.iid), model: model, specification: schema.type, kind: .action, siid: service.iid, iid: a.iid,
                     service: service.name, name: a.name,
                     title: CapabilityNames.action(a.name, fallback: L10n.isEnglish ? (a.description ?? a.name) : (a.comment ?? a.description ?? a.name)),
                     format: "action", readable: false, writable: supported, unit: nil, range: nil, options: [],
                     inputs: a.inputs, outputs: a.outputs, control: supported ? .button : .unsupported, prepared: false,
-                    limitation: supported ? nil : "维护操作或厂商复合参数，不作为日常控制", lowFrequency: false
+                    limitation: supported ? nil : reachable ? "维护操作或厂商复合参数，不作为日常控制" : "规格存在，尚无经过确认的旧 miIO 映射", lowFrequency: false
                 ))
             }
         }

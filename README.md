@@ -48,7 +48,7 @@ MijiaLAN 控制能在局域网里直接访问的 Wi-Fi 设备，按适配程度�
 | --- | --- | --- |
 | 内置适配 | 下表 10 个型号 | 规格随 App 打包，接口逐项核对；离线启动也保留控件 |
 | 其他 MIoT 设备 | miot-spec.org 上有规格的 Wi-Fi 型号 | 导入时获取一次规格并缓存，按类别生成通用控件 |
-| 早期 miIO 设备 | 约 160 个只认 `get_prop` / `set_*` 的旧型号 | 使用转换自 [hass-xiaomi-miot](https://github.com/al-one/hass-xiaomi-miot) 的属性映射表 |
+| 早期 miIO 设备 | 约 160 个只认 `get_prop` / `set_*` 的旧型号，以及用 `get_status` 汇报状态的老款石头扫地机 | 使用转换或移植自 [hass-xiaomi-miot](https://github.com/al-one/hass-xiaomi-miot) 的映射表 |
 
 内置适配的型号：
 
@@ -64,15 +64,16 @@ MijiaLAN 控制能在局域网里直接访问的 Wi-Fi 设备，按适配程度�
 | 空气炸锅 | `careli.fryer.maf07c` |
 | 电饭煲 | `chunmi.cooker.cmwy3` |
 
-通用控件在「家庭」里的样子：灯、风扇、空气净化器、加湿器、除湿机、取暖器、空调和窗帘使用对应的原生服务，后五类的规则参照 [homebridge-miot](https://github.com/merdok/homebridge-miot)；其他带电源开关的设备显示为插座，温度、湿度等读数显示为传感器。Mac 面板按规格生成开关、选项、数值和读数；参数定义不清的属性暂不写入，设备信息、自检等服务不显示。
+通用控件在「家庭」里的样子：灯、风扇和空气净化器使用对应的原生服务；加湿器、除湿机、取暖器、空调和窗帘也使用原生服务，扫地机显示为一个开关，这六类的规则参照 [homebridge-miot](https://github.com/merdok/homebridge-miot)。其他带电源开关的设备显示为插座，温度、湿度等读数显示为传感器。Mac 面板按规格生成开关、选项、数值和读数；参数定义不清的属性暂不写入，设备信息、自检等服务不显示。
 
-**暂不支持**：蓝牙设备、Zigbee / 蓝牙 Mesh 网关子设备、云端灯组，以及靠命令而不是属性汇报状态的早期 miIO 型号。
+**暂不支持**：蓝牙设备、Zigbee / 蓝牙 Mesh 网关子设备、云端灯组，以及靠命令而不是属性汇报状态的早期 miIO 型号。例外是米家扫地机器人（`rockrobo.vacuum.v1`）和石头 `roborock.vacuum.c1`、`e2`、`s5`：它们通过 `get_status` 和 `app_start` / `app_stop` / `app_charge` 控制，映射未经本项目实机验证。
 
 **验证边界**：规格、协议映射和自动化测试不代表每个固件都完成了实机验收，后两类设备没有经过本项目实机验证。规格里标为可写的属性，固件也不一定接受局域网写入。
 
 **控制上的约定**
 
 - 厨房设备的选择菜单只设置待应用参数，开始烹饪需要单独执行动作。
+- 扫地机的开关打开时开始清扫，关闭时回充；设备上报正在清扫时开关显示为开。停止、暂停、扫拖等不带参数的动作显示为具名开关，需要房间或区域参数的动作不提供。
 - 参数含义没有确认的接口不会发送猜测命令。
 - 「家庭」没有合适原生控件的功能，用具名开关或预设表达；部分读数只在 Mac 上显示。
 - 空调和取暖器没有温度读数时，「当前温度」用设定温度占位，不是实测室温。
@@ -176,7 +177,7 @@ python3 -I scripts/import_hass_xiaomi_miot.py <path>/miio2miot_specs.py <commit>
 - [MenuBarMijia](https://github.com/jryang1997/MenuBarMijia) 的 `MijiaCore`（MIT）：扫码登录、MIoT 规格解析、设备合成和 HomeStore。
 - [hap-swift](https://github.com/acumen-dev/hap-swift)（Apache-2.0）：HomeKit Accessory Protocol 实现，内置副本包含本地修复。
 - [hass-xiaomi-miot](https://github.com/al-one/hass-xiaomi-miot)（Apache-2.0）：早期 miIO 型号的属性映射表，转换后随 App 分发。
-- [homebridge-miot](https://github.com/merdok/homebridge-miot)（MIT）：加湿器、除湿机、取暖器、空调和窗帘的 HomeKit 服务映射规则，用 Swift 重写。
+- [homebridge-miot](https://github.com/merdok/homebridge-miot)（MIT）：加湿器、除湿机、取暖器、空调、窗帘和扫地机的 HomeKit 服务映射规则，用 Swift 重写。
 - Apple Swift 开源库及其他间接依赖：详见[第三方声明](THIRD_PARTY_NOTICES.md)。
 
 本项目为社区项目，与小米、米家或 Apple 无隶属关系，也未获得 HomeKit / MFi 认证。第三方协议、服务及商标的权利不由本项目的 MIT 许可证授予。

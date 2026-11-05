@@ -37,7 +37,10 @@ public enum CapabilityNames {
         return names[name] ?? fallback
     }
     public static func action(_ name: String, fallback: String) -> String {
-        ["start-cook": L10n.tr("开始烹饪", "Start Cooking"), "cancel-cooking": L10n.tr("停止烹饪", "Stop Cooking"), "pause": L10n.tr("暂停", "Pause"), "resume-cook": L10n.tr("继续", "Resume")][name] ?? fallback
+        ["start-cook": L10n.tr("开始烹饪", "Start Cooking"), "cancel-cooking": L10n.tr("停止烹饪", "Stop Cooking"), "pause": L10n.tr("暂停", "Pause"), "resume-cook": L10n.tr("继续", "Resume"),
+         "start-sweep": L10n.tr("开始清扫", "Start Cleaning"), "start-only-sweep": L10n.tr("仅扫地", "Vacuum Only"), "start-mop": L10n.tr("仅拖地", "Mop Only"),
+         "start-sweep-mop": L10n.tr("扫拖", "Vacuum and Mop"), "stop-sweeping": L10n.tr("停止清扫", "Stop Cleaning"),
+         "pause-sweeping": L10n.tr("暂停清扫", "Pause Cleaning"), "start-charge": L10n.tr("回充", "Return to Dock")][name] ?? fallback
     }
     public static func option(_ text: String) -> String {
         // Some vendor schemas provide only Chinese descriptions, including in

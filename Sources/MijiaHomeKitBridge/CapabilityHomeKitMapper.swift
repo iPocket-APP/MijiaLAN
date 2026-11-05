@@ -21,6 +21,8 @@ public enum CapabilityHAPBinding: Sendable {
     case option(String, JSONValue)
     case adjust(String, Double)
     case action(String)
+    /// A robot vacuum's switch: on invokes `start`, off invokes `dock`, and it reads on while `status` says cleaning.
+    case cleaning(start: String, dock: String, status: String)
     case name(String, String)
     case legacy(HomeKitRole)
     case constant(HAPCharacteristicValue)
@@ -330,9 +332,29 @@ public enum CapabilityHomeKitMapper {
             }
             consumed.formUnion([current.id, target.id])
             return true
+        case "vacuum":
+            // Apple Home has no vacuum service. One switch, as in homebridge-miot: on cleans, off returns to the dock.
+            func action(_ service: String, _ name: String) -> DeviceCapability? {
+                s.capabilities.first { $0.kind == .action && $0.control == .button && $0.service == service && $0.name == name }
+            }
+            guard let status = s.capability(category, "status"), status.readable, !status.options.isEmpty,
+                  let start = action(category, "start-sweep"),
+                  let dock = action("battery", "start-charge") ?? action(category, "start-charge") else { return false }
+            let key = HAPServiceType.switch.rawValue
+            builder.service(key, type: .switch)
+            builder.add(key, type: .on, format: .bool, binding: .cleaning(start: start.id, dock: dock.id, status: status.id), writable: true)
+            consumed.formUnion([start.id, dock.id])
+            return true
         default:
             return false
         }
+    }
+
+    /// The description of the vacuum status option `id` currently reads, or nil when it has no valid reading.
+    private static func vacuumStatus(_ id: String, in s: DeviceSnapshot) -> String? {
+        guard let c = s.capabilitiesByID[id], s.isOnline, let raw = s.value(id),
+              let value = try? c.validatedReading(raw) else { return nil }
+        return c.options.first { Double($0.value) == value.doubleValue }?.description
     }
 
     public static func value(_ binding: CapabilityHAPBinding, snapshot s: DeviceSnapshot,
@@ -357,6 +379,7 @@ public enum CapabilityHomeKitMapper {
             }) else { return nil }
             return legacyValues[role]
         case .action, .adjust: return .bool(false)
+        case .cleaning(_, _, let status): return vacuumStatus(status, in: s).map { .bool(VacuumStatus.isCleaning($0)) }
         case .option(let id, let option):
             guard let c = s.capabilities.first(where: { $0.id == id }) else { return nil }
             if c.control == .button { return .bool(false) }
@@ -445,6 +468,11 @@ public enum CapabilityHomeKitMapper {
         // A fixed state, such as a humidifier's only target mode or Celsius display units: nothing to send.
         case .constant: return []
         case .action(let id): return n == 0 ? [] : [.invoke(id)]
+        case .cleaning(let start, let dock, let status):
+            // Off also sends a paused or idle robot home. Nothing is sent when it already does what was asked.
+            let current = vacuumStatus(status, in: s)
+            if n != 0 { return current.map(VacuumStatus.isCleaning) == true ? [] : [.invoke(start)] }
+            return current.map(VacuumStatus.isDocking) == true ? [] : [.invoke(dock)]
         case .adjust(let id, let d): return n == 0 ? [] : [.adjust(id, d)]
         case .option(let id, let v): return n == 0 ? [] : [.set(id, v)]
         case .property(let id, let conversion):

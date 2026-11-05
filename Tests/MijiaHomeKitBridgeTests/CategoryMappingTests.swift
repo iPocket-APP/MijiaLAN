@@ -106,6 +106,84 @@ struct CategoryMappingTests {
         #expect(plan.bindings.values.filter { if case .option("p:2:2", _) = $0 { true } else { false } }.count == 3)
     }
 
+    @Test("A robot vacuum is one switch: on starts cleaning, off returns to the dock")
+    func vacuum() throws {
+        // The layout in issue #1: speed level 2.2, start-sweep 2.1, start-charge in the battery service 3.1.
+        var s = try snapshot("roborock-c1", model: "test.vacuum.c1")
+        let plan = try plan(s)
+        let service = try cleaningSwitch(plan)
+        #expect(service.characteristics.map(\.type.rawValue) == ["25"])
+        // Stop stays a named switch; identify is maintenance.
+        #expect(actionSwitches(plan) == ["a:2:2"])
+        let speeds = plan.bindings.values.compactMap { binding -> Double? in
+            if case .option("p:2:2", let v) = binding { v.doubleValue } else { nil }
+        }
+        #expect(speeds.sorted() == [1, 100])
+
+        #expect(value(plan, service, "25", s) == nil)
+        s.health = LANDeviceHealth(state: .online)
+        for (status, on) in [(2.0, true), (1, false), (3, false), (4, false), (5, false)] {
+            s.readings["p:2:1"] = DeviceReading(value: .number(status), code: 0)
+            #expect(value(plan, service, "25", s) == .bool(on))
+        }
+        // Charging: on cleans, off has nothing to do.
+        s.readings["p:2:1"] = DeviceReading(value: .number(3), code: 0)
+        #expect(try commands(plan, service, "25", .bool(true), s) == [.invoke("a:2:1")])
+        #expect(try commands(plan, service, "25", .bool(false), s) == [])
+        // Sweeping: off docks, on has nothing to do.
+        s.readings["p:2:1"] = DeviceReading(value: .number(2), code: 0)
+        #expect(try commands(plan, service, "25", .bool(false), s) == [.invoke("a:3:1")])
+        #expect(try commands(plan, service, "25", .bool(true), s) == [])
+        // Paused mid-clean: off still sends it home.
+        s.readings["p:2:1"] = DeviceReading(value: .number(4), code: 0)
+        #expect(try commands(plan, service, "25", .bool(false), s) == [.invoke("a:3:1")])
+    }
+
+    @Test("Vacuum status is read by its description; cleaning variants without inputs are named switches")
+    func vacuumModes() throws {
+        var s = try snapshot("ijai-v19", model: "test.vacuum.v19")
+        let plan = try plan(s)
+        let service = try cleaningSwitch(plan)
+        // Only sweep, mop and both beside stop: room sweeping needs room IDs.
+        #expect(actionSwitches(plan) == ["a:2:2", "a:2:3", "a:2:5", "a:2:6"])
+        let modes = plan.bindings.values.compactMap { binding -> Double? in
+            if case .option("p:2:4", let v) = binding { v.doubleValue } else { nil }
+        }
+        #expect(modes.sorted() == [0, 1, 2])
+
+        s.health = LANDeviceHealth(state: .online)
+        for (status, on) in [(5.0, true), (6, true), (7, true), (2, false), (3, false), (4, false)] {
+            s.readings["p:2:1"] = DeviceReading(value: .number(status), code: 0)
+            #expect(value(plan, service, "25", s) == .bool(on))
+        }
+        s.readings["p:2:1"] = DeviceReading(value: .number(3), code: 0)
+        #expect(try commands(plan, service, "25", .bool(false), s) == [])
+    }
+
+    @Test("An old Roborock gets the same switch through its legacy miIO table")
+    func legacyVacuum() throws {
+        // The real model name this time, so the legacy table applies: identify has no legacy method.
+        var s = try snapshot("roborock-c1", model: "roborock.vacuum.c1")
+        let plan = try plan(s)
+        let service = try cleaningSwitch(plan)
+        #expect(actionSwitches(plan) == ["a:2:2"])
+        #expect(s.capabilitiesByID["a:4:1"]?.control == .unsupported)
+        #expect(s.capabilitiesByID["p:2:2"]?.control == .number)
+        s.health = LANDeviceHealth(state: .online)
+        s.readings["p:2:1"] = DeviceReading(value: .number(2), code: 0)
+        #expect(value(plan, service, "25", s) == .bool(true))
+        #expect(try commands(plan, service, "25", .bool(false), s) == [.invoke("a:3:1")])
+    }
+
+    @Test("Without a dock action a vacuum keeps start as a named switch")
+    func vacuumWithoutDock() throws {
+        var s = try snapshot("roborock-c1", model: "test.vacuum.c1")
+        s.capabilities.removeAll { $0.name == "start-charge" }
+        let plan = try plan(s)
+        #expect(!plan.bindings.values.contains { if case .cleaning = $0 { true } else { false } })
+        #expect(actionSwitches(plan) == ["a:2:1", "a:2:2"])
+    }
+
     @Test("Without a humidity reading a humidifier stays an outlet with named switches")
     func fallback() throws {
         var s = try snapshot("zhimi-ca4", model: "test.humidifier.ca4")
@@ -134,6 +212,16 @@ struct CategoryMappingTests {
         let home = MiotSynthesizer.synthesize(devices: [MiDeviceRecord(did: s.id, name: s.device.name, model: s.device.model, isOnline: false)],
                                               rooms: [], specs: [s.device.model: core], values: [:])
         return home.devices.first
+    }
+    private func cleaningSwitch(_ plan: CapabilityHomeKitPlan) throws -> HAPService {
+        try #require(plan.services.first { service in
+            service.type == .switch && service.characteristics.contains {
+                if case .cleaning = plan.bindings[$0.iid] { true } else { false }
+            }
+        })
+    }
+    private func actionSwitches(_ plan: CapabilityHomeKitPlan) -> [String] {
+        plan.bindings.values.compactMap { binding -> String? in if case .action(let id) = binding { id } else { nil } }.sorted()
     }
     private func characteristic(_ service: HAPService, _ type: String) -> HAPCharacteristic {
         service.characteristics.first { $0.type.rawValue == type }!

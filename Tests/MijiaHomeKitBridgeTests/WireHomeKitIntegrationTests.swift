@@ -8,8 +8,9 @@ import Testing
 
 @MainActor
 struct WireHomeKitIntegrationTests {
-    @Test("Real miIO UDP and encrypted HAP TCP preserve invalid reads, recovery, UTF-8 limits and pairing rollback")
-    func udpTCPAndRollback() async throws {
+    // Multiple independent controllers exercise response/event frame ordering under concurrent load.
+    @Test("Real miIO UDP and encrypted HAP TCP preserve invalid reads, recovery, UTF-8 limits and pairing rollback", arguments: 0..<8)
+    func udpTCPAndRollback(_ iteration: Int) async throws {
         let fixture = try await Fixture.make()
         let first = WireHAPController(port: fixture.port)
         let retry = WireHAPController(port: fixture.port)

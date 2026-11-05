@@ -6,7 +6,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="${MIJIALAN_VERSION:-0.1.1}"
+VERSION="${MIJIALAN_VERSION:-0.1.2}"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Expected a three-part version" >&2; exit 1; }
 : "${MIJIALAN_SIGN_IDENTITY:?Set a Developer ID Application signing identity}"
 : "${MIJIALAN_NOTARY_PROFILE:?Set an existing notarytool Keychain profile}"
@@ -31,11 +31,12 @@ case "${1:-}" in
     *) echo "Usage: $0 [--package-existing]" >&2; exit 1 ;;
 esac
 codesign --verify --deep --strict "$APP"
+python3 "$ROOT/scripts/swift_runtime.py" verify "$APP" --report "$LOGS/swift-runtime.json"
 for ARCH in arm64 x86_64; do
     lipo "$APP/Contents/MacOS/MijiaLAN" -verify_arch "$ARCH"
 done
 [[ "$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")" == "$VERSION" ]]
-[[ "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" == "${MIJIALAN_BUILD_NUMBER:-2}" ]]
+[[ "$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist")" == "${MIJIALAN_BUILD_NUMBER:-3}" ]]
 codesign --display --verbose=4 "$APP" 2> "$LOGS/signature.txt"
 grep -q '^Authority=Developer ID Application:' "$LOGS/signature.txt"
 grep -q 'flags=.*runtime' "$LOGS/signature.txt"

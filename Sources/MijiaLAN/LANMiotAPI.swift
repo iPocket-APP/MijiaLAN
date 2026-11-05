@@ -237,14 +237,17 @@ public actor LANMiotAPI: MiCloudAPI {
 
     public func action(_ call: MiotActionCall) async throws {
         let (device, client) = try client(forDid: call.did)
-        guard LegacyMiioProfile.forModel(device.model) == nil else { throw MiioError.unsupportedByLegacyDevice }
         do {
-            try await client.action(call)
+            if let legacy = legacyProfile(for: device) {
+                try await client.action(call, legacy: legacy)
+            } else {
+                try await client.action(call)
+            }
             guard isCurrent(device, client: client) else { throw CancellationError() }
             record(call.did, .online, error: nil)
         } catch {
             guard isCurrent(device, client: client) else { throw CancellationError() }
-            recordFailure(call.did, error, model: device.model)
+            if error as? MiioError != .unsupportedByLegacyDevice { recordFailure(call.did, error, model: device.model) }
             publishHealth()
             throw error
         }

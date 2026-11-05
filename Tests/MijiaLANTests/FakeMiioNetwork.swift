@@ -22,6 +22,9 @@ final class FakeMiioNetwork: MiioTransport, @unchecked Sendable {
         var unreachable = false
         /// Set for a pre-MIoT device: it answers `get_prop` / `set_<name>` from these and `-9999` to MIoT methods.
         var legacyProps: [String: JSONValue]?
+        /// Further legacy methods a pre-MIoT device answers, with their replies (`get_status`, `app_start`).
+        var legacyReplies: [String: JSONValue] = [:]
+        /// Setter and command calls, reads (`get_*`) left out.
         var legacyCalls: [String] = []
         /// The names of each `get_prop`, in order.
         var legacyReads: [[String]] = []
@@ -94,6 +97,9 @@ final class FakeMiioNetwork: MiioTransport, @unchecked Sendable {
                 let names = (params.arrayValue ?? []).map { $0.stringValue ?? "" }
                 device.legacyReads.append(names)
                 reply["result"] = .array(names.map { legacy[$0] ?? .string("") })
+            } else if let result = device.legacyReplies[method] {
+                if !method.hasPrefix("get_") { device.legacyCalls.append("\(method) \(params.compactJSONString)") }
+                reply["result"] = result
             } else if method.hasPrefix("set_") {
                 device.legacyCalls.append("\(method) \(params.compactJSONString)")
                 if let value = params.arrayValue?.first {

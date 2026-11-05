@@ -26,11 +26,16 @@ Local HAP changes are documented in [Vendor/hap-swift/README.md](Vendor/hap-swif
 旧 miIO 设备的属性映射表转换自 hass-xiaomi-miot 的 `miio2miot_specs.py`，转换方式和改动见 [Vendor/hass-xiaomi-miot/README.md](Vendor/hass-xiaomi-miot/README.md)。
 The legacy miIO property tables are converted from hass-xiaomi-miot's `miio2miot_specs.py`; the conversion and changes are documented in [Vendor/hass-xiaomi-miot/README.md](Vendor/hass-xiaomi-miot/README.md).
 
-加湿器、除湿机、取暖器、空调和窗帘的 HomeKit 服务映射参照 homebridge-miot 的类别规则移植，见 [Vendor/homebridge-miot/README.md](Vendor/homebridge-miot/README.md)。
-The HomeKit service mapping for humidifiers, dehumidifiers, heaters, air conditioners and curtains follows homebridge-miot's category rules; see [Vendor/homebridge-miot/README.md](Vendor/homebridge-miot/README.md).
+加湿器、除湿机、取暖器、空调、窗帘和扫地机的 HomeKit 服务映射参照 homebridge-miot 的类别规则移植，见 [Vendor/homebridge-miot/README.md](Vendor/homebridge-miot/README.md)。
+The HomeKit service mapping for humidifiers, dehumidifiers, heaters, air conditioners, curtains and robot vacuums follows homebridge-miot's category rules; see [Vendor/homebridge-miot/README.md](Vendor/homebridge-miot/README.md).
 
 App 构建脚本会将项目及依赖的 LICENSE / NOTICE 等原文复制到 `MijiaLAN.app/Contents/Resources/Licenses`，随二进制一起分发。
 The app build script includes original project and dependency LICENSE / NOTICE files in `MijiaLAN.app/Contents/Resources/Licenses` for binary redistribution.
+
+## 应用图标 / Application icon
+
+应用图标沿用 Rust 版的青绿色底色和房屋轮廓；房屋轮廓源自 Lucide 0.468.0（ISC），由 Icon Composer 合成。
+The application icon preserves the Rust version's teal background and house outline. The outline derives from Lucide 0.468.0 (ISC), composed with Icon Composer. Copyright Lucide Contributors and Cole Bemis (Feather portions). The original license is retained in [Resources/Licenses/lucide/LICENSE](Resources/Licenses/lucide/LICENSE) and included in the app bundle.
 
 ## MijiaCore / MenuBarMijia MIT notice
 
