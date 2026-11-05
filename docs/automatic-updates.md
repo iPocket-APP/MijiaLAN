@@ -28,7 +28,7 @@ Rust 使用独立 Ed25519 公钥，固定在 `updates.json`；共享部署所信
 
 GitHub Pages 部署替换整个站点。所有新发布和恢复工作流使用同一并发组 `mijialan-update-pages`，在锁内重新收集完整站点：
 
-- 原生更新保留 `/appcast.xml`，验证其对应公开 ZIP 的原生签名。
+- 原生更新保留 `/appcast.xml`。后续原生 Release 同时保存 `native-appcast.xml` 快照；即使部署排队被替代，另一版本的工作流也能从公开 Release 恢复最新原生源，并验证签名及包内身份、构建号。
 - 从公开 Rust Releases 中读取独立签名的 feed bundle，拒绝跨版本、平台、架构、根路径、重复路径或额外文件。
 - 每个平台独立选择最新签名源；新 ARM 包不会删除已有 Intel 源。
 - 下载对应公开更新包并验证 Ed25519、包长和仓库路径，再部署；任一验证失败，不发布残缺站点。

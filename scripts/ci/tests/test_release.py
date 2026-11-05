@@ -11,6 +11,24 @@ import release
 
 
 class ReleaseSourceTests(unittest.TestCase):
+    def test_shared_refresh_retries_a_superseded_pending_deployment(self):
+        from types import SimpleNamespace
+        calls = {'lists': 0, 'dispatches': 0}
+        tag = 'rs-v0.1.0-b12'
+        def api(path, method='GET', body=None):
+            if path.endswith('/dispatches'):
+                calls['dispatches'] += 1
+                self.assertEqual(body, dict(ref='main', inputs=dict(source_release=tag)))
+                return None
+            calls['lists'] += 1
+            if calls['lists'] == 1: return {'workflow_runs': []}
+            identifier = calls['lists'] - 1
+            return {'workflow_runs': [dict(id=identifier, display_title='Refresh update feeds · ' + tag,
+                status='completed', conclusion='cancelled' if identifier == 1 else 'success', html_url='https://github.com/test/run')]}
+        with patch.object(release, 'api', api), patch.object(release.time, 'sleep'):
+            release.refresh_site(SimpleNamespace(tag=tag))
+        self.assertEqual(calls['dispatches'], 2)
+
     def git(self, *args):
         return '[workspace.package]\nversion="0.1.0"' if args[0] == 'show' else 'a' * 40
 

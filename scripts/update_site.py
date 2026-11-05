@@ -4,6 +4,7 @@ import argparse
 import base64
 import json
 import os
+import plistlib
 from pathlib import Path
 import re
 import shutil
@@ -118,6 +119,20 @@ def verify_feed(content, platform, directory, rust_tag=None):
         raise ValueError('Truncated update archive')
     key = config()['native_public_key' if platform == 'native' else 'rust_public_key']
     verify(archive, signature, key)
+    if platform == 'native' or platform.startswith('macos'):
+        with zipfile.ZipFile(archive) as payload:
+            info_path = 'MijiaLAN.app/Contents/Info.plist'
+            if payload.getinfo(info_path).file_size > 128 * 1024:
+                raise ValueError('Packaged app metadata is too large')
+            info = plistlib.loads(payload.read(info_path))
+        item = ET.fromstring(content).find('./channel/item')
+        feed_path = '/appcast.xml' if platform == 'native' else f'/rs/{platform}/appcast.xml'
+        expected = dict(CFBundleIdentifier='com.mijialan.MijiaLAN' if platform == 'native' else 'xyz.ipocket.MijiaLAN.Rust',
+            CFBundleVersion=item.findtext(f'{{{SPARKLE}}}version'),
+            CFBundleShortVersionString=item.findtext(f'{{{SPARKLE}}}shortVersionString'),
+            SUFeedURL=config()['origin'] + feed_path, SUPublicEDKey=key)
+        if any(info.get(k) != v for k, v in expected.items()):
+            raise ValueError('Feed metadata does not match the signed app bundle')
 
 
 def rust_feeds(directory):
@@ -154,6 +169,37 @@ def rust_feeds(directory):
     return selected
 
 
+def native_feed_content(directory, override=None):
+    candidates = [override.read_bytes()] if override else []
+    for release in api('releases?per_page=100', paginate=True):
+        if release['draft'] or release.get('prerelease') or not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', release['tag_name']):
+            continue
+        asset = next((a for a in release['assets'] if a['name'] == 'native-appcast.xml'), None)
+        if asset:
+            path = directory / (release['tag_name'] + '.xml')
+            download(asset['browser_download_url'], path, 1024 * 1024)
+            content = path.read_bytes()
+            if inspect_feed(content, 'native')[0] != release['tag_name']:
+                raise ValueError('Native feed snapshot references another release')
+            candidates.append(content)
+    # Backward compatibility for releases made before public feed snapshots existed.
+    live = directory / 'native-live.xml'
+    try:
+        download(config()['origin'] + '/appcast.xml', live, 1024 * 1024)
+        candidates.append(live.read_bytes())
+    except OSError:
+        if not candidates: raise
+    if not candidates:
+        raise ValueError('No native feed can be preserved')
+    for content in candidates:
+        inspect_feed(content, 'native')
+    # A queued deployment may be superseded by another publisher. Both rebuild from
+    # public snapshots, so every remaining deployment includes the newest native build.
+    content = max(candidates, key=lambda data: int(ET.fromstring(data).findtext(f'./channel/item/{{{SPARKLE}}}version')))
+    verify_feed(content, 'native', directory)
+    return content
+
+
 def check_live(output):
     paths = sorted(output.rglob('appcast.xml'))
     for path in paths:
@@ -179,11 +225,7 @@ def assemble(output, native_feed=None):
         raise ValueError('Site staging directory must be empty')
     with tempfile.TemporaryDirectory(prefix='shared-update-site-') as directory:
         directory = Path(directory)
-        if native_feed is None:
-            native_feed = directory / 'native.xml'
-            download(config()['origin'] + '/appcast.xml', native_feed, 1024 * 1024)
-        native = native_feed.read_bytes()
-        verify_feed(native, 'native', directory)
+        native = native_feed_content(directory, native_feed)
         feeds = rust_feeds(directory)
         # Nothing is staged until every retained flavor's public archive has been verified.
         (output / 'appcast.xml').write_bytes(native)

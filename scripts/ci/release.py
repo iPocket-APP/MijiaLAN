@@ -163,11 +163,19 @@ def refresh_site(args):
     workflow = 'actions/workflows/shared-update-site.yml'
     before = {run['id'] for run in api(workflow + '/runs?event=workflow_dispatch&branch=main&per_page=30')['workflow_runs']}
     api(workflow + '/dispatches', 'POST', dict(ref='main', inputs=dict(source_release=args.tag)))
+    attempts = 1
     deadline = time.monotonic() + 900
     while time.monotonic() < deadline:
         runs = api(workflow + '/runs?event=workflow_dispatch&branch=main&per_page=30')['workflow_runs']
         run = next((r for r in runs if r['id'] not in before and r['display_title'] == 'Refresh update feeds · ' + args.tag), None)
         if run and run['status'] == 'completed':
+            if run['conclusion'] == 'cancelled' and attempts < 3:
+                # Pages permits only one pending deployment. A later native/Rust
+                # publication may supersede this request; retry the complete-site rebuild.
+                before.update(r['id'] for r in runs)
+                api(workflow + '/dispatches', 'POST', dict(ref='main', inputs=dict(source_release=args.tag)))
+                attempts += 1
+                continue
             if run['conclusion'] != 'success':
                 raise ValueError('Release is public but update-site deployment needs recovery: ' + run['html_url'])
             print('Shared native/Rust feeds deployed and publicly verified: ' + run['html_url'])

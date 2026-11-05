@@ -68,7 +68,7 @@ jobs:
             runner: macos-26
           - arch: x86_64
             runner: macos-26-intel
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ (matrix.arch == 'arm64' && vars.MIJIALAN_MACOS_RUNNER) || (matrix.arch == 'x86_64' && vars.MIJIALAN_MACOS_INTEL_RUNNER) || matrix.runner }}
     concurrency:
       group: mijialan-macos-signing-${{ matrix.arch }}
       cancel-in-progress: false
@@ -119,6 +119,7 @@ jobs:
           python3 scripts/ci/build_artifact.py prepare-mac --folder build/ci-input --source "$SOURCE_SHA" --build "$MIJIALAN_BUILD_NUMBER" --arch "$MIJIALAN_MACOS_ARCH"
           bash scripts/package-macos-release.sh --package-existing
           cli="build/releases/v$VERSION-rs.$MIJIALAN_BUILD_NUMBER/staging/MijiaLAN.app/Contents/MacOS/mijia-rust"
+          "${cli%/mijia-rust}/mijialan-rust" --updater-smoke
           "$cli" --help
           "$cli" --demo list > "$RUNNER_TEMP/demo.json"
           python3 -c 'import json,sys; assert len(json.load(open(sys.argv[1]))) == 4' "$RUNNER_TEMP/demo.json"

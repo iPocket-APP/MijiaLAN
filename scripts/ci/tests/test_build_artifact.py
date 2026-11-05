@@ -17,7 +17,7 @@ class PackageProvenanceTests(unittest.TestCase):
         self.package = self.root / 'app.zip'
         self.package.write_bytes(b'fixture package')
         self.info = dict(source_sha='a' * 40, target='aarch64-apple-darwin', repository='iPocket-APP/MijiaLAN', profile='release', tests_passed=45,
-                         checks=['fmt', 'clippy', 'test', 'cli-help', 'cli-demo'], files={'app.zip': module.digest(self.package)})
+                         checks=['fmt', 'clippy', 'test', 'cli-help', 'cli-demo', 'updater-runtime'], files={'app.zip': module.digest(self.package)})
 
     def verify(self):
         (self.root / 'build-info.json').write_text(json.dumps(self.info))

@@ -216,7 +216,7 @@ jobs:
           retention-days: 14
           overwrite: true
       - name: Save complete Cargo cache
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/MijiaLAN-rs' && steps.rust-cache.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && steps.rust-cache.outcome == 'success' && github.event_name != 'pull_request' && github.ref == 'refs/heads/MijiaLAN-rs' && steps.rust-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |

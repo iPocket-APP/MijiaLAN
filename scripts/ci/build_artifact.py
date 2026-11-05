@@ -20,7 +20,7 @@ def verify(folder, source, target, repository):
     info = json.loads((folder / 'build-info.json').read_text(encoding='utf-8-sig'))
     if (info['source_sha'], info['target'], info['repository'], info['profile']) != (source, target, repository, 'release'):
         raise ValueError('CI package source, target, repository or profile does not match the release')
-    if info['tests_passed'] <= 0 or info['checks'] != ['fmt', 'clippy', 'test', 'cli-help', 'cli-demo']:
+    if info['tests_passed'] <= 0 or info['checks'] != ['fmt', 'clippy', 'test', 'cli-help', 'cli-demo', 'updater-runtime']:
         raise ValueError('CI package has no complete validation record')
     for name, expected in info['files'].items():
         if Path(name).name != name or not (folder / name).is_file() or digest(folder / name) != expected:
@@ -40,7 +40,7 @@ def record(args):
         'source_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
         'repository': os.environ['GITHUB_REPOSITORY'], 'target': args.target,
         'profile': 'release', 'tests_passed': count,
-        'checks': ['fmt', 'clippy', 'test', 'cli-help', 'cli-demo'],
+        'checks': ['fmt', 'clippy', 'test', 'cli-help', 'cli-demo', 'updater-runtime'],
         'files': {p.name: digest(p) for p in sorted(args.folder.iterdir()) if p.suffix in ['.zip', '.sha256']},
     }
     if count <= 0 or not any(n.endswith('.zip') for n in info['files']):
