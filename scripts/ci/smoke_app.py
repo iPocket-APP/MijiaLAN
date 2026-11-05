@@ -23,6 +23,12 @@ def run(*args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)
 
 
+def assess(*args):
+    result = run('spctl', '--assess', *args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    print(result.stdout, end='')
+    assert 'source=Notarized Developer ID' in result.stdout, 'Gatekeeper did not accept the notarized Developer ID package'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("distribution", type=Path)
@@ -50,14 +56,15 @@ def main():
         run(sys.executable, str(ROOT / 'scripts/swift_runtime.py'), 'verify', str(app),
             '--report', str(evidence / 'runtime.json'))
         if args.notarized:
-            run('xcrun', 'stapler', 'validate', str(app))
-            run('spctl', '--assess', '--type', 'execute', '--verbose=4', str(app))
+            # The packaging job already staples and validates these exact bytes.
+            # Check the target OS's Gatekeeper policy here, avoiding a redundant
+            # online CloudKit lookup in stapler validate on every smoke runner.
+            assess('--type', 'execute', '--verbose=4', str(app))
             image = archive.with_suffix('.dmg')
             image_hash = next(row.split()[0] for row in checksum_rows if row.split()[1] == image.name)
             assert hashlib.sha256(image.read_bytes()).hexdigest() == image_hash, 'DMG checksum mismatch'
             run('hdiutil', 'verify', str(image))
-            run('xcrun', 'stapler', 'validate', str(image))
-            run('spctl', '--assess', '--type', 'open', '--context', 'context:primary-signature', '--verbose=4', str(image))
+            assess('--type', 'open', '--context', 'context:primary-signature', '--verbose=4', str(image))
         # LaunchServices needs writable, pre-existing output files on local storage.
         stdout, stderr, snapshot = root / 'stdout.txt', root / 'stderr.txt', root / 'launch.png'
         diagnostics = root / 'startup.json'

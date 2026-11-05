@@ -63,6 +63,12 @@ the running app's existing MainActor diagnostics instead of forcing a GPU screen
 It validates startup with an empty ephemeral profile and then terminates that test app.
 These checks do not control the user's physical devices.
 
+The packaging job validates stapled tickets once. Startup runners verify payload
+hashes, signatures, DMG integrity and their own Gatekeeper verdict (requiring
+`Notarized Developer ID`) instead of repeating `stapler validate`'s online CloudKit
+lookup. Evidence artifacts include the run attempt, preserving failures without
+colliding with a retry's upload.
+
 ## Local packaging
 
 `scripts/package_release.sh` builds a universal macOS 15+ app, signs it with
