@@ -2,6 +2,8 @@
 
 **简体中文** · [English](README.en.md)
 
+**TV 实验分支**：此分支 `MijiaLAN-tvOS` 提供 Apple TV 桥接中心及自签实验预发布，最低 tvOS 18。TV 构建、安装与验证范围见 [TV 文档](Experiments/AppleTV/README.md) 和 [安装说明](Experiments/AppleTV/INSTALL.md)；TV 版本标签使用 `tvos-vVERSION-bBUILD`。
+
 在 Mac 菜单栏控制米家 Wi-Fi 设备，并通过局域网把它们接入 Apple「家庭」。
 
 [下载](https://github.com/iPocket-APP/MijiaLAN/releases/latest) · [使用](#使用) · [设备支持](#设备支持) · [常见问题](#常见问题) · [隐私](#隐私) · [开发](#开发)

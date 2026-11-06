@@ -1,0 +1,901 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		002CD7DD7CB47C9EECDC1C13 /* MijiaLANTVPrototypeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89623E6EA68910B826A12C49 /* MijiaLANTVPrototypeApp.swift */; };
+		038F941D858C9FA460192AC1 /* TVHomePresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D91EEE7673B2D1247221BB7 /* TVHomePresentation.swift */; };
+		04CB8CDDCEF44E785682E645 /* TVDiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC7AC2507E0DCEDE0C36FCFA /* TVDiagnosticsView.swift */; };
+		085158026A36667B59624639 /* TVBridgeShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 691C502B4AD257D780A19F50 /* TVBridgeShell.swift */; };
+		1AC576F5E311B70AC551E6CE /* TunnelModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 586214B66F51B72C0F68E9A1 /* TunnelModel.swift */; };
+		1EBAD89B1AF11A1B5F8DC8F3 /* TVUpdateModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3171945D9CCA6A8656A1784 /* TVUpdateModel.swift */; };
+		293ADFA50DF15BBC2E05958C /* TVDiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC7AC2507E0DCEDE0C36FCFA /* TVDiagnosticsView.swift */; };
+		324D9A9113E96F6D56326C30 /* TVBridgeShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 691C502B4AD257D780A19F50 /* TVBridgeShell.swift */; };
+		3FD390FC50ACC2BB9DFC921A /* TVUpdateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B685A696107883AD73BBCA37 /* TVUpdateView.swift */; };
+		4337BD1181DE80E30B0E299D /* TVHomePresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D91EEE7673B2D1247221BB7 /* TVHomePresentation.swift */; };
+		50D84838BBB462D0431C7145 /* TVComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B61EFDE0ABC754AF94AC413 /* TVComponents.swift */; };
+		56134146AC13D77ED715790C /* TVUpdateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B685A696107883AD73BBCA37 /* TVUpdateView.swift */; };
+		5FCE66F3CE779ABA31E623A9 /* TVPages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49AE92E190A23E0A3490E60D /* TVPages.swift */; };
+		6C26ED5EC44D352B03FCE033 /* TVPrototypeKit in Frameworks */ = {isa = PBXBuildFile; productRef = A2358768C9A2F896CD146169 /* TVPrototypeKit */; };
+		8761F08F1DD9C3349C92BF21 /* TVPrototypeKit in Frameworks */ = {isa = PBXBuildFile; productRef = A5FE27AEE973647B52C2DAFF /* TVPrototypeKit */; };
+		88FB93F995D000B4FF0BF389 /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 862D4D14A562DBDF13481586 /* PacketTunnelProvider.swift */; };
+		8F992D80D9923B4350B3DEC6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DCDED3A698DD88F4658B777E /* Assets.xcassets */; };
+		93FAB7CBF5B98DB7BA6111CA /* MijiaLANTVPrototypeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89623E6EA68910B826A12C49 /* MijiaLANTVPrototypeApp.swift */; };
+		987A3651B6DF25FFC2F63F48 /* MijiaLANiOSTunnel.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 1698F0C53B0B3C1108DF7C35 /* MijiaLANiOSTunnel.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		9A8475AE308E23658105EE01 /* TVUpdateModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3171945D9CCA6A8656A1784 /* TVUpdateModel.swift */; };
+		A1DB091491FA8C4297E802D1 /* TVSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = F91B3D93AFC9E99251799ECA /* TVSheets.swift */; };
+		A8D4EC33440DFF1E91F5F086 /* TVPrototypeKit in Frameworks */ = {isa = PBXBuildFile; productRef = 0C9BBBC70E7580871B2A45AE /* TVPrototypeKit */; };
+		C98D313C64E51DFBC40A9299 /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 862D4D14A562DBDF13481586 /* PacketTunnelProvider.swift */; };
+		D5DBC7E173B56B586917AEEB /* TunnelModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 586214B66F51B72C0F68E9A1 /* TunnelModel.swift */; };
+		D725D35BD8EB1623BA4AB881 /* TVBridgeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5E941D99301AA787AA2A13E /* TVBridgeUITests.swift */; };
+		DB2CE2FDF976AF2631737B4B /* TVSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = F91B3D93AFC9E99251799ECA /* TVSheets.swift */; };
+		DF34A40643CA5A19B7ADEB4D /* TVPages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49AE92E190A23E0A3490E60D /* TVPages.swift */; };
+		EB470AAF068CF5D35BA95866 /* MijiaLANTVTunnel.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = DD602B0EF8A9FCBA2CF0CF06 /* MijiaLANTVTunnel.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		EC8D3FC2A3C45DEE5BE678A3 /* TVPrototypeKit in Frameworks */ = {isa = PBXBuildFile; productRef = 48A1F908EA95288401950E84 /* TVPrototypeKit */; };
+		ED6003AB5D5B71E1A6671F11 /* TVComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B61EFDE0ABC754AF94AC413 /* TVComponents.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		2B03D058BC98AD6508815E62 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A9713466931D8F2E1CD5AE90 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EA201DA939578C8BCDAF440F;
+			remoteInfo = MijiaLANTVPrototype;
+		};
+		6990CE228A9F6AEE668628DA /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A9713466931D8F2E1CD5AE90 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 42CC121D689923BA9B7851FD;
+			remoteInfo = MijiaLANTVTunnel;
+		};
+		EAFBC3396E0882FACA537C53 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A9713466931D8F2E1CD5AE90 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F1DBFB1ACAF144709645762F;
+			remoteInfo = MijiaLANiOSTunnel;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		27BEBD9D67C76141BC0F776A /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				987A3651B6DF25FFC2F63F48 /* MijiaLANiOSTunnel.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		37A02730551F407698DF2EC2 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				EB470AAF068CF5D35BA95866 /* MijiaLANTVTunnel.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		1698F0C53B0B3C1108DF7C35 /* MijiaLANiOSTunnel.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = MijiaLANiOSTunnel.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		23CD90B60E3206B465679C87 /* Prototype.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Prototype.entitlements; sourceTree = "<group>"; };
+		49AE92E190A23E0A3490E60D /* TVPages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVPages.swift; sourceTree = "<group>"; };
+		56CBAE802C6559D2948670EC /* MijiaLANTVUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = MijiaLANTVUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		586214B66F51B72C0F68E9A1 /* TunnelModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelModel.swift; sourceTree = "<group>"; };
+		5B61EFDE0ABC754AF94AC413 /* TVComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVComponents.swift; sourceTree = "<group>"; };
+		691C502B4AD257D780A19F50 /* TVBridgeShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVBridgeShell.swift; sourceTree = "<group>"; };
+		6B34B1EE4E1E11DF5DDF6D4C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		862D4D14A562DBDF13481586 /* PacketTunnelProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PacketTunnelProvider.swift; sourceTree = "<group>"; };
+		89623E6EA68910B826A12C49 /* MijiaLANTVPrototypeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MijiaLANTVPrototypeApp.swift; sourceTree = "<group>"; };
+		8B5636BD4C34201595ACA070 /* MijiaLANTVPrototype.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = MijiaLANTVPrototype.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9200C0292EBF480881AB1FED /* MijiaLANiOSPrototype.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = MijiaLANiOSPrototype.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9D91EEE7673B2D1247221BB7 /* TVHomePresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVHomePresentation.swift; sourceTree = "<group>"; };
+		B028F0739DF9C7F9A9238B89 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		B685A696107883AD73BBCA37 /* TVUpdateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVUpdateView.swift; sourceTree = "<group>"; };
+		D3171945D9CCA6A8656A1784 /* TVUpdateModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVUpdateModel.swift; sourceTree = "<group>"; };
+		D5E941D99301AA787AA2A13E /* TVBridgeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVBridgeUITests.swift; sourceTree = "<group>"; };
+		DCDED3A698DD88F4658B777E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		DD602B0EF8A9FCBA2CF0CF06 /* MijiaLANTVTunnel.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = MijiaLANTVTunnel.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		EC7AC2507E0DCEDE0C36FCFA /* TVDiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVDiagnosticsView.swift; sourceTree = "<group>"; };
+		F6ACAEE875BC31D9325B7CF7 /* AppleTV */ = {isa = PBXFileReference; lastKnownFileType = folder; name = AppleTV; path = .; sourceTree = SOURCE_ROOT; };
+		F91B3D93AFC9E99251799ECA /* TVSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVSheets.swift; sourceTree = "<group>"; };
+		FE98FB79551AD11D9BFCAAD0 /* Prototype.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Prototype.entitlements; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		183EE1E14499633A875BD363 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6C26ED5EC44D352B03FCE033 /* TVPrototypeKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A996A9B78C6FD5B69942633F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EC8D3FC2A3C45DEE5BE678A3 /* TVPrototypeKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E345311E1210D1AA070C17EC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A8D4EC33440DFF1E91F5F086 /* TVPrototypeKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EF56C8E1B753DBCF8035B179 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8761F08F1DD9C3349C92BF21 /* TVPrototypeKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		2210FF17C8D411AF3EC43843 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				9200C0292EBF480881AB1FED /* MijiaLANiOSPrototype.app */,
+				1698F0C53B0B3C1108DF7C35 /* MijiaLANiOSTunnel.appex */,
+				8B5636BD4C34201595ACA070 /* MijiaLANTVPrototype.app */,
+				DD602B0EF8A9FCBA2CF0CF06 /* MijiaLANTVTunnel.appex */,
+				56CBAE802C6559D2948670EC /* MijiaLANTVUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		53B2C5411AFD96AC2630E7D6 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				F6ACAEE875BC31D9325B7CF7 /* AppleTV */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		58E537FF3CD9C6351CD6F065 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				B028F0739DF9C7F9A9238B89 /* Info.plist */,
+				89623E6EA68910B826A12C49 /* MijiaLANTVPrototypeApp.swift */,
+				23CD90B60E3206B465679C87 /* Prototype.entitlements */,
+				586214B66F51B72C0F68E9A1 /* TunnelModel.swift */,
+				88E02EC1FA602BFDAAC38C4B /* TV */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		6E2486369FA26692516EEDE9 /* Tunnel */ = {
+			isa = PBXGroup;
+			children = (
+				6B34B1EE4E1E11DF5DDF6D4C /* Info.plist */,
+				862D4D14A562DBDF13481586 /* PacketTunnelProvider.swift */,
+				FE98FB79551AD11D9BFCAAD0 /* Prototype.entitlements */,
+			);
+			path = Tunnel;
+			sourceTree = "<group>";
+		};
+		88E02EC1FA602BFDAAC38C4B /* TV */ = {
+			isa = PBXGroup;
+			children = (
+				691C502B4AD257D780A19F50 /* TVBridgeShell.swift */,
+				5B61EFDE0ABC754AF94AC413 /* TVComponents.swift */,
+				EC7AC2507E0DCEDE0C36FCFA /* TVDiagnosticsView.swift */,
+				9D91EEE7673B2D1247221BB7 /* TVHomePresentation.swift */,
+				49AE92E190A23E0A3490E60D /* TVPages.swift */,
+				F91B3D93AFC9E99251799ECA /* TVSheets.swift */,
+				D3171945D9CCA6A8656A1784 /* TVUpdateModel.swift */,
+				B685A696107883AD73BBCA37 /* TVUpdateView.swift */,
+			);
+			path = TV;
+			sourceTree = "<group>";
+		};
+		B11C1B60BBC85EC409D05A07 = {
+			isa = PBXGroup;
+			children = (
+				58E537FF3CD9C6351CD6F065 /* App */,
+				53B2C5411AFD96AC2630E7D6 /* Packages */,
+				6E2486369FA26692516EEDE9 /* Tunnel */,
+				E6F3F3D99F2171E525C9636E /* tvOS */,
+				CD99891E662615F1326AB0E7 /* UITests */,
+				2210FF17C8D411AF3EC43843 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		CD99891E662615F1326AB0E7 /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				D5E941D99301AA787AA2A13E /* TVBridgeUITests.swift */,
+			);
+			path = UITests;
+			sourceTree = "<group>";
+		};
+		E6F3F3D99F2171E525C9636E /* tvOS */ = {
+			isa = PBXGroup;
+			children = (
+				DCDED3A698DD88F4658B777E /* Assets.xcassets */,
+			);
+			path = tvOS;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		1C9FCBD3D5DF00E2A845724C /* MijiaLANiOSPrototype */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F2558B7AD00C50E4367E7C42 /* Build configuration list for PBXNativeTarget "MijiaLANiOSPrototype" */;
+			buildPhases = (
+				ADB5EDDEBD04063D1A085B72 /* Sources */,
+				183EE1E14499633A875BD363 /* Frameworks */,
+				27BEBD9D67C76141BC0F776A /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A4506E89C9FB242D956BE64D /* PBXTargetDependency */,
+			);
+			name = MijiaLANiOSPrototype;
+			packageProductDependencies = (
+				A2358768C9A2F896CD146169 /* TVPrototypeKit */,
+			);
+			productName = MijiaLANiOSPrototype;
+			productReference = 9200C0292EBF480881AB1FED /* MijiaLANiOSPrototype.app */;
+			productType = "com.apple.product-type.application";
+		};
+		42CC121D689923BA9B7851FD /* MijiaLANTVTunnel */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D9B3DD40BAF87DC356036F76 /* Build configuration list for PBXNativeTarget "MijiaLANTVTunnel" */;
+			buildPhases = (
+				8CC8C170E196E30423E0537F /* Sources */,
+				A996A9B78C6FD5B69942633F /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MijiaLANTVTunnel;
+			packageProductDependencies = (
+				48A1F908EA95288401950E84 /* TVPrototypeKit */,
+			);
+			productName = MijiaLANTVTunnel;
+			productReference = DD602B0EF8A9FCBA2CF0CF06 /* MijiaLANTVTunnel.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		4D860228BE5F221B427C1FD5 /* MijiaLANTVUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C42865DAE39605F05D4F49AB /* Build configuration list for PBXNativeTarget "MijiaLANTVUITests" */;
+			buildPhases = (
+				6B44E41934EC87F756D4F7A4 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				2DDAD7CDE55D3FCDD9C2D59B /* PBXTargetDependency */,
+			);
+			name = MijiaLANTVUITests;
+			packageProductDependencies = (
+			);
+			productName = MijiaLANTVUITests;
+			productReference = 56CBAE802C6559D2948670EC /* MijiaLANTVUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		EA201DA939578C8BCDAF440F /* MijiaLANTVPrototype */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 93CD3EEFE6DC726F1ABAA021 /* Build configuration list for PBXNativeTarget "MijiaLANTVPrototype" */;
+			buildPhases = (
+				36696718E9D10545D1FA39B0 /* Sources */,
+				1FEEDCA340DE80DAD12BAED5 /* Resources */,
+				E345311E1210D1AA070C17EC /* Frameworks */,
+				37A02730551F407698DF2EC2 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				2E2F65F4C31DB30EB6E6D738 /* PBXTargetDependency */,
+			);
+			name = MijiaLANTVPrototype;
+			packageProductDependencies = (
+				0C9BBBC70E7580871B2A45AE /* TVPrototypeKit */,
+			);
+			productName = MijiaLANTVPrototype;
+			productReference = 8B5636BD4C34201595ACA070 /* MijiaLANTVPrototype.app */;
+			productType = "com.apple.product-type.application";
+		};
+		F1DBFB1ACAF144709645762F /* MijiaLANiOSTunnel */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AE9175C72EB97F736F1E7A5C /* Build configuration list for PBXNativeTarget "MijiaLANiOSTunnel" */;
+			buildPhases = (
+				678AA9C35B4A47A521B6575E /* Sources */,
+				EF56C8E1B753DBCF8035B179 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MijiaLANiOSTunnel;
+			packageProductDependencies = (
+				A5FE27AEE973647B52C2DAFF /* TVPrototypeKit */,
+			);
+			productName = MijiaLANiOSTunnel;
+			productReference = 1698F0C53B0B3C1108DF7C35 /* MijiaLANiOSTunnel.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A9713466931D8F2E1CD5AE90 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					1C9FCBD3D5DF00E2A845724C = {
+						ProvisioningStyle = Automatic;
+					};
+					42CC121D689923BA9B7851FD = {
+						ProvisioningStyle = Automatic;
+					};
+					4D860228BE5F221B427C1FD5 = {
+						ProvisioningStyle = Automatic;
+						TestTargetID = EA201DA939578C8BCDAF440F;
+					};
+					EA201DA939578C8BCDAF440F = {
+						ProvisioningStyle = Automatic;
+					};
+					F1DBFB1ACAF144709645762F = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 6677F378896F580DB061470C /* Build configuration list for PBXProject "MijiaLANTVPrototype" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = B11C1B60BBC85EC409D05A07;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				822F3B5FEBC59A323FAF7E9B /* XCLocalSwiftPackageReference "." */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 2210FF17C8D411AF3EC43843 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				EA201DA939578C8BCDAF440F /* MijiaLANTVPrototype */,
+				42CC121D689923BA9B7851FD /* MijiaLANTVTunnel */,
+				4D860228BE5F221B427C1FD5 /* MijiaLANTVUITests */,
+				1C9FCBD3D5DF00E2A845724C /* MijiaLANiOSPrototype */,
+				F1DBFB1ACAF144709645762F /* MijiaLANiOSTunnel */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		1FEEDCA340DE80DAD12BAED5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8F992D80D9923B4350B3DEC6 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		36696718E9D10545D1FA39B0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				93FAB7CBF5B98DB7BA6111CA /* MijiaLANTVPrototypeApp.swift in Sources */,
+				085158026A36667B59624639 /* TVBridgeShell.swift in Sources */,
+				ED6003AB5D5B71E1A6671F11 /* TVComponents.swift in Sources */,
+				293ADFA50DF15BBC2E05958C /* TVDiagnosticsView.swift in Sources */,
+				4337BD1181DE80E30B0E299D /* TVHomePresentation.swift in Sources */,
+				5FCE66F3CE779ABA31E623A9 /* TVPages.swift in Sources */,
+				A1DB091491FA8C4297E802D1 /* TVSheets.swift in Sources */,
+				9A8475AE308E23658105EE01 /* TVUpdateModel.swift in Sources */,
+				3FD390FC50ACC2BB9DFC921A /* TVUpdateView.swift in Sources */,
+				1AC576F5E311B70AC551E6CE /* TunnelModel.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		678AA9C35B4A47A521B6575E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				88FB93F995D000B4FF0BF389 /* PacketTunnelProvider.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6B44E41934EC87F756D4F7A4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D725D35BD8EB1623BA4AB881 /* TVBridgeUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8CC8C170E196E30423E0537F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C98D313C64E51DFBC40A9299 /* PacketTunnelProvider.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		ADB5EDDEBD04063D1A085B72 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				002CD7DD7CB47C9EECDC1C13 /* MijiaLANTVPrototypeApp.swift in Sources */,
+				324D9A9113E96F6D56326C30 /* TVBridgeShell.swift in Sources */,
+				50D84838BBB462D0431C7145 /* TVComponents.swift in Sources */,
+				04CB8CDDCEF44E785682E645 /* TVDiagnosticsView.swift in Sources */,
+				038F941D858C9FA460192AC1 /* TVHomePresentation.swift in Sources */,
+				DF34A40643CA5A19B7ADEB4D /* TVPages.swift in Sources */,
+				DB2CE2FDF976AF2631737B4B /* TVSheets.swift in Sources */,
+				1EBAD89B1AF11A1B5F8DC8F3 /* TVUpdateModel.swift in Sources */,
+				56134146AC13D77ED715790C /* TVUpdateView.swift in Sources */,
+				D5DBC7E173B56B586917AEEB /* TunnelModel.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		2DDAD7CDE55D3FCDD9C2D59B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EA201DA939578C8BCDAF440F /* MijiaLANTVPrototype */;
+			targetProxy = 2B03D058BC98AD6508815E62 /* PBXContainerItemProxy */;
+		};
+		2E2F65F4C31DB30EB6E6D738 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 42CC121D689923BA9B7851FD /* MijiaLANTVTunnel */;
+			targetProxy = 6990CE228A9F6AEE668628DA /* PBXContainerItemProxy */;
+		};
+		A4506E89C9FB242D956BE64D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F1DBFB1ACAF144709645762F /* MijiaLANiOSTunnel */;
+			targetProxy = EAFBC3396E0882FACA537C53 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		133E55E1F3779D89A82EF7C9 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = iOS/Prototype.entitlements;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Tunnel/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(PROTOTYPE_BASE_ID).Tunnel";
+				PROTOTYPE_APP_GROUP = group.com.ipocket.MijiaLAN.iOSPrototype;
+				PROTOTYPE_BASE_ID = com.ipocket.MijiaLAN.iOSPrototype;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		1F72A235C3843512246CE995 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = NO;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.ipocket.MijiaLAN.TVPrototype.UITests;
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+				TEST_TARGET_NAME = MijiaLANTVPrototype;
+			};
+			name = Release;
+		};
+		34FD1DA9157871B03D6F0AFD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = NO;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.ipocket.MijiaLAN.TVPrototype.UITests;
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+				TEST_TARGET_NAME = MijiaLANTVPrototype;
+			};
+			name = Debug;
+		};
+		38281D58A71095F72CA02486 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = NO;
+				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
+				CODE_SIGN_ENTITLEMENTS = App/Prototype.entitlements;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(PROTOTYPE_BASE_ID)";
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+			};
+			name = Debug;
+		};
+		44A4F915E1960D3279831BCB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Tunnel/Prototype.entitlements;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Tunnel/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(PROTOTYPE_BASE_ID).Tunnel";
+				SDKROOT = appletvos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = 3;
+			};
+			name = Debug;
+		};
+		6370467DD4D45CFE5EF52BE6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 2;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROTOTYPE_APP_GROUP = group.com.ipocket.MijiaLAN.TVPrototype;
+				PROTOTYPE_BASE_ID = com.ipocket.MijiaLAN.TVPrototype;
+				REGISTER_APP_GROUPS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TVOS_DEPLOYMENT_TARGET = 18.0;
+			};
+			name = Debug;
+		};
+		6FFE5798D4AFA4B331EB42E2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Tunnel/Prototype.entitlements;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Tunnel/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(PROTOTYPE_BASE_ID).Tunnel";
+				SDKROOT = appletvos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = 3;
+			};
+			name = Release;
+		};
+		769B69FEFE7921F4F95706F9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = NO;
+				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
+				CODE_SIGN_ENTITLEMENTS = App/Prototype.entitlements;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(PROTOTYPE_BASE_ID)";
+				SDKROOT = appletvos;
+				TARGETED_DEVICE_FAMILY = 3;
+			};
+			name = Release;
+		};
+		8CDD563850457786A79EA97A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 2;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROTOTYPE_APP_GROUP = group.com.ipocket.MijiaLAN.TVPrototype;
+				PROTOTYPE_BASE_ID = com.ipocket.MijiaLAN.TVPrototype;
+				REGISTER_APP_GROUPS = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TVOS_DEPLOYMENT_TARGET = 18.0;
+			};
+			name = Release;
+		};
+		9E4B54B7F8B0AD358EE56EC9 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = iOS/Prototype.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = iOS/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(PROTOTYPE_BASE_ID)";
+				PROTOTYPE_APP_GROUP = group.com.ipocket.MijiaLAN.iOSPrototype;
+				PROTOTYPE_BASE_ID = com.ipocket.MijiaLAN.iOSPrototype;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B588AFBF2A2136895E8226DD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = iOS/Prototype.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = iOS/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(PROTOTYPE_BASE_ID)";
+				PROTOTYPE_APP_GROUP = group.com.ipocket.MijiaLAN.iOSPrototype;
+				PROTOTYPE_BASE_ID = com.ipocket.MijiaLAN.iOSPrototype;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		D695799BF12D39200F287B0B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = iOS/Prototype.entitlements;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Tunnel/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(PROTOTYPE_BASE_ID).Tunnel";
+				PROTOTYPE_APP_GROUP = group.com.ipocket.MijiaLAN.iOSPrototype;
+				PROTOTYPE_BASE_ID = com.ipocket.MijiaLAN.iOSPrototype;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		6677F378896F580DB061470C /* Build configuration list for PBXProject "MijiaLANTVPrototype" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6370467DD4D45CFE5EF52BE6 /* Debug */,
+				8CDD563850457786A79EA97A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		93CD3EEFE6DC726F1ABAA021 /* Build configuration list for PBXNativeTarget "MijiaLANTVPrototype" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				38281D58A71095F72CA02486 /* Debug */,
+				769B69FEFE7921F4F95706F9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		AE9175C72EB97F736F1E7A5C /* Build configuration list for PBXNativeTarget "MijiaLANiOSTunnel" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				133E55E1F3779D89A82EF7C9 /* Debug */,
+				D695799BF12D39200F287B0B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C42865DAE39605F05D4F49AB /* Build configuration list for PBXNativeTarget "MijiaLANTVUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				34FD1DA9157871B03D6F0AFD /* Debug */,
+				1F72A235C3843512246CE995 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		D9B3DD40BAF87DC356036F76 /* Build configuration list for PBXNativeTarget "MijiaLANTVTunnel" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				44A4F915E1960D3279831BCB /* Debug */,
+				6FFE5798D4AFA4B331EB42E2 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F2558B7AD00C50E4367E7C42 /* Build configuration list for PBXNativeTarget "MijiaLANiOSPrototype" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9E4B54B7F8B0AD358EE56EC9 /* Debug */,
+				B588AFBF2A2136895E8226DD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		822F3B5FEBC59A323FAF7E9B /* XCLocalSwiftPackageReference "." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = .;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		0C9BBBC70E7580871B2A45AE /* TVPrototypeKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TVPrototypeKit;
+		};
+		48A1F908EA95288401950E84 /* TVPrototypeKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TVPrototypeKit;
+		};
+		A2358768C9A2F896CD146169 /* TVPrototypeKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TVPrototypeKit;
+		};
+		A5FE27AEE973647B52C2DAFF /* TVPrototypeKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TVPrototypeKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A9713466931D8F2E1CD5AE90 /* Project object */;
+}

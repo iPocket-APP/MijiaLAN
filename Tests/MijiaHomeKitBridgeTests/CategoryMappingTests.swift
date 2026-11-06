@@ -231,6 +231,78 @@ struct CategoryMappingTests {
         #expect(!plan.bindings.values.contains { if case .option("p:2:5", .number(3)) = $0 { true } else { false } })
     }
 
+    @Test("A setting the device never reports, such as the airer's motor control, is a momentary switch that reads off")
+    func writeOnlySwitches() throws {
+        var s = try snapshot("xiaomi-airer-0002", model: "test.airer.0002")
+        #expect(s.capabilitiesByID["p:2:5"]?.readable == false)
+        let plan = try plan(s)
+        let up = try #require(plan.services.first { service in
+            service.characteristics.contains { if case .option("p:2:5", .number(1))? = plan.bindings[$0.iid] { true } else { false } }
+        })
+        s.health = LANDeviceHealth(state: .online)
+        #expect(value(plan, up, "25", s) == .bool(false))
+        #expect(try commands(plan, up, "25", .bool(true), s) == [.set("p:2:5", .number(1))])
+        #expect(try commands(plan, up, "25", .bool(false), s) == [])
+    }
+
+    @Test("A mode the spec does not list turns every mode switch off rather than making the fan unavailable")
+    func unlistedMode() throws {
+        var s = try snapshot("dmaker-p220", model: "test.fan.p220")
+        let plan = try plan(s)
+        let fan = try #require(plan.services.first { $0.type == .fanV2 })
+        let modes = plan.services.filter { service in
+            service.characteristics.contains { if case .option("p:2:3", _)? = plan.bindings[$0.iid] { true } else { false } }
+        }
+        #expect(!modes.isEmpty)
+        s.health = LANDeviceHealth(state: .online)
+        s.readings["p:2:1"] = DeviceReading(value: .bool(true), code: 0)
+        s.readings["p:2:3"] = DeviceReading(value: .number(9), code: 0)
+        for mode in modes { #expect(value(plan, mode, "25", s) == .bool(false)) }
+        #expect(value(plan, fan, "BF", s) == .uint8(0))
+    }
+
+    @Test("Every characteristic Home reads has a value once the device answers each of its properties")
+    func everyBindingReads() throws {
+        let fixtures = try #require(Bundle.module.urls(forResourcesWithExtension: "json", subdirectory: "Specs"))
+            .filter { $0.lastPathComponent != "rust-value-reference.json" }
+        var snapshots: [DeviceSnapshot] = []
+        for url in fixtures {
+            let name = url.deletingPathExtension().lastPathComponent
+            let schema = try JSONDecoder().decode(DeviceSchema.self, from: Data(contentsOf: url))
+            snapshots.append(try snapshot(name, model: "test.\(schema.category).\(name)"))
+        }
+        for model in DeviceSchema.bundledModels {
+            let schema = try #require(DeviceSchema.bundled(model: model))
+            snapshots.append(DeviceSnapshot(device: LocalDevice(did: "9", name: "Test", model: model, host: "test", token: ""),
+                                            schema: schema, capabilities: DeviceCapabilityCatalog.capabilities(schema: schema, model: model)))
+        }
+        #expect(snapshots.count == fixtures.count + DeviceSchema.bundledModels.count)
+        var missing: [String] = []
+        for var s in snapshots {
+            let plan = try plan(s, legacyDevice: smart(s))
+            let characteristics = plan.services.flatMap(\.characteristics)
+            s.health = LANDeviceHealth(state: .online)
+            for power in [true, false] {
+                // A valid answer for every readable property: power on or off, the first listed option, the low end
+                // of a range (a pot's 0–255 °C scale never reaches its middle).
+                for c in s.capabilities where c.readable {
+                    let answer: JSONValue = if c.format == "bool" { .bool(power) }
+                        else if let first = c.options.first { .number(Double(first.value)) }
+                        else if c.isNumeric { .number(c.min ?? 0) } else { .string("x") }
+                    s.readings[c.id] = DeviceReading(value: try c.validatedReading(answer), code: 0)
+                }
+                for c in characteristics {
+                    // The air conditioner companion's layout is read from MijiaCore's climate values instead.
+                    guard let binding = plan.bindings[c.iid] else { continue }
+                    if case .legacy = binding { continue }
+                    let read = CapabilityHomeKitMapper.value(binding, snapshot: s, legacyValues: [:], names: [:])
+                    if read.flatMap(c.normalizedRead) == nil { missing.append("\(s.device.model) power=\(power) \(c.type.rawValue) \(binding)") }
+                }
+            }
+        }
+        #expect(missing == [])
+    }
+
     @Test("Off and one other setting make one switch that writes both values; other pairs stay two switches")
     func offOnSwitch() throws {
         var s = try snapshot("xiaomi-airer-0002", model: "test.airer.0002")

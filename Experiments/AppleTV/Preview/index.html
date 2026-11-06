@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/icon.png">
+<title>MijiaLAN · Apple TV 原生预览</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#090b0d;color:#fff;font:15px -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}main{max-width:1500px;margin:auto;padding:20px}header{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px}header img{width:52px;height:32px;border-radius:6px}h1{font-size:18px;margin:0}header span{color:#aeb1b3;font-size:13px}nav,.remote{display:flex;gap:8px;flex-wrap:wrap}nav{margin-bottom:16px}button{border:1px solid #3a3d40;border-radius:10px;background:#202326;color:white;font:inherit;padding:11px 16px;cursor:pointer}button:hover{background:#363a3e}button:focus-visible{outline:3px solid #b5d69e;outline-offset:3px}button:disabled{opacity:.5;cursor:wait}.open{background:#1ea694;color:#fff;border-color:#1ea694}figure{margin:0;background:#000;border-radius:12px;overflow:hidden;aspect-ratio:16/9}figure img{width:100%;height:100%;object-fit:contain;pointer-events:none;user-select:none}footer{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:16px}.hint{color:#aeb1b3;line-height:1.65;margin:14px 0 0}#status{color:#b5d69e;align-self:center;font-size:13px}.remote button{min-width:48px}kbd{font:inherit;color:white}@media(max-width:600px){main{padding:12px}button{padding:10px 12px}header span{width:100%}.remote{gap:6px}nav{gap:6px}}
+</style>
+<main>
+  <header><img src="/icon.png" alt="MijiaLAN"><h1>Apple TV 原生预览</h1><span>连接本机 tvOS 模拟器 · 数据来源见应用内标记</span></header>
+  <nav aria-label="应用页面">
+    <button class="open" id="open">打开应用</button>
+    <button data-page="overview">总览</button>
+    <button data-page="devices">设备</button>
+    <button data-page="bridge">家庭桥接</button>
+    <button data-page="settings">应用设置</button>
+    <button data-page="diagnostics">诊断</button>
+    <button data-page="updates">软件更新</button>
+    <button id="download-report" disabled>下载诊断报告</button>
+  </nav>
+  <figure aria-label="原生 tvOS 实时画面"><img id="screen" src="/stream" alt="MijiaLAN 原生应用实时画面"></figure>
+  <footer>
+    <div class="remote" aria-label="Apple TV 遥控器">
+      <button data-key="left" aria-label="向左">←</button><button data-key="up" aria-label="向上">↑</button>
+      <button data-key="down" aria-label="向下">↓</button><button data-key="right" aria-label="向右">→</button>
+      <button data-key="select">确认</button><button data-key="back">返回</button>
+    </div>
+    <span id="status" role="status">正在连接实时画面…</span>
+  </footer>
+  <p class="hint">上方页面按钮用于示例预览；下方遥控器可操作当前 App。电视画面不是触屏；也可按方向键、回车确认、Esc 返回。点「打开应用」可返回示例模式。</p>
+  <p class="hint" id="report-status">在诊断页生成报告后，可在这里下载 JSON 文件。</p>
+</main>
+<script type="module" src="/client.js"></script>
+</html>

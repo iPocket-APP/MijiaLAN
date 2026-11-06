@@ -32,6 +32,24 @@ struct DeviceCapabilityTests {
         }
     }
 
+    @Test("A mode the spec does not list is still a reading, kept out of MijiaCore; wrong types, out-of-range numbers and writes are refused")
+    func unlistedOption() async throws {
+        let (controller, fake, _) = try makeController(model: "dmaker.fan.p28")
+        fake.props["2.3"] = .number(9)
+        await controller.refreshNow()
+        let s = try #require(controller.snapshots["123"])
+        let mode = try #require(s.capabilitiesByID["p:2:3"])
+        #expect(s.value("p:2:3") == .number(9))
+        #expect(s.readings["p:2:3"]?.error == nil)
+        #expect(!mode.lists(.number(9)) && mode.lists(.number(1)))
+        let home = controller.synthesizedHome()
+        #expect(home.devices.first { $0.id == "123" } != nil)
+        #expect(throws: DeviceControlError.self) { try mode.validatedReading(.string("smart")) }
+        #expect(throws: DeviceControlError.self) { try mode.validated(.number(9)) }
+        let speed = try #require(s.capabilitiesByID["p:8:1"])
+        #expect(throws: DeviceControlError.self) { try speed.validatedReading(.number(101)) }
+    }
+
     @Test("Firmware-quantized values are retained, never overwritten with the requested number")
     func quantization() async throws {
         let (controller, fake, _) = try makeController(model: "dmaker.fan.p28")

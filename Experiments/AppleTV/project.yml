@@ -1,0 +1,125 @@
+name: MijiaLANTVPrototype
+options:
+  bundleIdPrefix: com.ipocket.MijiaLAN
+  deploymentTarget:
+    iOS: "18.0"
+    tvOS: "18.0"
+packages:
+  MijiaTVPrototype:
+    path: .
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    CODE_SIGN_STYLE: Automatic
+    REGISTER_APP_GROUPS: YES
+    CURRENT_PROJECT_VERSION: 2
+    MARKETING_VERSION: 0.1.0
+    PROTOTYPE_BASE_ID: com.ipocket.MijiaLAN.TVPrototype
+    PROTOTYPE_APP_GROUP: group.com.ipocket.MijiaLAN.TVPrototype
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    # The runtime and its dependencies are also linked into the provider.
+    APPLICATION_EXTENSION_API_ONLY: YES
+targets:
+  MijiaLANTVPrototype:
+    type: application
+    platform: tvOS
+    sources: [App, tvOS/Assets.xcassets]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PROTOTYPE_BASE_ID)
+        CODE_SIGN_ENTITLEMENTS: App/Prototype.entitlements
+        INFOPLIST_FILE: App/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        APPLICATION_EXTENSION_API_ONLY: NO
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - package: MijiaTVPrototype
+        product: TVPrototypeKit
+      - target: MijiaLANTVTunnel
+        embed: true
+  MijiaLANTVTunnel:
+    type: app-extension
+    platform: tvOS
+    sources: [Tunnel]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PROTOTYPE_BASE_ID).Tunnel
+        CODE_SIGN_ENTITLEMENTS: Tunnel/Prototype.entitlements
+        INFOPLIST_FILE: Tunnel/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: MijiaTVPrototype
+        product: TVPrototypeKit
+  MijiaLANTVUITests:
+    type: bundle.ui-testing
+    platform: tvOS
+    sources: [UITests]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ipocket.MijiaLAN.TVPrototype.UITests
+        GENERATE_INFOPLIST_FILE: YES
+        APPLICATION_EXTENSION_API_ONLY: NO
+        TEST_TARGET_NAME: MijiaLANTVPrototype
+    dependencies:
+      - target: MijiaLANTVPrototype
+  MijiaLANiOSPrototype:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes: [Info.plist]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PROTOTYPE_BASE_ID)
+        PROTOTYPE_BASE_ID: com.ipocket.MijiaLAN.iOSPrototype
+        PROTOTYPE_APP_GROUP: group.com.ipocket.MijiaLAN.iOSPrototype
+        CODE_SIGN_ENTITLEMENTS: iOS/Prototype.entitlements
+        INFOPLIST_FILE: iOS/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        APPLICATION_EXTENSION_API_ONLY: NO
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - package: MijiaTVPrototype
+        product: TVPrototypeKit
+      - target: MijiaLANiOSTunnel
+        embed: true
+  MijiaLANiOSTunnel:
+    type: app-extension
+    platform: iOS
+    sources: [Tunnel]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PROTOTYPE_BASE_ID).Tunnel
+        PROTOTYPE_BASE_ID: com.ipocket.MijiaLAN.iOSPrototype
+        PROTOTYPE_APP_GROUP: group.com.ipocket.MijiaLAN.iOSPrototype
+        CODE_SIGN_ENTITLEMENTS: iOS/Prototype.entitlements
+        INFOPLIST_FILE: Tunnel/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - package: MijiaTVPrototype
+        product: TVPrototypeKit
+schemes:
+  MijiaLANTVPrototype:
+    build:
+      targets:
+        MijiaLANTVPrototype: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+    test:
+      config: Debug
+      targets: [MijiaLANTVUITests]
+  MijiaLANiOSPrototype:
+    build:
+      targets:
+        MijiaLANiOSPrototype: all
+    run:
+      config: Debug
+    archive:
+      config: Release

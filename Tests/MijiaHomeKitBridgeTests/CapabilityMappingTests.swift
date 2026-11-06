@@ -125,12 +125,59 @@ struct CapabilityMappingTests {
         #expect(CapabilityHomeKitMapper.value(binding, snapshot: s, legacyValues: [:], names: [:]) == .uint8(1))
         s.readings["p:9:1"] = DeviceReading(value: .number(500), code: 0)
         #expect(CapabilityHomeKitMapper.value(binding, snapshot: s, legacyValues: [:], names: [:]) == .uint8(2))
+
+        // Most purifiers have no motor speed; power-on alone then reads as purifying rather than No Response.
+        s.capabilities.removeAll { $0.service == "custom-service" && $0.name == "moto-speed-rpm" }
+        #expect(CapabilityHomeKitMapper.value(binding, snapshot: s, legacyValues: [:], names: [:]) == .uint8(2))
+        s.readings["p:2:1"] = DeviceReading(value: .bool(false), code: 0)
+        #expect(CapabilityHomeKitMapper.value(binding, snapshot: s, legacyValues: [:], names: [:]) == .uint8(0))
     }
 
-    private func snapshot(_ model: String) throws -> DeviceSnapshot {
+    @Test("The air conditioner companion's climate never reads a mode MijiaCore was not given")
+    func companionUnlistedMode() throws {
+        var s = try snapshot("lumi.acpartner.mcn02")
+        s.health = LANDeviceHealth(state: .online)
+        for (id, value) in [("p:2:1", JSONValue.bool(true)), ("p:2:2", .number(2)), ("p:2:3", .number(26)), ("p:3:1", .number(0)), ("p:3:2", .bool(false))] {
+            s.readings[id] = DeviceReading(value: value, code: 0)
+        }
+        let binding = CapabilityHAPBinding.legacy(.climateTargetState)
+        let legacy: [HomeKitRole: HAPCharacteristicValue] = [.climateTargetState: .uint8(2)]
+        #expect(CapabilityHomeKitMapper.value(binding, snapshot: s, legacyValues: legacy, names: [:]) == .uint8(2))
+        s.readings["p:2:2"] = DeviceReading(value: .number(7), code: 0)
+        #expect(CapabilityHomeKitMapper.value(binding, snapshot: s, legacyValues: legacy, names: [:]) == nil)
+    }
+
+    @Test("A light counting brightness 1–255 is scaled to Home's percentage both ways; 0% switches it off")
+    func scaledBrightness() throws {
+        var s = try snapshot("yeelink.light.lamp4", model: "test.light.lamp4")
+        let i = try #require(s.capabilities.firstIndex { $0.id == "p:2:2" })
+        s.capabilities[i].range = [1, 255, 1]
+        var ids: [String: UInt64] = [:]
+        let plan = CapabilityHomeKitMapper.plan(snapshot: s, legacyDevice: nil, names: [:], identifiers: &ids)
+        let brightness = try #require(plan.services.first { $0.type == .lightbulb }?.characteristics.first { $0.type == .brightness })
+        let binding = try #require(plan.bindings[brightness.iid])
+        s.health = LANDeviceHealth(state: .online)
+        s.readings["p:2:2"] = DeviceReading(value: .number(255), code: 0)
+        #expect(CapabilityHomeKitMapper.value(binding, snapshot: s, legacyValues: [:], names: [:]).flatMap { brightness.normalizedRead($0) } == .int32(100))
+        s.readings["p:2:2"] = DeviceReading(value: .number(128), code: 0)
+        #expect(CapabilityHomeKitMapper.value(binding, snapshot: s, legacyValues: [:], names: [:]).flatMap { brightness.normalizedRead($0) } == .int32(50))
+        #expect(try CapabilityHomeKitMapper.commands(binding, value: .int32(100), snapshot: s) == [.set("p:2:2", .number(255))])
+        #expect(try CapabilityHomeKitMapper.commands(binding, value: .int32(0), snapshot: s) == [.set("p:2:1", .bool(false))])
+        // A light that counts to 100 keeps its readings as they are.
+        var plain = try snapshot("yeelink.light.lamp4", model: "test.light.lamp4")
+        let direct = CapabilityHomeKitMapper.plan(snapshot: plain, legacyDevice: nil, names: [:], identifiers: &ids)
+        let c = try #require(direct.services.first { $0.type == .lightbulb }?.characteristics.first { $0.type == .brightness })
+        plain.health = LANDeviceHealth(state: .online)
+        plain.readings["p:2:2"] = DeviceReading(value: .number(40), code: 0)
+        #expect(direct.bindings[c.iid].flatMap { CapabilityHomeKitMapper.value($0, snapshot: plain, legacyValues: [:], names: [:]) } == .float(40))
+    }
+
+    /// `model` names the bundled spec; `deviceModel`, a placeholder, keeps the reviewed and legacy tables out.
+    private func snapshot(_ model: String, model deviceModel: String? = nil) throws -> DeviceSnapshot {
         let schema = try #require(DeviceSchema.bundled(model: model))
-        return DeviceSnapshot(device: LocalDevice(did: "123", name: "Test", model: model, host: "test", token: ""),
-            schema: schema, capabilities: DeviceCapabilityCatalog.capabilities(schema: schema, model: model))
+        let deviceModel = deviceModel ?? model
+        return DeviceSnapshot(device: LocalDevice(did: "123", name: "Test", model: deviceModel, host: "test", token: ""),
+            schema: schema, capabilities: DeviceCapabilityCatalog.capabilities(schema: schema, model: deviceModel))
     }
     private func smart(_ s: DeviceSnapshot) -> SmartDevice? {
         guard let core = s.schema.coreSpec else { return nil }

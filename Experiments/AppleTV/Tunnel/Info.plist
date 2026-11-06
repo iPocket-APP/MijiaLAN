@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
+    <key>CFBundleDisplayName</key><string>MijiaLAN 实验服务</string>
+    <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
+    <key>CFBundlePackageType</key><string>XPC!</string>
+    <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>PrototypeAppGroup</key><string>$(PROTOTYPE_APP_GROUP)</string>
+    <key>PrototypeKeychainGroup</key><string>$(AppIdentifierPrefix)$(PROTOTYPE_BASE_ID).shared</string>
+    <!-- iOS 27.0.1 device A/B: the provider also needs this service allowlist.
+         Removing it reproduces DNSServiceRegister NoAuth (-65555), despite the
+         containing app already declaring the same types. No extra entitlement. -->
+    <key>NSBonjourServices</key><array><string>_hap._tcp</string><string>_miio._udp</string></array>
+    <key>NSExtension</key><dict>
+        <key>NSExtensionPointIdentifier</key><string>com.apple.networkextension.packet-tunnel</string>
+        <key>NSExtensionPrincipalClass</key><string>$(PRODUCT_MODULE_NAME).PacketTunnelProvider</string>
+    </dict>
+</dict></plist>
