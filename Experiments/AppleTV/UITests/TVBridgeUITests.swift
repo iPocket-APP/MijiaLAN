@@ -255,8 +255,11 @@ final class TVBridgeUITests: XCTestCase {
         XCTAssertTrue(check.hasFocus)
         XCUIRemote.shared.press(.select)
         XCTAssertTrue(app.staticTexts["updates.source"].wait(for: \.label, toEqual: "TV 更新服务", timeout: 30))
-        XCTAssertTrue(app.staticTexts["updates.status"].wait(for: \.label, toEqual: "暂未发现可用的 TV 安装包", timeout: 5))
-        XCTAssertFalse(app.images["发行说明二维码"].exists)
+        XCTAssertTrue(check.wait(for: \.isEnabled, toEqual: true, timeout: 30))
+        let status = app.staticTexts["updates.status"].label
+        let hasUpdate = status.hasPrefix("发现新版本 ")
+        XCTAssertTrue(hasUpdate || ["暂未发现可用的 TV 安装包", "当前已是最新版本"].contains(status), status)
+        XCTAssertEqual(app.images["发行说明二维码"].exists, hasUpdate)
         capture("updates-production-service")
     }
 }

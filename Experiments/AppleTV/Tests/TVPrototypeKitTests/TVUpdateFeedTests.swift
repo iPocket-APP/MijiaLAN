@@ -3,6 +3,15 @@ import Testing
 @testable import TVPrototypeKit
 
 struct TVUpdateFeedTests {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["MIJIALAN_LIVE_FEED_FILE"] != nil))
+    func downloadedProductionFeedAnnouncesItsNewestBuild() throws {
+        let path = try #require(ProcessInfo.processInfo.environment["MIJIALAN_LIVE_FEED_FILE"])
+        let feed = try TVUpdateFeed.decode(Data(contentsOf: URL(fileURLWithPath: path)))
+        let newest = try #require(feed.releases.max { $0.build < $1.build })
+        #expect(feed.newest(after: newest.build - 1)?.build == newest.build)
+        #expect(feed.newest(after: newest.build) == nil)
+    }
+
     private func github(_ tag: String = "tvos-v0.1.1-b2", asset: String = "MijiaLAN-tvOS-0.1.1-b2.ipa", draft: Bool = false) -> Data {
         try! JSONSerialization.data(withJSONObject: [["tag_name": tag, "draft": draft,
             "published_at": "2026-11-06T00:00:00Z", "body": "TV release notes",

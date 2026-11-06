@@ -18,9 +18,13 @@ tvOS 可以通过 URLSession 读取 HTTPS 版本信息并显示更新提示。Sp
 
 专用接口返回 HTTP 404 时，回退到 GitHub 最近 100 条公开发行记录。只识别 `tvos-vVERSION-bBUILD` 标签及非空的 `MijiaLAN-tvOS-VERSION-bBUILD.ipa`，支持已公开 prerelease；Mac / Rust、draft、缺包或错误包名均排除。网络失败、其他 HTTP 错误和无效 JSON 显示检查失败，不会当作「已是最新」。数据为空时显示「暂未发现可用的 TV 安装包」。
 
-专用接口已在 2026-11-06 部署上线：[tvos/releases.json](https://mijialan-updates.ipocket.xyz/tvos/releases.json)，HTTP 200 / application/json，当前 `releases` 为空，因为尚未发布 TV 安装包。服务端改动经 [PR #9](https://github.com/iPocket-APP/MijiaLAN/pull/9) 合入主分支 `1feb4780406c595cb606010e3ab1331063392948`，[部署工作流](https://github.com/iPocket-APP/MijiaLAN/actions/runs/42207580629) 成功。上线前后四个原生 / Rust 更新源的 SHA-256 均一致。
+专用接口已在 2026-11-06 部署上线：[tvos/releases.json](https://mijialan-updates.ipocket.xyz/tvos/releases.json)，HTTP 200 / application/json。首次上线时 `releases` 为空，随后从独立 `MijiaLAN-tvOS` 分支发布首个 [0.1.0 (2) 自签实验版](https://github.com/iPocket-APP/MijiaLAN/releases/tag/tvos-v0.1.0-b2)。IPA 未签名，安装要求见 [INSTALL.md](INSTALL.md)。服务端改动经 [PR #9](https://github.com/iPocket-APP/MijiaLAN/pull/9) 合入主分支 `1feb4780406c595cb606010e3ab1331063392948`，[初次部署工作流](https://github.com/iPocket-APP/MijiaLAN/actions/runs/42207580629) 成功。上线前后四个原生 / Rust 更新源的 SHA-256 均一致。
 
 上线后已用 tvOS 27.2 Simulator 验收真实 HTTPS 请求：`testUpdateCheckUsesDeployedTVService` 通过（1 passed / 0 failed），App 不带预览或本地服务参数启动，遥控器进入更新页并手动检查，确认来源为「TV 更新服务」、结果为「暂未发现可用的 TV 安装包」，没有走 GitHub 回退。该测试须显式设置测试运行器环境变量 `MIJIALAN_LIVE_UPDATE_TEST=1`，平时跳过。结果包为 `build/validation/tvos-updates-deploy-20261106/ui-tests-production-v3.xcresult`，实际截图为同目录 `updates-production-service.png`。
+
+首次包发布后，线上 UI 验收按实际清单接受「无可用包」「当前已是最新版本」或「发现新版本」三种成功状态；有更新时必须展示二维码，其余状态不展示。可先用受信任的 HTTP 客户端下载线上 JSON，再设置 `MIJIALAN_LIVE_FEED_FILE=/absolute/path/releases.json` 运行 `TVUpdateFeedTests`，验证实际生产清单可由客户端解码，且较旧构建能发现最新包、当前构建不会重复提示。这样不会把尚未发布包时的空清单断言长期固定在线上测试中。
+
+0.1.0 (2) 已于 2026-11-06 20:06（Asia/Shanghai）公开为预发布版。[TV 云端构建](https://github.com/iPocket-APP/MijiaLAN/actions/runs/42213665748) 与 [更新清单刷新](https://github.com/iPocket-APP/MijiaLAN/actions/runs/42215196036) 均成功。四个附件匿名下载均为 HTTP 200，SHA-256 与发布前一致；原生 / Rust 四个更新源逐字节未变，GitHub latest 仍为原生 `v0.1.7`。从不带查询参数的生产地址下载到的清单包含构建 2，经实际客户端库的 5 项版本检查测试通过。发布后的这一步验证了生产清单与客户端解码 / 版本比较，没有重新运行模拟器 UI 或声称 Apple TV 真机通过。
 
 首轮线上请求被 Mac 的 LuLu 授权弹窗阻塞；授权本次测试后，原有 `URLSession.shared` 实现正常通过。未保留试验中的传输配置改动。验收后已删除本次安装路径新增的放行规则，保留既有规则；没有启用全局模拟器或 DNS 放行。测试 Runner 已卸载。Apple TV 真机的网络和升级仍需硬件验收。
 
