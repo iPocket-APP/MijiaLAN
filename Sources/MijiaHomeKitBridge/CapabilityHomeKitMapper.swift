@@ -147,7 +147,10 @@ public enum CapabilityHomeKitMapper {
                 }
             } else if category == "light" {
                 if let c = s.capability("light", "brightness"), c.writable {
-                    builder.add(key, type: .brightness, format: .int, binding: .property(c.id, .direct), writable: true, min: 0, max: 100, step: 1, unit: .percentage)
+                    // Most lights count 1–100; others 1–255 or 1–65535, which Home's percentage has to be scaled to.
+                    let scaled = c.max != 100 && c.min != nil && c.max != nil
+                    builder.add(key, type: .brightness, format: .int, binding: .property(c.id, scaled ? .percent : .direct), writable: true,
+                                min: 0, max: 100, step: 1, unit: .percentage)
                     consumed.insert(c.id)
                 }
                 if let c = s.capability("light", "color-temperature"), c.writable, let lo = c.min, let hi = c.max {
@@ -207,7 +210,11 @@ public enum CapabilityHomeKitMapper {
                 }
                 // A vendor list may name two values alike, such as two Pause entries; Home shows the first.
                 var titles: Set<String> = []
-                switches = c.options.filter { !consumed.contains("\(c.id)=\($0.value)") && titles.insert($0.title).inserted }.map {
+                // A None entry, such as a bed's mode among its positions, is no setting to switch on.
+                switches = c.options.filter {
+                    !consumed.contains("\(c.id)=\($0.value)") && titles.insert($0.title).inserted
+                        && (reviewed || !placeholderNames.contains($0.description.lowercased().filter(\.isLetter)))
+                }.map {
                     ("\(c.id)=\($0.value)", "\(c.displayTitle)·\($0.title)", .option(c.id, .number(Double($0.value))))
                 }
                 // Longer lists are programs (washer, fryer, light scenes) or fine levels, not a row of Home switches.
@@ -232,6 +239,13 @@ public enum CapabilityHomeKitMapper {
         }.joined(separator: "|")
         return CapabilityHomeKitPlan(info: info, services: builder.services, bindings: builder.bindings, signature: signature,
                                      omittedServiceCount: builder.omittedServiceKeys.count)
+    }
+
+    /// Whether the device becomes a Home accessory at all; the bridge leaves out one that maps to no service. The
+    /// plan follows the spec alone, never readings.
+    public static func mapsToHome(_ s: DeviceSnapshot) -> Bool {
+        var ids: [String: UInt64] = [:]
+        return !plan(snapshot: s, legacyDevice: nil, names: [:], identifiers: &ids).services.isEmpty
     }
 
     public static func presets(model: String, capability c: DeviceCapability) -> [Double] {
@@ -330,6 +344,8 @@ public enum CapabilityHomeKitMapper {
     static let maxExtraSwitches = 10
     /// The most options of one choice an unreviewed model shows as switches.
     static let maxSwitchOptions = 6
+    /// Option descriptions that name the absence of a setting.
+    static let placeholderNames: Set<String> = ["none", "null"]
     /// Configuration that is set once, on the device or the Mac, rather than daily from a Home tile.
     static let settingServices: Set<String> = [
         "alarm", "indicator-light", "screen", "display", "physical-controls-locked", "delay", "no-disturb", "panel-service",
@@ -606,8 +622,9 @@ public enum CapabilityHomeKitMapper {
             default: []
             }
             guard s.isOnline, ids.allSatisfy({ id in
+                // MijiaCore never sees an unlisted option, so its climate values would not reflect one.
                 guard let c = s.capabilitiesByID[id], let value = s.value(id) else { return false }
-                return (try? c.validatedReading(value)) != nil
+                return (try? c.validatedReading(value)) != nil && c.lists(value)
             }) else { return nil }
             return legacyValues[role]
         case .action: return .bool(false)
@@ -616,6 +633,9 @@ public enum CapabilityHomeKitMapper {
             guard let c = s.capabilities.first(where: { $0.id == id }) else { return nil }
             if c.control == .button { return .bool(false) }
             if c.prepared { return .bool(s.prepared[id] == option) }
+            // A setting the device takes but never reports, such as a fan's or airer's motor-control, is a momentary
+            // switch like a button. Waiting for a reading would leave the whole accessory showing No Response.
+            if !c.readable { return .bool(false) }
             guard s.isOnline, let raw = s.value(id), let value = try? c.validatedReading(raw) else { return nil }
             return .bool(value == option)
         case .property(let id, let conversion):
@@ -629,8 +649,10 @@ public enum CapabilityHomeKitMapper {
             case .running:
                 guard let b else { return nil }
                 if !b { return .uint8(0) }
-                // Powered on in auto mode does not necessarily mean the motor is running.
-                guard let rpm = s.value("custom-service", "moto-speed-rpm")?.doubleValue else { return nil }
+                // Powered on in auto mode does not necessarily mean the motor is running. Most purifiers have no
+                // reviewed motor speed, and for them power-on is the only evidence of purifying there is.
+                guard let motor = s.capability("custom-service", "moto-speed-rpm") else { return .uint8(2) }
+                guard let rpm = s.value(motor.id)?.doubleValue else { return nil }
                 return .uint8(rpm > 0 ? 2 : 1)
             case .mired:
                 guard let n, n > 0 else { return nil }
@@ -752,6 +774,7 @@ public enum CapabilityHomeKitMapper {
                 return [.set(id, .number(Double(mode)))] + (s.primaryPower.map { [.set($0.id, .bool(true))] } ?? [])
             case .percent:
                 guard (0...100).contains(n), let lo = c.min, let hi = c.max, hi > lo else { throw HAPError.invalidValue }
+                if c.name == "brightness", n == 0, let power = s.capability("light", "on") { return [.set(power.id, .bool(false))] }
                 let raw = lo + ((n * (hi - lo) / 100) / c.step).rounded() * c.step
                 return [.set(id, .number(min(hi, max(lo, raw))))]
             case .active, .direct:

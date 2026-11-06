@@ -46,6 +46,10 @@ struct ControlCenterDeviceDetail: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Toggle(L10n.tr("在「家庭」中显示", "Show in Home"), isOn: Binding(get: { model.isInHomeKit(device) }, set: { model.setInHomeKit(device, $0) }))
                         .toggleStyle(.switch).controlSize(.mini).disabled(!model.homeKitSupports(device))
+                    if model.devices.snapshots[device.did] != nil, !model.homeKitSupports(device) {
+                        Text(L10n.tr("「家庭」没有对应的配件类型，这台设备只能在这里控制。", "No matching accessory type in Home. Control this device here."))
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
                     Button(L10n.tr("从清单移除", "Remove from List"), role: .destructive) { confirmingRemoval = true }
                         .buttonStyle(.borderless)
                 }
