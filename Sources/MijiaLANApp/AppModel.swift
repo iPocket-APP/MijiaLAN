@@ -61,6 +61,7 @@ final class AppModel {
     @ObservationIgnored private var importTask: Task<Void, Never>?
     @ObservationIgnored private var rediscoveryTask: Task<Void, Never>?
     @ObservationIgnored private var bridgeAttached = false
+    @ObservationIgnored private var homeKitSupport: (revision: UInt64, devices: [String: Bool]) = (0, [:])
     @ObservationIgnored private let usesPreviewDevices: Bool
     @ObservationIgnored private let logger = Logger(subsystem: "com.mijialan.MijiaLAN", category: "App")
 
@@ -150,9 +151,17 @@ final class AppModel {
         if included { store.unhideDevice(device.did) } else { store.hideDevice(device.did) }
     }
 
-    /// Whether Apple Home has an accessory type for this device at all.
+    /// Whether Apple Home gets an accessory for this device at all. Having controls is not enough: the bridge leaves
+    /// out a device none of whose controls maps to a Home service, such as a bed with only vendor-defined motors.
     func homeKitSupports(_ device: LocalDevice) -> Bool {
-        devices.snapshots[device.did]?.controls.isEmpty == false
+        guard let snapshot = devices.snapshots[device.did] else { return false }
+        // Called for every row on every render; the answer only changes with the device's spec.
+        let revision = devices.structureRevision
+        if homeKitSupport.revision != revision { homeKitSupport = (revision, [:]) }
+        if let known = homeKitSupport.devices[device.did] { return known }
+        let supported = CapabilityHomeKitMapper.mapsToHome(snapshot)
+        homeKitSupport.devices[device.did] = supported
+        return supported
     }
 
     func remove(_ device: LocalDevice) {

@@ -58,6 +58,10 @@ private struct CapabilityControlRow: View {
                 if $0 != Int.min { send(.set(capability.id, .number(Double($0)))) }
             })) {
                 Text(capability.prepared ? L10n.tr("请选择", "Select…") : L10n.tr("状态未知", "Unknown State")).tag(Int.min)
+                if let reported = value?.integer, !capability.options.contains(where: { $0.value == reported }) {
+                    // An option the spec does not list, shown by its number.
+                    Text(capability.formatted(value)).tag(reported)
+                }
                 ForEach(capability.options) { Text($0.title).tag($0.value) }
             }
             .labelsHidden().frame(maxWidth: 180)

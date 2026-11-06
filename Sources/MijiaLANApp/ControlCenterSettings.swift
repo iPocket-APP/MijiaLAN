@@ -256,7 +256,7 @@ private struct SettingsHomeKitDeviceRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(DevicePresentation.name(device)).font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
                 if !supported {
-                    Text(model.smartDevice(for: device) == nil ? L10n.tr("还没读到设备规格", "Device specifications are not available yet.") : L10n.tr("「家庭」没有对应的配件类型", "No matching accessory type in Home."))
+                    Text(model.devices.snapshots[device.did] == nil ? L10n.tr("还没读到设备规格", "Device specifications are not available yet.") : L10n.tr("「家庭」没有对应的配件类型", "No matching accessory type in Home."))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 } else if let room = device.roomName, !room.isEmpty {

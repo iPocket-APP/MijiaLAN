@@ -502,8 +502,9 @@ public final class DeviceController {
             specs[s.device.model] = s.coreSpec
             for c in s.capabilities where c.kind == .property {
                 // MijiaCore reads numbers, and numeric strings such as "nan", with `intValue`, which traps on a
-                // number Int cannot hold. Such a value is left out; the capability itself still shows it.
-                if let value = s.value(c.id), value.doubleValue == nil || value.integer != nil {
+                // number Int cannot hold. Such a value is left out; the capability itself still shows it. So is an
+                // option the spec does not list, which MijiaCore's own tables have no meaning for.
+                if let value = s.value(c.id), c.lists(value), value.doubleValue == nil || value.integer != nil {
                     values[MiotPropKey(did: s.id, siid: c.siid, piid: c.iid)] = value
                 }
             }

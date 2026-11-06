@@ -141,11 +141,17 @@ public struct DeviceCapability: Equatable, Sendable, Identifiable {
             guard case .number(let n) = value, n.isFinite else { throw DeviceControlError.invalidValue(title) }
             if let min, n < min { throw DeviceControlError.invalidValue(title) }
             if let max, n > max { throw DeviceControlError.invalidValue(title) }
-            if !options.isEmpty, !options.contains(where: { Double($0.value) == n }) { throw DeviceControlError.invalidValue(title) }
+            // Specs often list fewer options than the firmware reports, such as a fan whose mode list holds only
+            // Auto. An unlisted number is still what the device says: it matches none of the options.
             return value
         }
         if format == "string", case .string = value { return value }
         throw DeviceControlError.invalidValue(title)
+    }
+
+    /// Whether `value` is one of the spec's options, or the property has no option list.
+    public func lists(_ value: JSONValue) -> Bool {
+        options.isEmpty || options.contains { Double($0.value) == value.doubleValue }
     }
 
     public func validated(_ value: JSONValue) throws -> JSONValue {

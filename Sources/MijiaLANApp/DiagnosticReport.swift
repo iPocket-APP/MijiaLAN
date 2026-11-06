@@ -33,6 +33,8 @@ enum DiagnosticReport {
             var row: [String: Any] = [
                 "did": s.id, "model": s.device.model, "name": s.device.name, "health": String(describing: s.health.state),
                 "homeIncluded": !hidden.contains(s.id),
+                // False: no control maps to a Home service, so the bridge leaves the device out whatever the switch says.
+                "homeKitSupported": CapabilityHomeKitMapper.mapsToHome(s),
                 "readings": s.capabilities.filter(\.readable).map { c -> [String: Any] in
                     var entry: [String: Any] = ["id": c.id, "name": c.title]
                     if let reading = s.readings[c.id] {

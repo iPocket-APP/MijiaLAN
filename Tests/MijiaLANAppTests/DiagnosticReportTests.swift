@@ -29,6 +29,7 @@ struct DiagnosticReportTests {
         #expect(json["paired"] as? Bool == true)
         let row = try #require((json["devices"] as? [[String: Any]])?.first)
         #expect(row["specType"] as? String == schema.type)
+        #expect(row["homeKitSupported"] as? Bool == true)
         #expect(row["lastError"] as? String == "timeout")
         let failures = try #require(row["homeKitReadFailures"] as? [[String: Any]])
         #expect(failures.count == 1)
