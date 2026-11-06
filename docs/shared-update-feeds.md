@@ -1,5 +1,7 @@
 # 原生版与 Rust 版共用更新域名
 
+Apple TV 自签实验增加 `/tvos/releases.json` 版本清单，按 `tvos-vVERSION-bBUILD` 和对应 IPA 附件筛选；未发布 TV 包时清单为空。此接口仅用于检查版本、更新说明和发行页二维码，安装不使用 Sparkle。整站部署同时保留此路径，详见 [tvos-update-feed.md](tvos-update-feed.md)。
+
 原生客户端继续读取 `https://mijialan-updates.ipocket.xyz/appcast.xml`，原生签名公钥和客户端配置不变。Rust 客户端分别读取 `/rs/macos-arm64/appcast.xml`、`/rs/macos-x86_64/appcast.xml`、`/rs/windows-x86_64/appcast.xml`，并使用独立 Rust 更新公钥。
 
 `update-site.json` 只包含域名、仓库和两套公钥，不含私钥。`scripts/update_site.py` 从已公开的 Release 附件重建完整站点，验证签名、长度、版本和平台路径。后续原生 Release 保存 `native-appcast.xml` 快照，旧版兼容现有线上根源；即使部署排队被替代，其他发布也能从公开 Release 恢复最新原生源。Rust feed bundle 同样有独立 Ed25519 签名，只有其三个规定的路径可以进入站点。各平台保留自己的最新更新；原生与 Rust 不会互相覆盖。

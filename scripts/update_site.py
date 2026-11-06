@@ -15,6 +15,7 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
+import tvos_updates
 
 ROOT = Path(__file__).resolve().parents[1]
 SPARKLE = 'http://www.andymatuschak.org/xml-namespaces/sparkle'
@@ -201,7 +202,7 @@ def native_feed_content(directory, override=None):
 
 
 def check_live(output):
-    paths = sorted(output.rglob('appcast.xml'))
+    paths = sorted([*output.rglob('appcast.xml'), *output.glob('tvos/releases.json')])
     for path in paths:
         url = config()['origin'] + '/' + path.relative_to(output).as_posix()
         expected = path.read_bytes()
@@ -227,13 +228,17 @@ def assemble(output, native_feed=None):
         directory = Path(directory)
         native = native_feed_content(directory, native_feed)
         feeds = rust_feeds(directory)
+        tv = tvos_updates.encode(api('releases?per_page=100', paginate=True))
         # Nothing is staged until every retained flavor's public archive has been verified.
         (output / 'appcast.xml').write_bytes(native)
+        (output / 'tvos').mkdir()
+        (output / 'tvos/releases.json').write_bytes(tv)
         for platform, content in feeds.items():
             target = output / f'rs/{platform}/appcast.xml'
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
         links = ['<li><a href="appcast.xml">MijiaLAN for macOS</a></li>']
+        links += ['<li><a href="tvos/releases.json">MijiaLAN for Apple TV · version information</a></li>']
         links += [f'<li><a href="rs/{p}/appcast.xml">MijiaLAN Rust · {p}</a></li>' for p in sorted(feeds)]
         (output / 'index.html').write_text('<!doctype html><html lang="en"><meta charset="utf-8">'
             '<title>MijiaLAN Updates</title><h1>MijiaLAN Updates</h1><ul>' + ''.join(links) + '</ul></html>\n')

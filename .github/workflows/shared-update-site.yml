@@ -41,5 +41,5 @@ jobs:
           path: site
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5
-      - name: Verify native and Rust public feeds after deployment
+      - name: Verify native, Rust and TV public feeds after deployment
         run: python3 scripts/update_site.py --output site --check-live
