@@ -126,6 +126,10 @@ pub fn mailto_url(subject: &str, body: &str) -> url::Url {
     url.query_pairs_mut()
         .append_pair("subject", subject)
         .append_pair("body", body);
+    // mailto uses URI encoding (RFC 6068), not form encoding: spaces must be %20.
+    // Literal plus signs have already become %2B and remain intact.
+    let query = url.query().map(|query| query.replace('+', "%20"));
+    url.set_query(query.as_deref());
     url
 }
 
@@ -254,8 +258,8 @@ mod tests {
     }
     #[test]
     fn mail_fallback_preserves_recipient_unicode_ampersands_and_newlines() {
-        let subject = "诊断信息 · Rust 0.1.0 (12)";
-        let body = "请描述问题：\n\n诊断文件 & 附件";
+        let subject = "诊断信息 · Rust 0.1.0+hotfix (12)";
+        let body = "请描述问题：\n\n诊断文件 & 附件 + 补充";
         let url = mailto_url(subject, body);
         assert_eq!(url.scheme(), "mailto");
         assert_eq!(url.path(), SUPPORT_ADDRESS);
@@ -263,5 +267,7 @@ mod tests {
         assert_eq!(query["subject"], subject);
         assert_eq!(query["body"], body);
         assert!(!url.as_str().contains(' '));
+        assert!(!url.as_str().contains('+'));
+        assert!(url.as_str().contains("%20") && url.as_str().contains("%2B"));
     }
 }
