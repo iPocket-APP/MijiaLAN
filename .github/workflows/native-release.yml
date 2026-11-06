@@ -200,6 +200,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+      actions: read
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -214,6 +215,10 @@ jobs:
         with:
           name: native-release-universal
           path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: native-update-feed
+          path: updates
       - name: Publish verified assets
         run: |
           if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
@@ -221,7 +226,8 @@ jobs:
           else
             [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]
           fi
-          (cd dist && sha256sum --check SHA256SUMS.txt)
+          cp updates/appcast.xml dist/native-appcast.xml
+          (cd dist && sha256sum native-appcast.xml >> SHA256SUMS.txt && sha256sum --check SHA256SUMS.txt)
           stem="MijiaLAN-$RELEASE_VERSION-universal"
           state="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
           if [[ "$state" == false ]]; then
@@ -235,8 +241,8 @@ jobs:
             gh release edit "$RELEASE_TAG" --target "$GITHUB_SHA" \
               --title "MijiaLAN $RELEASE_VERSION" --notes-file "docs/releases/$RELEASE_TAG.md"
           fi
-          gh release upload "$RELEASE_TAG" "dist/$stem.dmg" "dist/$stem.zip" dist/SHA256SUMS.txt --clobber
-          [[ "$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')" == 3 ]]
+          gh release upload "$RELEASE_TAG" "dist/$stem.dmg" "dist/$stem.zip" dist/native-appcast.xml dist/SHA256SUMS.txt --clobber
+          [[ "$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')" == 4 ]]
           gh release edit "$RELEASE_TAG" --draft=false --latest
           gh release view "$RELEASE_TAG" --json url --jq '.url' >> "$GITHUB_STEP_SUMMARY"
 
@@ -246,6 +252,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
+      contents: read
+      actions: read
       pages: write
       id-token: write
     concurrency:
@@ -255,14 +263,24 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: native-update-feed
           path: updates
+      - name: Preserve all verified Rust platform feeds when updating the native feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/update_site.py --native-feed updates/appcast.xml --output site
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
-          path: updates
+          path: site
       - name: Publish feed only after the release is public
         id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5
+      - name: Verify every public update path
+        run: python3 scripts/update_site.py --output site --check-live
