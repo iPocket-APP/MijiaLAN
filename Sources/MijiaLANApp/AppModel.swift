@@ -45,6 +45,14 @@ final class AppModel {
     private(set) var lastRediscoveryAt: Date?
     private(set) var retryingDeviceIDs: Set<String> = []
 
+    enum DiagnosticsExport: Equatable {
+        case idle
+        case collecting
+        case exported(URL)
+        case failed(String)
+    }
+    private(set) var diagnosticsExport: DiagnosticsExport = .idle
+
     let store: HomeStore
     let bridge: HomeKitBridgeController
     @ObservationIgnored private let vault: SecretVault
@@ -234,6 +242,33 @@ final class AppModel {
                 self?.manualAddError = Self.describe(error)
             }
             self?.isAddingManually = false
+        }
+    }
+
+    // MARK: Diagnostics
+
+    /// Owned here rather than by the settings view: Finder or Mail taking focus closes the menu-bar panel.
+    func exportDiagnostics() {
+        export { DiagnosticReport.reveal($0) }
+    }
+
+    /// Opens a mail draft with the report attached, exporting one first if there is none yet.
+    func emailDiagnostics() {
+        if case .exported(let url) = diagnosticsExport { DiagnosticReport.email(url); return }
+        export { DiagnosticReport.email($0) }
+    }
+
+    private func export(then deliver: @escaping @MainActor (URL) -> Void) {
+        guard diagnosticsExport != .collecting else { return }
+        diagnosticsExport = .collecting
+        Task {
+            do {
+                let url = try await DiagnosticReport.export(model: self)
+                diagnosticsExport = .exported(url)
+                deliver(url)
+            } catch {
+                diagnosticsExport = .failed(Self.describe(error))
+            }
         }
     }
 

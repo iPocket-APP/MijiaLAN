@@ -16,33 +16,7 @@ enum DevSnapshot {
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(12))
                 await model.devices.refreshNow()
-                // Explicit allow-list: never serialize LocalDevice, tokens, pairing keys or setup codes.
-                let rows: [[String: Any]] = model.devices.snapshots.values.sorted { $0.id < $1.id }.map { s in
-                    var row: [String: Any] = ["did": s.id, "model": s.device.model, "name": s.device.name, "health": String(describing: s.health.state),
-                     "homeIncluded": model.isInHomeKit(s.device),
-                     "readings": s.capabilities.filter(\.readable).map { c -> [String: Any] in
-                         var entry: [String: Any] = ["id": c.id, "name": c.title]
-                         if let reading = s.readings[c.id] {
-                             entry["value"] = reading.value?.compactJSONString
-                             entry["code"] = reading.code
-                             entry["error"] = reading.error
-                             entry["updatedAt"] = reading.updatedAt?.ISO8601Format()
-                         }
-                         return entry
-                     }]
-                    if let retry = model.devices.retryStates[s.id] {
-                        row["retryFailures"] = retry.consecutiveFailures
-                        row["nextRetryAt"] = retry.nextRetryAt?.ISO8601Format()
-                        row["isProbing"] = retry.isProbing
-                    }
-                    return row
-                }
-                let output: [String: Any] = ["recordedAt": Date().ISO8601Format(), "bridge": String(describing: model.bridge.status),
-                    "accessories": model.bridge.exposedDeviceCount, "paired": model.bridge.isPaired,
-                    "keepsMacAwake": model.bridge.keepsMacAwake,
-                    "structureRevision": model.devices.structureRevision, "valuesRevision": model.devices.valuesRevision,
-                    "devices": rows]
-                if let data = try? JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys]) {
+                if let data = DiagnosticReport.json(model: model) {
                     diagnosticWriter.submit(data, to: URL(fileURLWithPath: path))
                 }
             }
