@@ -124,6 +124,7 @@ open build/MijiaLAN.app
 
 ```bash
 swift test
+swift test --package-path Vendor/MenuBarMijia --scratch-path "$PWD/.build/mijiacore-tests" -c release
 swift run mijia-lan discover
 swift run mijia-lan matrix
 ```
@@ -168,6 +169,7 @@ python3 -I scripts/import_hass_xiaomi_miot.py <path>/miio2miot_specs.py <commit>
 | `Sources/MijiaLANApp` | SwiftUI / AppKit 菜单栏界面 |
 | `Sources/mijia-lan` | 命令行工具 |
 | `Tests` | 协议、能力、安全边界、HomeKit 和本地化测试 |
+| `Vendor/MenuBarMijia` | 自行维护的 MijiaCore 源码、资源、测试和原始 MIT 许可证 |
 | `Vendor/hap-swift` | 保留原许可证的 HAP 实现及本地修复 |
 | `Vendor/hass-xiaomi-miot` | 映射表的上游许可证和转换说明 |
 | `Vendor/homebridge-miot` | HomeKit 类别规则的上游许可证和移植说明 |
@@ -177,7 +179,7 @@ python3 -I scripts/import_hass_xiaomi_miot.py <path>/miio2miot_specs.py <commit>
 
 本项目的原创代码使用 [MIT License](LICENSE)，版权归 iPocket-APP。第三方组件保留各自的许可证：
 
-- [MenuBarMijia](https://github.com/jryang1997/MenuBarMijia) 的 `MijiaCore`（MIT）：扫码登录、MIoT 规格解析、设备合成和 HomeStore。
+- [MijiaCore / MenuBarMijia](Vendor/MenuBarMijia/README.md)（MIT）：扫码登录、MIoT 规格解析、设备合成和 HomeStore，现由本项目内置维护。
 - [hap-swift](https://github.com/acumen-dev/hap-swift)（Apache-2.0）：HomeKit Accessory Protocol 实现，内置副本包含本地修复。
 - [hass-xiaomi-miot](https://github.com/al-one/hass-xiaomi-miot)（Apache-2.0）：早期 miIO 型号的属性映射表，转换后随 App 分发。
 - [homebridge-miot](https://github.com/merdok/homebridge-miot)（MIT）：加湿器、除湿机、取暖器、空调、窗帘和扫地机的 HomeKit 服务映射规则，用 Swift 重写。

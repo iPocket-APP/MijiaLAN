@@ -48,9 +48,14 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: .build
-          key: native-spm-v2-tests-${{ runner.arch }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('Package.resolved', 'Package.swift', 'Vendor/hap-swift/Package.swift') }}-${{ hashFiles('Sources/**', 'Tests/**', 'Vendor/hap-swift/Sources/**') }}
+          key: native-spm-v2-tests-${{ runner.arch }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('Package.resolved', 'Package.swift', 'Vendor/hap-swift/Package.swift', 'Vendor/MenuBarMijia/Package.swift') }}-${{ hashFiles('Sources/**', 'Tests/**', 'Vendor/hap-swift/Sources/**', 'Vendor/MenuBarMijia/Sources/**', 'Vendor/MenuBarMijia/Tests/**') }}
           restore-keys: |
-            native-spm-v2-tests-${{ runner.arch }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('Package.resolved', 'Package.swift', 'Vendor/hap-swift/Package.swift') }}-
+            native-spm-v2-tests-${{ runner.arch }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('Package.resolved', 'Package.swift', 'Vendor/hap-swift/Package.swift', 'Vendor/MenuBarMijia/Package.swift') }}-
+      - name: Run MijiaCore Release tests
+        run: |
+          mkdir -p build/ci-tests/logs
+          swift test --package-path Vendor/MenuBarMijia --scratch-path "$PWD/.build/mijiacore-tests" \
+            -c release --force-resolved-versions 2>&1 | tee build/ci-tests/logs/mijiacore-tests.log
       - name: Run Release tests
         run: |
           mkdir -p build/ci-tests/logs
@@ -103,9 +108,9 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: .build
-          key: native-spm-v2-universal-${{ runner.arch }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('Package.resolved', 'Package.swift', 'Vendor/hap-swift/Package.swift') }}-${{ hashFiles('Sources/**', 'Tests/**', 'Vendor/hap-swift/Sources/**') }}
+          key: native-spm-v2-universal-${{ runner.arch }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('Package.resolved', 'Package.swift', 'Vendor/hap-swift/Package.swift', 'Vendor/MenuBarMijia/Package.swift') }}-${{ hashFiles('Sources/**', 'Tests/**', 'Vendor/hap-swift/Sources/**', 'Vendor/MenuBarMijia/Sources/**', 'Vendor/MenuBarMijia/Tests/**') }}
           restore-keys: |
-            native-spm-v2-universal-${{ runner.arch }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('Package.resolved', 'Package.swift', 'Vendor/hap-swift/Package.swift') }}-
+            native-spm-v2-universal-${{ runner.arch }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('Package.resolved', 'Package.swift', 'Vendor/hap-swift/Package.swift', 'Vendor/MenuBarMijia/Package.swift') }}-
       - name: Build and archive Universal app
         env:
           MIJIALAN_UNIVERSAL: '1'

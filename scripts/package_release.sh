@@ -41,6 +41,8 @@ cd "$ROOT"
 case "${1:-}" in
     "")
         python3 -m unittest discover -s "$ROOT/scripts/tests" -v 2>&1 | tee "$LOGS/release-tools-tests.log"
+        swift test --package-path Vendor/MenuBarMijia --scratch-path "$ROOT/.build/mijiacore-tests" \
+            -c release --force-resolved-versions 2>&1 | tee "$LOGS/mijiacore-tests.log"
         swift test -c release --force-resolved-versions 2>&1 | tee "$LOGS/tests.log"
         MIJIALAN_APP_OUTPUT="$APP" MIJIALAN_UNIVERSAL=1 \
             MIJIALAN_VERSION="$VERSION" MIJIALAN_BUILD_NUMBER="$BUILD_NUMBER" \

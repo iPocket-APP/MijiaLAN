@@ -15,9 +15,9 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/sparkle-project/Sparkle.git", exact: "2.10.1"),
-        // MIoT spec parsing, device synthesis, command mapping, the one-time QR login and `HomeStore`
-        // (optimistic updates, rollback). Pinned to the 1.1.4 release commit.
-        .package(url: "https://github.com/jryang1997/MenuBarMijia.git", revision: "c6a9db1c84fa30125ed4b642b6745487dec94e89"),
+        // Locally maintained MIoT parsing, device synthesis, QR login and HomeStore.
+        // Recovered from MenuBarMijia 1.1.4; see Vendor/MenuBarMijia/README.md.
+        .package(path: "Vendor/MenuBarMijia"),
         // HomeKit Accessory Protocol server: acumen-dev/hap-swift at 638001b with local fixes; see Vendor/hap-swift/README.md.
         .package(path: "Vendor/hap-swift"),
         // hap-swift's logging API; the app sends it to the unified log.

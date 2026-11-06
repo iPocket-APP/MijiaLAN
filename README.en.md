@@ -124,6 +124,7 @@ By default, the script produces an ad hoc signed `build/MijiaLAN.app` for local 
 
 ```bash
 swift test
+swift test --package-path Vendor/MenuBarMijia --scratch-path "$PWD/.build/mijiacore-tests" -c release
 swift run mijia-lan discover
 swift run mijia-lan matrix
 ```
@@ -168,6 +169,7 @@ The script parses the upstream file without running it and writes `Sources/Mijia
 | `Sources/MijiaLANApp` | SwiftUI / AppKit menu bar interface |
 | `Sources/mijia-lan` | Command line tool |
 | `Tests` | Protocol, capability, security boundary, HomeKit and localization tests |
+| `Vendor/MenuBarMijia` | Locally maintained MijiaCore sources, resources, tests and original MIT license |
 | `Vendor/hap-swift` | HAP implementation and local fixes, under its original license |
 | `Vendor/hass-xiaomi-miot` | Upstream license and conversion notes for the mapping tables |
 | `Vendor/homebridge-miot` | Upstream license and porting notes for the HomeKit category rules |
@@ -177,7 +179,7 @@ The script parses the upstream file without running it and writes `Sources/Mijia
 
 Original project code is licensed under the [MIT License](LICENSE), copyright iPocket-APP. Third party components retain their own licenses:
 
-- [MenuBarMijia](https://github.com/jryang1997/MenuBarMijia)'s `MijiaCore` (MIT) provides QR login, MIoT specification parsing, device synthesis and HomeStore.
+- [MijiaCore / MenuBarMijia](Vendor/MenuBarMijia/README.md) (MIT) provides QR login, MIoT specification parsing, device synthesis and HomeStore, and is now vendored and maintained in this project.
 - [hap-swift](https://github.com/acumen-dev/hap-swift) (Apache-2.0) provides HomeKit Accessory Protocol support; the vendored copy includes local fixes.
 - [hass-xiaomi-miot](https://github.com/al-one/hass-xiaomi-miot) (Apache-2.0) provides the property tables for older miIO models, converted and shipped with the app.
 - [homebridge-miot](https://github.com/merdok/homebridge-miot) (MIT) provides the HomeKit service rules for humidifiers, dehumidifiers, heaters, air conditioners, curtains and robot vacuums, rewritten in Swift.
