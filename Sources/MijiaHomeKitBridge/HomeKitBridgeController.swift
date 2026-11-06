@@ -95,6 +95,19 @@ public final class HomeKitBridgeController {
         var value: HAPCharacteristicValue?
         var status: Int
     }
+    /// A characteristic whose last published read failed. Home draws a warning on its accessory.
+    public struct ReadFailure: Equatable, Sendable {
+        public var deviceID: String
+        public var service: String
+        public var characteristic: String
+        /// The capability it reads, such as `p:2:3 direct` or `p:6:1=1`.
+        public var source: String
+        public var status: Int
+        public init(deviceID: String, service: String, characteristic: String, source: String, status: Int) {
+            self.deviceID = deviceID; self.service = service; self.characteristic = characteristic
+            self.source = source; self.status = status
+        }
+    }
     struct SyncStatistics {
         var planBuilds = 0
         var characteristicUpdates = 0
@@ -532,6 +545,26 @@ public final class HomeKitBridgeController {
         capabilityPushTask = task
         await task.value
         if capabilityPushTask == task { capabilityPushTask = nil }
+    }
+
+    /// Every characteristic Home currently reads as failed, for a problem report.
+    public var readFailures: [ReadFailure] {
+        capabilityPlans.flatMap { did, entry in
+            entry.plan.services.flatMap { service in
+                service.characteristics.compactMap { c -> ReadFailure? in
+                    guard let published = publishedCapabilityValues[did]?[c.iid], published.status != HAPStatus.success.rawValue,
+                          let binding = entry.plan.bindings[c.iid] else { return nil }
+                    let source = switch binding {
+                    case .property(let id, let conversion): "\(id) \(conversion)"
+                    case .option(let id, let value): "\(id)=\(value.compactJSONString)"
+                    case .legacy(let role): role.rawValue
+                    default: "\(binding)"
+                    }
+                    return ReadFailure(deviceID: did, service: service.type.rawValue, characteristic: c.type.rawValue,
+                                       source: source, status: published.status)
+                }
+            }
+        }.sorted { ($0.deviceID, $0.service, $0.characteristic, $0.source) < ($1.deviceID, $1.service, $1.characteristic, $1.source) }
     }
 
     private func commitCapabilityValues(bridge: HAPBridge) async {

@@ -92,6 +92,11 @@ struct ControlCenterSettings: View {
                 Divider()
             }
 
+            SettingsSection(L10n.tr("诊断", "Diagnostics")) {
+                SettingsGroup { DiagnosticsExportRow(model: model) }
+            }
+
+            Divider()
             HStack {
                 Label(L10n.tr("仅局域网控制", "LAN Control Only"), systemImage: "lock.fill").foregroundStyle(.secondary)
                 Spacer(minLength: 8)
@@ -559,6 +564,51 @@ private struct SettingsToggleRow: View {
             Toggle(title, isOn: $isOn).labelsHidden().toggleStyle(.switch).controlSize(.small)
         }
         .padding(.horizontal, 12).padding(.vertical, 11)
+    }
+}
+
+/// Saves the file a problem report needs in one click, so nobody has to run the app from Terminal.
+private struct DiagnosticsExportRow: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        HStack(spacing: 10) {
+            SettingsSymbol("stethoscope")
+            VStack(alignment: .leading, spacing: 4) {
+                Text(L10n.tr("导出诊断信息", "Export Diagnostics")).font(.system(size: 13))
+                HStack(spacing: 5) {
+                    if case .failed = model.diagnosticsExport { Circle().fill(.orange).frame(width: 6, height: 6) }
+                    Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if model.diagnosticsExport != .collecting {
+                    HStack(spacing: 12) {
+                        if case .exported(let url) = model.diagnosticsExport {
+                            Button(L10n.tr("在访达中显示", "Show in Finder")) { DiagnosticReport.reveal(url) }
+                        }
+                        Button(L10n.tr("用邮件发送", "Send by Email")) { model.emailDiagnostics() }
+                    }
+                    .buttonStyle(.link).font(.system(size: 11))
+                }
+            }
+            Spacer(minLength: 4)
+            if model.diagnosticsExport == .collecting {
+                ProgressView().controlSize(.small)
+            } else {
+                Button(L10n.tr("导出", "Export")) { model.exportDiagnostics() }.controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 11)
+    }
+
+    private var subtitle: String {
+        switch model.diagnosticsExport {
+        case .idle: L10n.tr("反馈问题时附上。包含设备名称和读数，不含 token、IP 地址和配对信息",
+                            "Attach it to a problem report. It has device names and readings, no tokens, IP addresses or pairing keys.")
+        case .collecting: L10n.tr("正在读取每台设备…", "Reading every device…")
+        case .exported(let url): L10n.tr("已保存 \(url.lastPathComponent)", "Saved \(url.lastPathComponent)")
+        case .failed(let message): L10n.tr("导出失败：\(message)", "Could not export: \(message)")
+        }
     }
 }
 
