@@ -15,21 +15,22 @@ public struct PrototypeStorage: Sendable {
         self.storesPairingCode = storesPairingCode
     }
 
-    public static func live() throws -> Self {
+    public static func live(identity: SigningIdentity? = nil) throws -> Self {
+        #if targetEnvironment(simulator)
         guard let group = Bundle.main.object(forInfoDictionaryKey: "PrototypeAppGroup") as? String,
-              let keychainGroup = Bundle.main.object(forInfoDictionaryKey: "PrototypeKeychainGroup") as? String else {
+              !group.isEmpty else {
             throw PrototypeError.sharedContainerUnavailable
         }
-        #if targetEnvironment(simulator)
         let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group)
             ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(group)
         // Simulator Keychain does not enforce the device provisioning profile's shared access group.
         return Self(directory: directory, service: group)
         #else
-        guard let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) else {
+        let identity = try identity ?? SigningIdentity.live()
+        guard let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identity.appGroup) else {
             throw PrototypeError.sharedContainerUnavailable
         }
-        return Self(directory: directory, accessGroup: keychainGroup, service: group)
+        return Self(directory: directory, accessGroup: identity.keychainGroup, service: identity.appGroup)
         #endif
     }
 

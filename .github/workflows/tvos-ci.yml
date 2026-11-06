@@ -39,15 +39,22 @@ jobs:
             --filter 'DeviceCapabilityTests|CapabilityMappingTests|CategoryMappingTests'
       - name: Archive real tvOS arm64 Release app and tunnel
         run: bash Experiments/AppleTV/build.sh unsigned-archive
-      - name: Validate and package unsigned app with dependency notices
+      - name: Package and verify sideloading entitlement templates
         run: |
           python3 Experiments/AppleTV/package_unsigned.py \
             --archive build/MijiaLANTVPrototype-unsigned.xcarchive \
             --checkouts build/tvos-prototype-derived/SourcePackages/checkouts \
             --output build/tvos-dist
+          python3 Experiments/AppleTV/verify_sideload.py build/tvos-dist/*.ipa --template \
+            --report build/tvos-dist/sideload-template-check.json
+          for ipa in build/tvos-dist/*.ipa
+          do
+            MIJIALAN_SIDELOAD_TEST_IPA="$ipa" python3 -m unittest discover \
+              -s Experiments/AppleTV/Tests/Python -v
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: tvos-unsigned-self-signing
+          name: tvos-sideload-self-signing
           path: build/tvos-dist/
           if-no-files-found: error
           compression-level: 0

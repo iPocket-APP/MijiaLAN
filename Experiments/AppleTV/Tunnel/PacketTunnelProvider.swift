@@ -20,7 +20,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
             var diagnostics: PrototypeStorage?
             var stage = "providerLoadingConfiguration"
             do {
-                let storage = try PrototypeStorage.live()
+                let values = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
+                let identity: SigningIdentity?
+                if let group = values?["MijiaAppGroup"] as? String, let keychain = values?["MijiaKeychainGroup"] as? String {
+                    identity = try SigningIdentity.providerBinding(appGroup: group, keychainGroup: keychain)
+                } else {
+                    // Existing VPN configurations predate the explicit binding. The next app start saves it.
+                    identity = nil
+                }
+                let storage = try PrototypeStorage.live(identity: identity)
                 diagnostics = storage
                 try storage.saveActivation(stage: stage)
                 let config = try storage.configuration()

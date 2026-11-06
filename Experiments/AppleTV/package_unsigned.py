@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package a real tvOS Release archive for personal signing; never sign or upload it."""
+"""Package a tvOS Release archive with certificate-free entitlement templates for re-signing."""
 import argparse
 import hashlib
 import json
@@ -13,6 +13,24 @@ import zipfile
 
 BUNDLE = "com.ipocket.MijiaLAN.TVPrototype"
 ROOT = Path(__file__).resolve().parents[2]
+TEMPLATE_TEAM = "UNSIGNED00"
+
+
+def sign_template(bundle, identifier, temporary):
+    entitlements = {
+        "application-identifier": TEMPLATE_TEAM + "." + identifier,
+        "com.apple.developer.team-identifier": TEMPLATE_TEAM,
+        "com.apple.developer.networking.networkextension": ["packet-tunnel-provider"],
+        "com.apple.security.application-groups": ["group." + BUNDLE],
+        "keychain-access-groups": [TEMPLATE_TEAM + "." + BUNDLE + ".shared"],
+    }
+    path = temporary / (bundle.name + ".entitlements")
+    path.write_bytes(plistlib.dumps(entitlements))
+    subprocess.run(["codesign", "--force", "--sign", "-", "--generate-entitlement-der",
+                    "--entitlements", str(path), str(bundle)], check=True, capture_output=True)
+    actual = plistlib.loads(subprocess.check_output(["codesign", "-d", "--entitlements", ":-", str(bundle)], stderr=subprocess.DEVNULL))
+    if actual != entitlements:
+        raise ValueError("The sideloading entitlement template was not preserved")
 
 
 def validate_bundle(bundle, identifier, version=None, build=None):
@@ -91,6 +109,16 @@ def package(archive, output, checkouts):
                     "mdns-swift", "swift-asn1", "swift-atomics", "swift-collections", "swift-crypto", "swift-log", "swift-nio", "swift-system"}
         if not required.issubset(copied):
             raise ValueError("Missing dependency licenses: " + ", ".join(sorted(required - copied)))
+        # A completely unsigned executable has no entitlements for a re-signing tool to discover.
+        # Seal the distributable copy only, with a throwaway ad-hoc signature and explicit templates.
+        # This is not Apple's device-authorized Ad Hoc distribution and cannot install as-is.
+        nested = [p for p in staged_app.rglob("*") if p.suffix in {".dylib", ".framework"}]
+        for binary in sorted(nested, key=lambda p: len(p.parts), reverse=True):
+            subprocess.run(["codesign", "--force", "--sign", "-", str(binary)], check=True, capture_output=True)
+        provider = staged_app / "PlugIns/MijiaLANTVTunnel.appex"
+        sign_template(provider, BUNDLE + ".Tunnel", staging)
+        sign_template(staged_app, BUNDLE, staging)
+        subprocess.run(["codesign", "--verify", "--deep", "--strict", str(staged_app)], check=True, capture_output=True)
         subprocess.run(["ditto", "-c", "-k", "--keepParent", str(payload), str(ipa.resolve())], check=True)
     with zipfile.ZipFile(ipa) as contents:
         if contents.testzip() is not None:
@@ -103,13 +131,16 @@ def package(archive, output, checkouts):
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True).strip())
     manifest = dict(platform="tvOS", version=version, build=int(build), bundleIdentifier=BUNDLE,
         tag=f"tvos-v{version}-b{build}", architecture="arm64", minimumOS=info["MinimumOSVersion"],
-        signing="unsigned-requires-personal-signing", sourceCommit=revision, sourceTreeDirty=dirty,
+        signing="ad-hoc-entitlement-template-requires-personal-signing", sourceCommit=revision, sourceTreeDirty=dirty,
         artifact=name, sha256=sha, size=ipa.stat().st_size,
         requiredCapabilities=["packet-tunnel-provider", "App Groups", "shared Keychain"],
         dependencyLicensesBundled=True,
+        placeholderTeam=TEMPLATE_TEAM, appleProvisioningProfileIncluded=False,
+        sideloadlyPhysicalDeviceVerified=False,
         physicalAppleTVVerified=False)
     (output / "tvos-package.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    shutil.copy2(ROOT / "Experiments/AppleTV/INSTALL.md", output / "INSTALL.md")
+    for document in ("INSTALL.md", "SIDELOADING.md", "verify_sideload.py"):
+        shutil.copy2(ROOT / "Experiments/AppleTV" / document, output / document)
     print(json.dumps(manifest, indent=2))
 
 

@@ -1,5 +1,7 @@
 # iOS / Apple TV Network Extension 最小实验
 
+0.1.1 (3) 开发版已加入 [Sideloadly 重签适配](SIDELOADING.md)：分发权限模板、按最终签名解析共享存储、真实 Provider ID 与重签导出包校验。用户安装流程见 [INSTALL.md](INSTALL.md)。完整 NE 仍需匹配的 Apple 授权，不能由侧载工具补授。
+
 TV 独立发布分支为 `MijiaLAN-tvOS`，版本标签采用 `tvos-vVERSION-bBUILD`。首个自签实验预发布为 **0.1.0 (2)**；真机 Release IPA 未签名，安装要求与完整步骤见 [INSTALL.md](INSTALL.md)。此通道独立于 macOS 的 `v*` 和 Rust 的 `rs-*` 标签。
 
 本目录是自签、自用的实验。App 配置设备、启动 VPN 配置并显示证据；`NEPacketTunnelProvider` 进程运行共享的米家控制和 HomeKit 桥。前台 App 不承担扩展模式下的轮询。最低 iOS 18 / tvOS 18。

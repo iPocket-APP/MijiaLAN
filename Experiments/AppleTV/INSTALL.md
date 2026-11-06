@@ -1,20 +1,44 @@
-# MijiaLAN TV 实验版安装
+# MijiaLAN TV 侧载实验版安装
 
-此版本从独立 `MijiaLAN-tvOS` 分支发布，版本标签为 `tvos-v0.1.0-b2`，App 版本为 **0.1.0 (2)**。它是供自行签名测试的预发布版本，尚未完成 Apple TV 真机后台验收。
+当前版本为 **0.1.1 (3)**，分支 `MijiaLAN-tvOS`，标签 `tvos-v0.1.1-b3`，最低 tvOS 18。
 
-## 下载文件
+`MijiaLAN-tvOS-0.1.1-b3.ipa` 是**供侧载工具重签的安装包**。App 和 NE 内含不使用个人证书的临时权限模板，便于重签工具识别 Network Extensions、App Groups 与共享 Keychain；它不是 Apple 授权给设备的 Ad Hoc 分发签名，不能直接安装。包中没有个人证书、私钥、描述文件或设备资料。
 
-- `MijiaLAN-tvOS-0.1.0-b2.ipa`：tvOS 真机 arm64 Release 包，包含 Packet Tunnel 扩展。**未签名，不能直接安装**；不包含开发者证书、描述文件或设备资料。
-- `SHA256SUMS.txt`：IPA 的 SHA-256 校验值。
-- `tvos-package.json`：版本、构建号、源码提交、目标平台及未签名状态。
-- 源码 ZIP / tar.gz：GitHub 在同一版本标签下提供的完整源码。
+## Sideloadly 安装
 
-需要 tvOS 18 或更新版本、Mac、Xcode，以及能为 App 与扩展授权 Network Extensions、App Groups 和共享 Keychain 的 Apple Developer 团队。需要给实际 Apple TV 配对并生成适用描述文件；iOS 描述文件不能替代 tvOS 描述文件。
+1. 从 [Sideloadly 官网](https://sideloadly.io/) 安装当前版本。Apple TV 4K 无线侧载使用 Mac；Mac 和电视连接同一局域网。
+2. 在电视打开「设置 → 遥控器与设备 → 遥控 App 与设备」，在 Sideloadly 或 Xcode 中完成配对。
+3. 将上述 tvOS IPA 加入 Sideloadly，选择 Apple TV 和自己的 Apple 账号。
+4. **保留所有 App Extensions / PlugIns**。不要启用删除扩展的选项；本 App 必须保留 Packet Tunnel 扩展。
+5. 使用能授权 `packet-tunnel-provider` 的开发团队。普通免费账号可以侧载许多 App，但不能据此认为它能授权本实验的 NE 后台功能。App 与扩展的描述文件都须有 Network Extensions、同一个 App Group，以及至少一个相同的共享 Keychain 组。
+6. 由 Sideloadly 重签并安装。安装后在「家庭桥接」启动服务，完成电视上的 VPN 和局域网系统确认，再进行后台读写验收。
 
-## 推荐：从同一版本源码签名安装
+运行时会从最终的 XML / DER 代码签名中读取实际共享权限，按 App 与 NE 的交集选择存储位置；Provider ID 从实际嵌入的扩展读取。工具修改 Bundle ID、团队前缀或共享组后，无需再手工修补旧 `PrototypeAppGroup` / `PrototypeKeychainGroup` Info.plist 值。原有且仍获授权的共享组优先保留。更换账号或 Bundle ID 可能形成新安装身份，不能保证访问旧身份的数据。
+
+**签名工具不能补授 Apple 未授权的能力。** 若 Sideloadly 删除了 NE 权限，或生成的描述文件没有该能力，应在开发者后台核对两个实际 App ID 的能力并重新生成匹配描述文件。Sideloadly 官方更新记录将“自定义 entitlements”列为开发者计划账号和 Patreon 功能；本项目不承诺所有账号或工具选项均能完成授权，也不要求购买该功能。[官方更新记录](https://sideloadly.io/changelog)
+
+## 导出后先检查
+
+在 Mac 上导出 Sideloadly 重签后的 IPA，下载同一发行页的 `verify_sideload.py`，再运行：
 
 ```sh
-git clone --branch tvos-v0.1.0-b2 https://github.com/iPocket-APP/MijiaLAN.git
+python3 verify_sideload.py /path/to/resigned.ipa --report build/resigned-check.json
+```
+
+可增加 `--device YOUR_APPLE_TV_UDID`，私下检查两个描述文件是否均包含这台设备。报告不输出设备列表、证书内容或私钥。检查覆盖两个签名、真实平台、Provider、版本一致性、证书与描述文件、NE 授权及共享组交集；不会安装或启动 App。App Store 分发描述文件不能作为直接侧载设备授权。
+
+原始分发包的检查需显式加 `--template`：
+
+```sh
+python3 verify_sideload.py MijiaLAN-tvOS-0.1.1-b3.ipa --template
+```
+
+这个模式仅检查权限模板，不表示可以安装。安装、NE 激活、HomeKit 可达和后台持续运行仍是不同验收步骤；当前没有 Apple TV 真机的完整 Sideloadly 验收记录。
+
+## 从源码签名
+
+```sh
+git clone --branch MijiaLAN-tvOS https://github.com/iPocket-APP/MijiaLAN.git
 cd MijiaLAN
 brew install xcodegen
 python3 Experiments/AppleTV/prepare.py
@@ -22,19 +46,8 @@ xcodegen generate --spec Experiments/AppleTV/project.yml
 open Experiments/AppleTV/MijiaLANTVPrototype.xcodeproj
 ```
 
-在 `MijiaLANTVPrototype` 和 `MijiaLANTVTunnel` 两个 target 中选择同一团队。使用自己的开发者团队时，为两个 target 选择可用的唯一 bundle ID，扩展 ID 应为 App ID 后加 `.Tunnel`；同时更新两份 TV entitlement 文件中的 App Group，并在 `PROTOTYPE_BASE_ID` / `PROTOTYPE_APP_GROUP` 构建设置中填写对应标识。两个 target 的 App Group、共享 Keychain 前缀和 Network Extension 权限必须一致且由各自的 tvOS 描述文件授权。iOS target 的权限文件独立，不用修改。
+在两个 TV target 选择同一团队，为自己的账号设置可用的 Bundle ID、App Group 和共享 Keychain，再选择已配对 Apple TV 运行。App 与扩展的描述文件必须授权相同的共享组。
 
-配对 Apple TV，选择 `MijiaLANTVPrototype` scheme 和该设备，直接 Run；也可先用 `MIJIALAN_TV_TEAM=YOUR_TEAM_ID bash Experiments/AppleTV/build.sh device` 生成有签名的 Archive，再通过 Xcode 分发给已授权设备。覆盖安装时须沿用自己的团队、bundle ID 与 App Group，以便继续使用原有设备和 HomeKit 配对资料。
+软件更新读取独立 TV 清单并展示发行页二维码，安装新版通过 Mac 重新侧载完成。覆盖更新应沿用账号、Bundle ID 和共享组；测试结束在 App 中停止桥接，自动重连默认关闭。
 
-已有完整重签工具链时，也可用 IPA 作为输入；必须同时重签嵌入的 `.appex` 和 App，嵌入对应的 tvOS 描述文件，并按授权前缀修正两个 Info.plist 的 `PrototypeKeychainGroup`、`PrototypeAppGroup` 与签名 entitlement。普通只重签主 App 的工具不足以运行本实验。
-
-## 首次运行
-
-1. 在「设置」配置设备，或选择专用模拟设备；模拟器只能验证明确标记的前台模式。
-2. 在「家庭桥接」开启桥接，在设备上接受 VPN 及局域网权限提示。
-3. 通过另一台设备验证 HomeKit 读写，再切到后台观察；不能把 iPhone 的 NE 测试或模拟器前台状态当作 Apple TV 后台验收。
-4. 测试结束在 App 中停止桥接。自动重连默认关闭。
-
-软件更新会检查独立 TV 清单并展示版本说明及发行页二维码。此自签实验版通过已配对的 Mac 覆盖安装新版本，不提供电视上的自动安装。
-
-Packet Tunnel 中运行网络监听服务属于 Apple [TN3120](https://developer.apple.com/documentation/technotes/tn3120-expected-use-cases-for-network-extension-packet-tunnel-providers) 列明的不支持用途。本版本保留实验性质，不以后台稳定性或 App Store 审核作为已完成能力。
+Packet Tunnel 承载网络监听属于 Apple [TN3120](https://developer.apple.com/documentation/technotes/tn3120-expected-use-cases-for-network-extension-packet-tunnel-providers) 的不支持用途，继续保持自签实验定位。

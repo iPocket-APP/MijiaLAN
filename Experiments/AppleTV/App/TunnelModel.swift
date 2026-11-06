@@ -110,15 +110,22 @@ final class TunnelModel {
         await perform(activation: true) {
             activationStage = "preparing"
             await stopLocal()
+            let bundleID = try SigningIdentity.providerIdentifier()
+            #if !targetEnvironment(simulator)
+            let identity = try SigningIdentity.live()
+            try identity.requireNetworkExtension()
+            #endif
             guard let storage else { throw PrototypeError.keychainUnavailable }
             try storage.saveConfiguration(configuration)
-            let bundleID = Bundle.main.bundleIdentifier! + ".Tunnel"
             activationStage = "loadingPreferences"
             let saved = try await NETunnelProviderManager.loadAllFromPreferences()
             let selected = saved.first { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == bundleID }
                 ?? NETunnelProviderManager()
             let proto = NETunnelProviderProtocol()
             proto.providerBundleIdentifier = bundleID
+            #if !targetEnvironment(simulator)
+            proto.providerConfiguration = ["MijiaAppGroup": identity.appGroup, "MijiaKeychainGroup": identity.keychainGroup]
+            #endif
             proto.serverAddress = "MijiaLAN private experiment"
             proto.disconnectOnSleep = false
             selected.protocolConfiguration = proto
@@ -243,9 +250,10 @@ final class TunnelModel {
     func update() async {
         if manager == nil && !hasRestoredManager {
             hasRestoredManager = true
-            let bundleID = Bundle.main.bundleIdentifier! + ".Tunnel"
-            manager = try? await NETunnelProviderManager.loadAllFromPreferences().first {
-                ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == bundleID
+            if let bundleID = try? SigningIdentity.providerIdentifier() {
+                manager = try? await NETunnelProviderManager.loadAllFromPreferences().first {
+                    ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == bundleID
+                }
             }
         }
         if let manager {
