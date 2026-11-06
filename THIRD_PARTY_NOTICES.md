@@ -12,7 +12,7 @@ Original project code is MIT licensed. Dependencies retain their original copyri
 | [hass-xiaomi-miot](https://github.com/al-one/hass-xiaomi-miot)（转换后的设备映射数据 / converted device mapping data） | `75bc74f67275bde6a8742b6638039819e10eaea5` | [Apache-2.0](Vendor/hass-xiaomi-miot/LICENSE) |
 | [homebridge-miot](https://github.com/merdok/homebridge-miot)（移植的 HomeKit 映射规则 / ported HomeKit mapping rules） | `2186f61f2081ec1a51c0388e3072b79741aebb0a` | [MIT](Vendor/homebridge-miot/LICENSE) |
 | [mdns-swift](https://github.com/acumen-dev/mdns-swift) | `1.2.0` | [Apache-2.0](https://github.com/acumen-dev/mdns-swift/blob/ef8c8d387a15b762816f88264667d3278042fa78/LICENSE.md) |
-| [MenuBarMijia](https://github.com/jryang1997/MenuBarMijia) | `c6a9db1c84fa` | [MIT](https://github.com/jryang1997/MenuBarMijia/blob/c6a9db1c84fa30125ed4b642b6745487dec94e89/LICENSE) |
+| [MijiaCore / MenuBarMijia](Vendor/MenuBarMijia/README.md)（内置并自行维护 / vendored and locally maintained） | `c6a9db1c84fa` | [MIT](Vendor/MenuBarMijia/LICENSE) |
 | [swift-asn1](https://github.com/apple/swift-asn1) | `1.7.3` | [Apache-2.0](https://github.com/apple/swift-asn1/blob/3b6410f7dee09eb33cdd26260c5fd47fda19b0e2/LICENSE.txt) |
 | [swift-atomics](https://github.com/apple/swift-atomics) | `1.3.1` | [Apache-2.0 + Swift Runtime Library Exception](https://github.com/apple/swift-atomics/blob/0442cb5a3f98ab802acb777929fdb446bda11a34/LICENSE.txt) |
 | [swift-collections](https://github.com/apple/swift-collections) | `1.7.5` | [Apache-2.0 + Swift Runtime Library Exception](https://github.com/apple/swift-collections/blob/f96b909e1a9e469620bc5037c1e24e00153f376f/LICENSE.txt) |
@@ -40,7 +40,7 @@ The application icon preserves the Rust version's teal background and house outl
 
 ## MijiaCore / MenuBarMijia MIT notice
 
-MijiaCore is used from the pinned MenuBarMijia dependency. Its original MIT notice follows.
+MijiaCore is maintained locally in `Vendor/MenuBarMijia`, recovered from MenuBarMijia revision `c6a9db1c84fa30125ed4b642b6745487dec94e89`. Its original MIT notice follows.
 
 ```text
 MIT License

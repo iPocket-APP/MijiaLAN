@@ -55,7 +55,7 @@ while IFS= read -r -d '' NOTICE; do
     DESTINATION="$APP/Contents/Resources/Licenses/$RELATIVE"
     mkdir -p "$(dirname "$DESTINATION")"
     cp "$NOTICE" "$DESTINATION"
-done < <(find "$ROOT/.build/checkouts" "$ROOT/Vendor/hap-swift" "$ROOT/Vendor/hass-xiaomi-miot" "$ROOT/Vendor/homebridge-miot" -type f \
+done < <(find "$ROOT/.build/checkouts" "$ROOT/Vendor/MenuBarMijia" "$ROOT/Vendor/hap-swift" "$ROOT/Vendor/hass-xiaomi-miot" "$ROOT/Vendor/homebridge-miot" -type f \
     \( -iname 'LICENSE*' -o -iname 'NOTICE*' -o -iname 'COPYING*' -o -iname 'PATENTS*' \
     -o -name 'CNIOSHA1.h' -o -name 'cpp_magic.h' \) \
     -not -path '*/.git/*' -print0)

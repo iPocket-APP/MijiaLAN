@@ -1,5 +1,5 @@
 {
-  "originHash" : "27f48b544f4910f81450e57e475b1b9409d80a987ef9fe76b3da1ff3beeeb0a4",
+  "originHash" : "2548586e745d351d4982f4f0cb4136dfd43f1fa5df2c2bb30d0ee190077c3141",
   "pins" : [
     {
       "identity" : "mdns-swift",
@@ -8,14 +8,6 @@
       "state" : {
         "revision" : "ef8c8d387a15b762816f88264667d3278042fa78",
         "version" : "1.2.0"
-      }
-    },
-    {
-      "identity" : "menubarmijia",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/jryang1997/MenuBarMijia.git",
-      "state" : {
-        "revision" : "c6a9db1c84fa30125ed4b642b6745487dec94e89"
       }
     },
     {
