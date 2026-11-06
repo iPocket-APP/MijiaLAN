@@ -141,6 +141,23 @@ class SharedSiteTests(unittest.TestCase):
         self.files[self.settings['origin'] + '/appcast.xml'] = native
         site.assemble(self.root / 'site')
         self.assertEqual((self.root / 'site/appcast.xml').read_bytes(), native)
+        self.assertTrue((self.root / 'site/tvos/releases.json').exists())
+
+    def test_tv_feed_is_retained_when_native_and_rust_rebuild_the_site(self):
+        import json
+        native = self.feed('v0.1.6', 'native', 6)
+        self.files[self.settings['origin'] + '/appcast.xml'] = native
+        self.bundle(12, site.PLATFORMS)
+        tag = 'tvos-v0.1.1-b2'
+        self.releases[tag] = dict(tag_name=tag, draft=False, prerelease=True,
+            published_at='2026-11-06T00:00:00Z', body='TV release',
+            assets=[dict(name='MijiaLAN-tvOS-0.1.1-b2.ipa', size=123)])
+        output = self.root / 'site'
+        site.assemble(output)
+        tv = json.loads((output / 'tvos/releases.json').read_text())
+        self.assertEqual(tv['releases'][0]['build'], 2)
+        self.assertEqual((output / 'appcast.xml').read_bytes(), native)
+        self.assertEqual(len(list(output.glob('rs/*/appcast.xml'))), 3)
 
 
 if __name__ == '__main__': unittest.main()
