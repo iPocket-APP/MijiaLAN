@@ -28,6 +28,8 @@
 
 tvOS arm64 Release Archive 与模拟器 App / NE 均构建成功。共享运行时测试共 20 项，18 项执行通过，2 项需额外输入的集成用例跳过；其中签名专项 7 项全部通过。另有 5 项实际 IPA 变异检查通过，覆盖剥离扩展、删除 NE / Keychain 权限、不同共享组，以及模板不能冒充设备授权。模拟器的前台桥接控制、配置取消、实际诊断三项回归通过。
 
+[发布源提交的云端 CI](https://github.com/iPocket-APP/MijiaLAN/actions/runs/42229819043) 已通过同一组共享测试、原生设备 / HomeKit 映射 45 项、tvOS Release Archive、权限模板检查和 5 项异常 IPA 测试。公开 [0.1.1 (3) 实验版](https://github.com/iPocket-APP/MijiaLAN/releases/tag/tvos-v0.1.1-b3) 的 IPA 下载内容与发布清单 SHA-256 一致。
+
 实体 iPhone 使用现有 Apple Development 证书与已授权描述文件完成安装和新 NE 启动，App 写入的 Keychain 配置由另一个 NE 进程成功读取，NE 运行记录由 App 从共享容器读取。短时切到系统设置再返回，同一会话的后台成功读数增加 5 次，零传输失败。本次使用内存模拟设备，没有把轮询成功当作外部 HomeKit 控制或真实家电验收。个人描述文件、证书与私有诊断文件仅保留在忽略的本地 `build/`，不随包发布。
 
 另将设备测试副本中 App / NE 的 `PrototypeAppGroup` 和 `PrototypeKeychainGroup` 故意改为无效旧值，用原有已授权身份重新签名后安装。新 NE 会话仍达到 `providerReady`，共享配置读取与桥启动成功，证明运行路径已不依赖这两个旧 Info.plist 值。此对照没有改变 Bundle ID、描述文件或开发者后台能力。

@@ -20,6 +20,10 @@ tvOS 可以通过 URLSession 读取 HTTPS 版本信息并显示更新提示。Sp
 
 专用接口已在 2026-11-06 部署上线：[tvos/releases.json](https://mijialan-updates.ipocket.xyz/tvos/releases.json)，HTTP 200 / application/json。首次上线时 `releases` 为空，随后从独立 `MijiaLAN-tvOS` 分支发布首个 [0.1.0 (2) 自签实验版](https://github.com/iPocket-APP/MijiaLAN/releases/tag/tvos-v0.1.0-b2)。IPA 未签名，安装要求见 [INSTALL.md](INSTALL.md)。服务端改动经 [PR #9](https://github.com/iPocket-APP/MijiaLAN/pull/9) 合入主分支 `1feb4780406c595cb606010e3ab1331063392948`，[初次部署工作流](https://github.com/iPocket-APP/MijiaLAN/actions/runs/42207580629) 成功。上线前后四个原生 / Rust 更新源的 SHA-256 均一致。
 
+随后发布的 [0.1.1 (3) Sideloadly 适配实验版](https://github.com/iPocket-APP/MijiaLAN/releases/tag/tvos-v0.1.1-b3) 为 App / NE 保留了供个人重签的权限模板，仍须具备 NE 授权的设备描述文件。默认 TV 接口已实际返回此版本，TV 共用解码器的在线清单输入测试通过：build 2 能发现 build 3，build 3 不提示重复更新。四个原生 / Rust 更新源的 SHA-256 再次核对一致；Mac 稳定发行仍为 v0.1.7。
+
+GitHub Pages 的发布传播可能需要约十分钟，见 [GitHub 官方说明](https://docs.github.com/en/pages/getting-started-with-github-pages/creating-a-github-pages-site)。部署成功后须继续核对默认接口的实际内容，不能仅凭上传 / 部署步骤成功判断新版已可见。
+
 上线后已用 tvOS 27.2 Simulator 验收真实 HTTPS 请求：`testUpdateCheckUsesDeployedTVService` 通过（1 passed / 0 failed），App 不带预览或本地服务参数启动，遥控器进入更新页并手动检查，确认来源为「TV 更新服务」、结果为「暂未发现可用的 TV 安装包」，没有走 GitHub 回退。该测试须显式设置测试运行器环境变量 `MIJIALAN_LIVE_UPDATE_TEST=1`，平时跳过。结果包为 `build/validation/tvos-updates-deploy-20261106/ui-tests-production-v3.xcresult`，实际截图为同目录 `updates-production-service.png`。
 
 首次包发布后，线上 UI 验收按实际清单接受「无可用包」「当前已是最新版本」或「发现新版本」三种成功状态；有更新时必须展示二维码，其余状态不展示。可先用受信任的 HTTP 客户端下载线上 JSON，再设置 `MIJIALAN_LIVE_FEED_FILE=/absolute/path/releases.json` 运行 `TVUpdateFeedTests`，验证实际生产清单可由客户端解码，且较旧构建能发现最新包、当前构建不会重复提示。这样不会把尚未发布包时的空清单断言长期固定在线上测试中。
