@@ -32,6 +32,31 @@ pub fn text(value: impl AsRef<str>) -> String {
         "设备" => "Devices",
         "设置…" => "Settings…",
         "检查更新…" => "Check for Updates…",
+        "查看更新…" => "View Update…",
+        "更新至" => "Update to",
+        "发现新版本" => "Update Available",
+        "自动检查更新" => "Automatically Check for Updates",
+        "退出时自动安装" => "Install Automatically on Quit",
+        "导出诊断信息…" => "Export Diagnostics…",
+        "导出诊断信息" => "Export Diagnostics",
+        "诊断信息" => "Diagnostics",
+        "诊断" => "Diagnostics",
+        "导出" => "Export",
+        "用邮件发送" => "Send by Email",
+        "在文件夹中显示" => "Show in Folder",
+        "正在读取每台设备…" => "Reading every device…",
+        "已保存" => "Saved",
+        "导出失败：" => "Could not export:",
+        "反馈问题时附上。包含设备名称和读数，不含 Token、IP 地址和配对信息。" => {
+            "Attach it to a problem report. It has device names and readings, no tokens, IP addresses or pairing keys."
+        }
+        "请描述遇到的问题，例如哪台设备在家庭中显示警告：" => {
+            "Please describe the problem, such as which accessory shows a warning in Home:"
+        }
+        "诊断文件已作为附件添加。" => "The diagnostics file is attached.",
+        "请手动添加刚导出的诊断文件：" => {
+            "Please attach the exported diagnostics file:"
+        }
         "演示和预览模式不检查更新" => "Updates are disabled in demo and preview modes",
         "请安装正式发布包以启用自动更新" => {
             "Install the official app bundle or Windows MSI to enable updates"

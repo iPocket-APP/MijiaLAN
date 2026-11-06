@@ -42,7 +42,7 @@ impl Layout {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Transform {
     Direct,
     Active,
@@ -347,6 +347,79 @@ pub struct Database {
     pub warnings: Vec<String>,
 }
 impl Database {
+    /// Uses the same constraints as GET /characteristics, from one in-memory snapshot.
+    pub(crate) fn diagnostic_failures(
+        &self,
+        states: &[DeviceState],
+    ) -> Vec<crate::diagnostics::ReadFailure> {
+        let states: BTreeMap<_, _> = states
+            .iter()
+            .map(|state| (state.device.did.as_str(), state))
+            .collect();
+        let mut failures = Vec::new();
+        for accessory in &self.accessories {
+            let Some(aid) = accessory["aid"].as_u64() else {
+                continue;
+            };
+            for service in accessory["services"].as_array().into_iter().flatten() {
+                for characteristic in service["characteristics"].as_array().into_iter().flatten() {
+                    let Some(iid) = characteristic["iid"].as_u64() else {
+                        continue;
+                    };
+                    let Some(binding) = self.bindings.get(&(aid, iid)).filter(|b| b.readable)
+                    else {
+                        continue;
+                    };
+                    if !characteristic["perms"]
+                        .as_array()
+                        .is_some_and(|perms| perms.iter().any(|p| p == "pr"))
+                    {
+                        continue;
+                    }
+                    let result = states
+                        .get(binding.did.as_str())
+                        .ok_or(-70402)
+                        .and_then(|state| binding.read_state(state, false))
+                        .and_then(|raw| value::normalize_read(characteristic, raw));
+                    if let Err(status) = result {
+                        failures.push(crate::diagnostics::ReadFailure {
+                            device_id: binding.did.clone(),
+                            aid,
+                            iid,
+                            service: service["type"].as_str().unwrap_or_default().into(),
+                            characteristic: characteristic["type"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .into(),
+                            source: format!(
+                                "p:{} {:?}",
+                                binding.key.replace('.', ":"),
+                                binding.transform
+                            ),
+                            status,
+                        });
+                    }
+                }
+            }
+        }
+        failures.sort_by(|a, b| {
+            (
+                &a.device_id,
+                &a.service,
+                &a.characteristic,
+                &a.source,
+                a.iid,
+            )
+                .cmp(&(
+                    &b.device_id,
+                    &b.service,
+                    &b.characteristic,
+                    &b.source,
+                    b.iid,
+                ))
+        });
+        failures
+    }
     pub fn attribute(&self, aid: u64, iid: u64) -> Option<&Value> {
         self.accessories
             .iter()

@@ -105,6 +105,7 @@ struct Shared {
     stop: AtomicBool,
     dirty: AtomicBool,
     warning: Mutex<Option<String>>,
+    keeps_awake: AtomicBool,
     setup_owner: Mutex<Option<(u64, Instant)>>,
     attempts: Mutex<Vec<Instant>>,
     connections: Mutex<BTreeMap<u64, TcpStream>>,
@@ -219,6 +220,7 @@ impl HomeKit {
             stop: AtomicBool::new(false),
             dirty: AtomicBool::new(true),
             warning: Mutex::new(None),
+            keeps_awake: AtomicBool::new(false),
             setup_owner: Mutex::new(None),
             attempts: Mutex::new(vec![]),
             connections: Mutex::new(BTreeMap::new()),
@@ -289,6 +291,7 @@ impl HomeKit {
                             awake = None;
                             *worker.warning.lock().unwrap() = None;
                         }
+                        worker.keeps_awake.store(awake.is_some(), Ordering::Relaxed);
                         refresh = Instant::now();
                     }
                     if worker.dirty.swap(false, Ordering::Relaxed)
@@ -362,6 +365,38 @@ impl HomeKit {
                 uri: String::new(),
                 accessories: 0,
                 error: self.error.lock().unwrap().clone(),
+            }
+        }
+    }
+
+    /// Public status only: never clones a setup code, pairing URI, identity or key.
+    pub fn diagnostic_snapshot(
+        &self,
+        states: &[mijialan_core::DeviceState],
+    ) -> crate::diagnostics::BridgeDiagnostics {
+        let running = self.running.lock().unwrap();
+        if let Some(shared) = running.as_ref() {
+            let paired = !shared.identity.lock().unwrap().pairings.is_empty();
+            let structure_revision = shared.layout.lock().unwrap().version;
+            let database = shared.database.read().unwrap();
+            crate::diagnostics::BridgeDiagnostics {
+                status: "running".into(),
+                paired,
+                pairing_state_known: true,
+                accessories: database.accessories.len().saturating_sub(1),
+                keeps_awake: shared.keeps_awake.load(Ordering::Relaxed),
+                structure_revision,
+                read_failures: database.diagnostic_failures(states),
+            }
+        } else {
+            crate::diagnostics::BridgeDiagnostics {
+                status: self
+                    .error
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map_or("stopped".into(), |error| format!("failed: {error}")),
+                ..Default::default()
             }
         }
     }

@@ -3,6 +3,7 @@
 .DS_Store
 *.log
 *.local.json
+MijiaLAN*-Diagnostics*.json
 __pycache__/
 /artifacts/
 .env

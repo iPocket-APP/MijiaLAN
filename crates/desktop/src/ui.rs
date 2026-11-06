@@ -1232,9 +1232,83 @@ impl Dashboard {
             )))
             .child(
                 Button::new("desktop-check-updates")
-                    .label(t("检查更新…"))
+                    .label(cx.global::<crate::updater::Updater>().check_label())
                     .disabled(!cx.global::<crate::updater::Updater>().can_check())
                     .on_click(|_, _, cx| crate::updater::check(cx)),
+            )
+            .when(cx.global::<crate::updater::Updater>().enabled(), |view| {
+                view.child(
+                    Switch::new("desktop-automatic-checks")
+                        .label(t("自动检查更新"))
+                        .checked(
+                            cx.global::<crate::updater::Updater>()
+                                .automatically_checks(),
+                        )
+                        .on_click(|on, _, cx| {
+                            cx.global::<crate::updater::Updater>()
+                                .set_automatically_checks(*on);
+                            cx.refresh_windows();
+                        }),
+                )
+            })
+            .when_some(
+                cx.global::<crate::updater::Updater>()
+                    .automatically_downloads(),
+                |view, enabled| {
+                    view.child(
+                        Switch::new("desktop-automatic-downloads")
+                            .label(t("退出时自动安装"))
+                            .checked(enabled)
+                            .disabled(
+                                !cx.global::<crate::updater::Updater>()
+                                    .automatically_checks(),
+                            )
+                            .on_click(|on, _, cx| {
+                                cx.global::<crate::updater::Updater>()
+                                    .set_automatically_downloads(*on);
+                                cx.refresh_windows();
+                            }),
+                    )
+                },
+            )
+            .when_some(
+                cx.global::<crate::updater::Updater>().available(),
+                |view, notice| view.child(div().text_sm().child(notice.label())),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .child(cx.global::<crate::diagnostics::Diagnostics>().subtitle()),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(
+                        Button::new("desktop-export-diagnostics")
+                            .label(t("导出诊断信息"))
+                            .disabled(cx.global::<crate::diagnostics::Diagnostics>().collecting())
+                            .on_click(|_, _, cx| crate::diagnostics::export(cx, false)),
+                    )
+                    .child(
+                        Button::new("desktop-email-diagnostics")
+                            .label(t("用邮件发送"))
+                            .disabled(cx.global::<crate::diagnostics::Diagnostics>().collecting())
+                            .on_click(|_, _, cx| crate::diagnostics::export(cx, true)),
+                    )
+                    .when(
+                        matches!(
+                            cx.global::<crate::diagnostics::Diagnostics>().state(),
+                            crate::diagnostics::ExportState::Exported(_)
+                        ),
+                        |row| {
+                            row.child(
+                                Button::new("desktop-reveal-diagnostics")
+                                    .label(t("在文件夹中显示"))
+                                    .on_click(|_, _, cx| crate::diagnostics::reveal(cx)),
+                            )
+                        },
+                    ),
             )
             .child(
                 div()

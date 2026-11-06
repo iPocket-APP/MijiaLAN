@@ -722,7 +722,11 @@ impl Dashboard {
             self.compact.status_has_devices = Some(has_devices);
             if cx.has_global::<crate::TrayState>() {
                 #[cfg(target_os = "macos")]
-                crate::macos::status_symbol(&cx.global::<crate::TrayState>().0, has_devices);
+                crate::macos::status_symbol(
+                    &cx.global::<crate::TrayState>().0,
+                    has_devices,
+                    cx.global::<crate::updater::Updater>().available().is_some(),
+                );
             }
         }
 
@@ -834,6 +838,29 @@ impl Dashboard {
                     .child(contents),
             );
         if home {
+            let notice = cx.global::<crate::updater::Updater>().available();
+            let footer_action = if let Some(notice) = notice {
+                self.compact_button("footer-view-update", notice.label(), p, false)
+                    .text_size(px(11.))
+                    .on_click(|_, _, cx| crate::updater::check(cx))
+                    .into_any_element()
+            } else {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(7.))
+                    .child(self.compact_icon("lock", 10., p.secondary))
+                    .child(label(
+                        if self.engine.is_demo() {
+                            l("演示设备 · 不控制真实设备", "Demo · No real device control")
+                        } else {
+                            l("控制只走局域网", "LAN Control Only")
+                        },
+                        11.,
+                        p.secondary,
+                    ))
+                    .into_any_element()
+            };
             let scan = self
                 .session
                 .borrow()
@@ -862,22 +889,7 @@ impl Dashboard {
                     .items_center()
                     .justify_between()
                     .gap(px(8.))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(7.))
-                            .child(self.compact_icon("lock", 10., p.secondary))
-                            .child(label(
-                                if self.engine.is_demo() {
-                                    l("演示设备 · 不控制真实设备", "Demo · No real device control")
-                                } else {
-                                    l("控制只走局域网", "LAN Control Only")
-                                },
-                                11.,
-                                p.secondary,
-                            )),
-                    )
+                    .child(footer_action)
                     .child(label(scan, 11., p.secondary)),
             );
         }
@@ -2952,10 +2964,13 @@ impl Dashboard {
         let updates_enabled = updater.enabled();
         let can_check = updater.can_check();
         let automatically_checks = updater.automatically_checks();
+        let automatically_downloads = updater.automatically_downloads();
+        let check_label = updater.check_label();
+        let notice = updater.available();
         let update_description = if updates_enabled {
             l(
-                "仅更新 Rust 版；安装前会提示确认。",
-                "Rust updates only. Installation requires confirmation.",
+                "安装更新会重启 App，家庭桥接会短暂离线。设备与配对资料会保留。",
+                "Installing an update restarts the app and briefly interrupts the Home bridge. Devices and pairing are preserved.",
             )
         } else {
             updater.reason().to_string()
@@ -2976,16 +2991,11 @@ impl Dashboard {
                                 p.primary,
                             ))
                             .child(
-                                self.compact_button(
-                                    "check-updates",
-                                    l("检查更新…", "Check for Updates…"),
-                                    p,
-                                    false,
-                                )
-                                .when(!can_check, |button| button.opacity(0.5))
-                                .when(can_check, |button| {
-                                    button.on_click(|_, _, cx| crate::updater::check(cx))
-                                }),
+                                self.compact_button("check-updates", check_label, p, false)
+                                    .when(!can_check, |button| button.opacity(0.5))
+                                    .when(can_check, |button| {
+                                        button.on_click(|_, _, cx| crate::updater::check(cx))
+                                    }),
                             ),
                     )
                     .when(updates_enabled, |group| {
@@ -3019,11 +3029,148 @@ impl Dashboard {
                                 ),
                         )
                     })
+                    .when_some(automatically_downloads, |group, enabled| {
+                        group.child(divider(p).mx(px(12.))).child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap(px(10.))
+                                .px(px(12.))
+                                .py(px(11.))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(4.))
+                                        .child(label(
+                                            l("退出时自动安装", "Install Automatically on Quit"),
+                                            13.,
+                                            p.primary,
+                                        ))
+                                        .child(label(
+                                            l(
+                                                "提前下载，在退出 App 时安装",
+                                                "Download ahead and install when the app quits",
+                                            ),
+                                            11.,
+                                            p.secondary,
+                                        )),
+                                )
+                                .child(
+                                    self.compact_toggle(
+                                        "automatic-downloads",
+                                        enabled,
+                                        automatically_checks,
+                                        false,
+                                        p,
+                                    )
+                                    .when(
+                                        automatically_checks,
+                                        |toggle| {
+                                            toggle.on_click(|_, _, cx| {
+                                                let updater =
+                                                    cx.global::<crate::updater::Updater>();
+                                                updater.set_automatically_downloads(
+                                                    !updater
+                                                        .automatically_downloads()
+                                                        .unwrap_or(false),
+                                                );
+                                                cx.refresh_windows();
+                                            })
+                                        },
+                                    ),
+                                ),
+                        )
+                    })
+                    .when_some(notice, |group, notice| {
+                        group.child(label(notice.label(), 11., p.blue).px(px(12.)).pb(px(8.)))
+                    })
                     .child(
                         label(update_description, 11., p.secondary)
                             .px(px(12.))
                             .pb(px(11.)),
                     ),
+            ),
+        );
+        let diagnostics = cx.global::<crate::diagnostics::Diagnostics>();
+        let collecting = diagnostics.collecting();
+        let exported = matches!(
+            diagnostics.state(),
+            crate::diagnostics::ExportState::Exported(_)
+        );
+        let subtitle = diagnostics.subtitle();
+        body = body.child(divider(p)).child(
+            section(l("诊断", "Diagnostics"), p).child(
+                group(p).child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .gap(px(10.))
+                        .px(px(12.))
+                        .py(px(11.))
+                        .child(self.compact_icon("stethoscope", 24., p.primary))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap(px(5.))
+                                .child(label(
+                                    l("导出诊断信息", "Export Diagnostics"),
+                                    13.,
+                                    p.primary,
+                                ))
+                                .child(label(subtitle, 11., p.secondary))
+                                .when(!collecting, |column| {
+                                    column.child(
+                                        div()
+                                            .flex()
+                                            .flex_wrap()
+                                            .gap(px(9.))
+                                            .when(exported, |row| {
+                                                row.child(
+                                                    self.compact_button(
+                                                        "reveal-diagnostics",
+                                                        l("在文件夹中显示", "Show in Folder"),
+                                                        p,
+                                                        false,
+                                                    )
+                                                    .h(px(20.))
+                                                    .on_click(|_, _, cx| {
+                                                        crate::diagnostics::reveal(cx)
+                                                    }),
+                                                )
+                                            })
+                                            .child(
+                                                self.compact_button(
+                                                    "email-diagnostics",
+                                                    l("用邮件发送", "Send by Email"),
+                                                    p,
+                                                    false,
+                                                )
+                                                .h(px(20.))
+                                                .on_click(|_, _, cx| {
+                                                    crate::diagnostics::export(cx, true)
+                                                }),
+                                            ),
+                                    )
+                                }),
+                        )
+                        .child(
+                            self.compact_button(
+                                "export-diagnostics",
+                                l("导出", "Export"),
+                                p,
+                                false,
+                            )
+                            .when(collecting, |button| button.opacity(0.5))
+                            .when(!collecting, |button| {
+                                button.on_click(|_, _, cx| crate::diagnostics::export(cx, false))
+                            }),
+                        ),
+                ),
             ),
         );
         body.child(divider(p))

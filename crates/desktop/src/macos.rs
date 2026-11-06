@@ -84,7 +84,7 @@ pub fn setup() {
             .setActivationPolicy(NSApplicationActivationPolicy::Accessory);
     }
 }
-pub fn status_symbol(tray: &tray_icon::TrayIcon, has_devices: bool) {
+pub fn status_symbol(tray: &tray_icon::TrayIcon, has_devices: bool, update_available: bool) {
     use objc2_app_kit::NSImage;
     use objc2_foundation::NSString;
     let Some(mtm) = MainThreadMarker::new() else {
@@ -94,7 +94,13 @@ pub fn status_symbol(tray: &tray_icon::TrayIcon, has_devices: bool) {
         return;
     };
     if let Some(image) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-        &NSString::from_str(if has_devices { "homekit" } else { "house" }),
+        &NSString::from_str(if update_available {
+            "arrow.down.circle"
+        } else if has_devices {
+            "homekit"
+        } else {
+            "house"
+        }),
         None,
     ) {
         image.setTemplate(true);

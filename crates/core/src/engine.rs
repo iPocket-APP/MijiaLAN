@@ -7,7 +7,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     net::Ipv4Addr,
     sync::{Arc, Mutex, RwLock},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -21,11 +21,22 @@ pub struct DeviceState {
     pub revision: u64,
 }
 
+/// Ephemeral health metadata for support reports; no address or credential is stored here.
+#[derive(Clone, Debug, Default)]
+pub struct ProbeDiagnostics {
+    pub last_seen: Option<SystemTime>,
+    pub last_read: Option<SystemTime>,
+    pub retry_failures: u32,
+    pub next_retry_at: Option<SystemTime>,
+    pub active_probes: usize,
+}
+
 pub struct Engine {
     pub store: Arc<Store>,
     clients: Mutex<HashMap<String, Arc<Mutex<MiioClient>>>>,
     states: RwLock<BTreeMap<String, DeviceState>>,
     probe_requests: Mutex<BTreeSet<String>>,
+    probes: Mutex<BTreeMap<String, ProbeDiagnostics>>,
     demo: bool,
 }
 
@@ -66,6 +77,7 @@ impl Engine {
             clients: Mutex::new(HashMap::new()),
             states: RwLock::new(states),
             probe_requests: Mutex::new(BTreeSet::new()),
+            probes: Mutex::new(BTreeMap::new()),
             demo,
         }
     }
@@ -308,6 +320,38 @@ impl Engine {
         Specification::for_model(model, &text)
     }
     pub fn refresh(&self, did: &str) -> Result<DeviceState> {
+        {
+            let mut probes = self.probes.lock().unwrap();
+            probes.entry(did.into()).or_default().active_probes += 1;
+        }
+        let result = self.refresh_device(did);
+        let states = self.states.read().unwrap();
+        let mut probes = self.probes.lock().unwrap();
+        if !states.contains_key(did) {
+            probes.remove(did);
+        } else {
+            let probe = probes.entry(did.into()).or_default();
+            probe.active_probes = probe.active_probes.saturating_sub(1);
+            if result.is_ok() {
+                let now = SystemTime::now();
+                probe.last_read = Some(now);
+                probe.last_seen = Some(now);
+            }
+        }
+        result
+    }
+    pub fn probe_diagnostics(&self) -> BTreeMap<String, ProbeDiagnostics> {
+        self.probes.lock().unwrap().clone()
+    }
+    fn record_retry_schedule(&self, did: &str, failures: u32, delay: Duration) {
+        let mut probes = self.probes.lock().unwrap();
+        // A removed device may still have a completed worker waiting for the poller.
+        if let Some(probe) = probes.get_mut(did) {
+            probe.retry_failures = failures;
+            probe.next_retry_at = SystemTime::now().checked_add(delay);
+        }
+    }
+    fn refresh_device(&self, did: &str) -> Result<DeviceState> {
         if self.demo {
             return self
                 .state(did)
@@ -443,6 +487,7 @@ impl Engine {
         self.store.remove(did)?;
         self.clients.lock().unwrap().remove(did);
         self.states.write().unwrap().remove(did);
+        self.probes.lock().unwrap().remove(did);
         Ok(())
     }
     pub fn action(&self, did: &str, siid: u32, aiid: u32, inputs: Vec<Value>) -> Result<()> {
@@ -585,14 +630,15 @@ impl Engine {
                         .collect();
                     for did in completed {
                         let success = active.remove(&did).unwrap().join().unwrap_or(false);
-                        let entry = schedule.entry(did).or_insert((Instant::now(), 0));
+                        let entry = schedule.entry(did.clone()).or_insert((Instant::now(), 0));
                         entry.1 = if success { 0 } else { (entry.1 + 1).min(12) };
-                        entry.0 = Instant::now()
-                            + Duration::from_secs(if success {
-                                15
-                            } else {
-                                (15u64 << entry.1).min(86400)
-                            });
+                        let delay = Duration::from_secs(if success {
+                            15
+                        } else {
+                            (15u64 << entry.1).min(86400)
+                        });
+                        entry.0 = Instant::now() + delay;
+                        engine.record_retry_schedule(&did, entry.1, delay);
                     }
                     // Discovery can bring forward an offline probe, including at the same IP.
                     // Leave an in-flight request pending until its result has been consumed.
@@ -601,6 +647,7 @@ impl Engine {
                             true
                         } else {
                             schedule.insert(did.clone(), (Instant::now(), 0));
+                            engine.record_retry_schedule(did, 0, Duration::ZERO);
                             false
                         }
                     });

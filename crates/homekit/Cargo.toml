@@ -22,3 +22,6 @@ mdns-sd = "0.17"
 zeroize = "1.8"
 keepawake = "0.6.1"
 socket2 = "0.6"
+chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
+regex = "=1.13.1"
+tempfile = "3.20"

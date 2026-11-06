@@ -54,6 +54,11 @@ enum Command {
         region: String,
     },
     Bridge,
+    /// Export a redacted support report without starting or resetting the Home bridge.
+    Diagnostics {
+        #[arg(long)]
+        output: std::path::PathBuf,
+    },
     Remove {
         did: String,
     },
@@ -72,6 +77,18 @@ fn run() -> anyhow::Result<()> {
         Engine::open()?
     });
     match args.command {
+        Command::Diagnostics { output } => {
+            engine.refresh_all();
+            let bridge = HomeKit::new(engine.clone());
+            let data = mijialan_homekit::diagnostics::report(
+                &engine,
+                &bridge,
+                &mijialan_homekit::diagnostics::ApplicationInfo::default(),
+                std::time::SystemTime::now(),
+            );
+            let path = mijialan_homekit::diagnostics::write_report(&output, &data)?;
+            println!("{}", path.display());
+        }
         Command::Discover => {
             if args.demo {
                 anyhow::bail!("演示模式不访问真实网络");

@@ -181,6 +181,8 @@ jobs:
           "$cli" --help
           "$cli" --demo list > "$RUNNER_TEMP/demo-devices.json"
           python3 -c 'import json,sys; assert len(json.load(open(sys.argv[1]))) == 4' "$RUNNER_TEMP/demo-devices.json"
+          "$cli" --demo diagnostics --output "$RUNNER_TEMP/demo-diagnostics.json"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert len(d["devices"]) == 4 and d["app"]["implementation"] == "rust" and d["bridge"] == "stopped"; assert "00112233445566778899aabbccddeeff" not in json.dumps(d)' "$RUNNER_TEMP/demo-diagnostics.json"
 
       - name: Package Windows Release
         if: runner.os == 'Windows'
@@ -196,6 +198,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Packaged CLI demo failed' }
           $devices = ConvertFrom-Json -InputObject ($output -join "`n")
           if ($devices.Count -ne 4) { throw 'Demo returned unexpected devices' }
+          $report = Join-Path $env:RUNNER_TEMP 'demo-diagnostics.json'
+          & $cli --demo diagnostics --output $report
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged diagnostics export failed' }
+          $reportText = Get-Content -Raw $report
+          $diagnostics = ConvertFrom-Json -InputObject $reportText
+          if ($diagnostics.devices.Count -ne 4 -or $diagnostics.app.implementation -ne 'rust' -or $diagnostics.bridge -ne 'stopped' -or $reportText.Contains('00112233445566778899aabbccddeeff')) { throw 'Invalid packaged diagnostics report' }
           $desktop = Join-Path $smoke "$($zip.BaseName)/mijialan-rust.exe"
           $probe = Start-Process -FilePath $desktop -ArgumentList '--updater-smoke' -Wait -PassThru
           if ($probe.ExitCode -ne 0) { throw 'Bundled WinSparkle runtime smoke check failed' }

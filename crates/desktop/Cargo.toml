@@ -22,6 +22,8 @@ tray-icon = { version = "=0.26.1", default-features = false, features = ["ksni"]
 async-channel = "2.5"
 base64 = "0.22"
 raw-window-handle = "0.6"
+directories = "6.0"
+url = "=2.5.8"
 
 [build-dependencies]
 embed-resource = "=3.0.12"

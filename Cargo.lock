@@ -3988,6 +3988,7 @@ dependencies = [
  "async-channel 2.5.0",
  "base64 0.22.1",
  "block2",
+ "directories",
  "embed-resource",
  "gpui",
  "gpui-component",
@@ -4005,6 +4006,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tray-icon",
+ "url",
  "windows 0.61.3",
 ]
 
@@ -4015,6 +4017,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chacha20poly1305",
+ "chrono",
  "ed25519-dalek",
  "hap-crypto",
  "hex",
@@ -4023,10 +4026,12 @@ dependencies = [
  "mdns-sd",
  "mijialan-core",
  "rand 0.8.8",
+ "regex",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "socket2",
+ "tempfile",
  "x25519-dalek",
  "zeroize",
 ]

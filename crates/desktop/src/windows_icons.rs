@@ -86,6 +86,7 @@ pub fn symbol_path(name: &str) -> String {
         "plus" => "icons/plus.svg",
         "minus" => "icons/minus.svg",
         "info.circle" => "icons/info.svg",
+        "stethoscope" => "icons/info.svg",
         "exclamationmark.triangle" => "icons/triangle-alert.svg",
         _ => "windows/icons/layout-grid.svg",
     }

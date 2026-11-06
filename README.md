@@ -78,6 +78,7 @@ GPUI 0.2.2 没有 tvOS 后端，不能将当前桌面项目直接打成 Apple TV
 - 桥接时可阻止闲置休眠，不阻止显示器关闭；可单独关闭此选项。
 - 中英文界面、浅色 / 深色外观、房间筛选和键盘快捷键。关闭面板后释放视图，保留页面、滚动位置和参数草稿。
 - Mac 滑块连续调节并合并快速拖动中的数值；手动数值输入保留独立的「应用」操作。设备菜单支持重连及选择是否显示在家庭中，重置家庭配对需要再次确认。
+- 设置页和托盘菜单可导出设备与 HomeKit 诊断 JSON，包含特征读取失败、最近读数与重试状态；过滤凭据、IP、MAC 和配对码。导出任务不依赖面板保持打开，邮件入口打开待发送草稿。Mac 版支持后台更新提醒、版本入口和退出时自动安装选项；Windows 使用独立 WinSparkle 更新提示。最近一轮原生对齐见 [2026-11-06 记录](docs/native-parity-2026-11-06.md)。
 
 暂不支持蓝牙、Zigbee / Mesh 网关子设备、云灯组，以及没有已确认 LAN 命令映射的设备；与原项目的局域网边界一致。原 Swift 客户端的数据和 HomeKit 身份不会自动读入，新客户端需要重新导入和配对。
 
@@ -105,9 +106,12 @@ cargo run -p mijialan-cli -- login --region cn
 cargo run -p mijialan-cli -- refresh
 cargo run -p mijialan-cli -- set <did> 2.1 true
 cargo run -p mijialan-cli -- bridge
+cargo run -p mijialan-cli -- diagnostics --output ./MijiaLAN-Rust-Diagnostics.json
 ```
 
 `add` 交互式读取 Token，不将其放在命令行参数中。`list` 不输出凭据。`bridge` 常驻运行，Ctrl+C 停止。GUI 与 CLI 使用同一个数据目录；避免同时启动两个桥接实例。
+
+`diagnostics` 刷新设备后导出共享格式报告，不启动家庭桥；CLI 无法读取另一个 GUI/后台进程的实时桥状态，运行中的桥请从该进程的设置页导出。报告保留设备名称和读数；演示导出可使用 `--demo diagnostics --output <file>`。GUI 报告保存在 Mac 的 `~/Library/Logs/MijiaLAN Rust`，Windows/Linux 的独立应用数据目录 `Logs` 下。
 
 ## 结构
 

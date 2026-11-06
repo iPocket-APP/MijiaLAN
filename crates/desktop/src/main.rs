@@ -1,5 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
+mod diagnostics;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(any(target_os = "macos", test))]
@@ -35,6 +36,7 @@ actions!(
         AddDevice,
         Settings,
         CheckForUpdates,
+        ExportDiagnostics,
         Dismiss,
         Back,
         LanguageSystem,
@@ -190,6 +192,12 @@ fn run() -> anyhow::Result<()> {
         });
         cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
         cx.on_action(|_: &CheckForUpdates, cx: &mut App| updater::check(cx));
+        cx.on_action(|_: &ExportDiagnostics, cx: &mut App| diagnostics::export(cx, false));
+        cx.set_global(diagnostics::Diagnostics::new(
+            engine.clone(),
+            bridge.clone(),
+        ));
+        cx.set_global(updater::Updater::start(demo));
         #[cfg(target_os = "windows")]
         cx.spawn(async move |cx| {
             loop {
@@ -254,12 +262,12 @@ fn run() -> anyhow::Result<()> {
         let receiver = match tray {
             Ok(tray) => {
                 #[cfg(target_os = "macos")]
-                macos::status_symbol(&tray.icon, !engine.store.config().devices.is_empty());
+                macos::status_symbol(&tray.icon, !engine.store.config().devices.is_empty(), false);
                 #[cfg(target_os = "macos")]
                 cx.set_global(macos::EventMonitors::new(tray.sender, tray.icon.clone()));
                 #[cfg(not(target_os = "macos"))]
                 let _ = tray.sender;
-                cx.set_global(TrayState(tray.icon));
+                cx.set_global(TrayState(tray.icon, tray.updates));
                 Some(tray.commands)
             }
             Err(error) => {
@@ -269,6 +277,35 @@ fn run() -> anyhow::Result<()> {
         };
         let has_tray = receiver.is_some();
         let command_session = session.clone();
+        update_controls(cx, !engine.store.config().devices.is_empty());
+        if cx.global::<updater::Updater>().enabled() {
+            let status_engine = engine.clone();
+            cx.spawn(async move |cx| {
+                let mut previous = None;
+                loop {
+                    let result = cx.update(|cx| {
+                        let config = status_engine.store.config();
+                        let current = (
+                            cx.global::<updater::Updater>().presentation(),
+                            !config.devices.is_empty(),
+                            config.language,
+                        );
+                        if previous.as_ref() != Some(&current) {
+                            update_controls(cx, current.1);
+                            cx.refresh_windows();
+                            previous = Some(current);
+                        }
+                    });
+                    if result.is_err() {
+                        break;
+                    }
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(1))
+                        .await;
+                }
+            })
+            .detach();
+        }
         let create = Rc::new(move |cx: &mut App| {
             let engine_view = engine.clone();
             let bridge_view = bridge.clone();
@@ -410,7 +447,6 @@ fn run() -> anyhow::Result<()> {
             }
         };
         let show: Rc<dyn Fn(&mut App)> = Rc::new(reopen);
-        cx.set_global(updater::Updater::start(demo));
         if let Some(receiver) = receiver {
             let show = show.clone();
             cx.spawn(async move |cx| {
@@ -455,6 +491,7 @@ fn run() -> anyhow::Result<()> {
                         }
                         tray::Command::Quit => cx.quit(),
                         tray::Command::CheckForUpdates => updater::check(cx),
+                        tray::Command::ExportDiagnostics => diagnostics::export(cx, false),
                     });
                 }
             })
@@ -471,7 +508,10 @@ fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-struct TrayState(#[allow(dead_code)] tray_icon::TrayIcon);
+struct TrayState(
+    #[allow(dead_code)] tray_icon::TrayIcon,
+    tray_icon::menu::MenuItem,
+);
 impl Global for TrayState {}
 struct ReopenState(Rc<dyn Fn(&mut App)>);
 impl Global for ReopenState {}
@@ -487,7 +527,7 @@ fn select_language(engine: &Engine, language: &str, cx: &mut App) {
     } else {
         "zh-CN"
     });
-    install_menus(cx);
+    update_controls(cx, !engine.store.config().devices.is_empty());
     cx.refresh_windows();
 }
 fn install_menus(cx: &mut App) {
@@ -496,7 +536,11 @@ fn install_menus(cx: &mut App) {
             name: "MijiaLAN Rust".into(),
             items: vec![
                 MenuItem::action(t("设置…"), Settings),
-                MenuItem::action(t("检查更新…"), CheckForUpdates),
+                MenuItem::action(
+                    cx.global::<updater::Updater>().check_label(),
+                    CheckForUpdates,
+                ),
+                MenuItem::action(t("导出诊断信息…"), ExportDiagnostics),
                 MenuItem::submenu(Menu {
                     name: "语言 / Language".into(),
                     items: vec![
@@ -517,4 +561,24 @@ fn install_menus(cx: &mut App) {
             ],
         },
     ]);
+}
+
+fn update_controls(cx: &mut App, has_devices: bool) {
+    let updater = cx.global::<updater::Updater>();
+    if cx.has_global::<TrayState>() {
+        let tray = cx.global::<TrayState>();
+        tray.1.set_text(updater.check_label());
+        tray.1.set_enabled(updater.can_check());
+        let notice = updater.available();
+        let tooltip = notice
+            .as_ref()
+            .map(|notice| format!("MijiaLAN Rust · {}", notice.label()))
+            .unwrap_or_else(|| t("MijiaLAN Rust · 局域网设备控制"));
+        let _ = tray.0.set_tooltip(Some(tooltip));
+        #[cfg(target_os = "macos")]
+        macos::status_symbol(&tray.0, has_devices, notice.is_some());
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = has_devices;
+    install_menus(cx);
 }

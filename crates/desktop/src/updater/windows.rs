@@ -14,11 +14,19 @@ use windows::{
 };
 
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
+static UPDATE_AVAILABLE: AtomicBool = AtomicBool::new(false);
 pub fn take_shutdown_request() -> bool {
     SHUTDOWN_REQUESTED.swap(false, Ordering::AcqRel)
 }
 unsafe extern "C" fn request_shutdown() {
+    UPDATE_AVAILABLE.store(false, Ordering::Release);
     SHUTDOWN_REQUESTED.store(true, Ordering::Release);
+}
+unsafe extern "C" fn found_update() {
+    UPDATE_AVAILABLE.store(true, Ordering::Release);
+}
+unsafe extern "C" fn clear_update() {
+    UPDATE_AVAILABLE.store(false, Ordering::Release);
 }
 unsafe extern "C" fn can_shutdown() -> i32 {
     1
@@ -91,6 +99,10 @@ impl Updater {
             c"win_sparkle_set_can_shutdown_callback",
             c"win_sparkle_get_automatic_check_for_updates",
             c"win_sparkle_set_automatic_check_for_updates",
+            c"win_sparkle_set_did_find_update_callback",
+            c"win_sparkle_set_did_not_find_update_callback",
+            c"win_sparkle_set_error_callback",
+            c"win_sparkle_set_update_dismissed_callback",
         ] {
             unsafe {
                 library.get::<unsafe extern "C" fn()>(name.to_bytes_with_nul())?;
@@ -155,6 +167,30 @@ impl Updater {
             let check = *library.get(b"win_sparkle_check_update_with_ui\0")?;
             let automatic = *library.get(b"win_sparkle_get_automatic_check_for_updates\0")?;
             let set_automatic = *library.get(b"win_sparkle_set_automatic_check_for_updates\0")?;
+            // WinSparkle may invoke these off the UI thread. Only atomics are touched here;
+            // the application refreshes its indicators on the main thread.
+            for (name, callback) in [
+                (
+                    c"win_sparkle_set_did_find_update_callback",
+                    found_update as unsafe extern "C" fn(),
+                ),
+                (
+                    c"win_sparkle_set_did_not_find_update_callback",
+                    clear_update as unsafe extern "C" fn(),
+                ),
+                (
+                    c"win_sparkle_set_error_callback",
+                    clear_update as unsafe extern "C" fn(),
+                ),
+                (
+                    c"win_sparkle_set_update_dismissed_callback",
+                    clear_update as unsafe extern "C" fn(),
+                ),
+            ] {
+                library.get::<unsafe extern "C" fn(unsafe extern "C" fn())>(
+                    name.to_bytes_with_nul(),
+                )?(callback);
+            }
             set_url(CString::new(super::feed_url("windows-x86_64"))?.as_ptr());
             ensure!(
                 set_key(CString::new(super::PUBLIC_KEY)?.as_ptr()) != 0,
@@ -170,6 +206,7 @@ impl Updater {
             set_interval(86400);
             set_shutdown(request_shutdown);
             set_can_shutdown(can_shutdown);
+            UPDATE_AVAILABLE.store(false, Ordering::Release);
             init();
             Ok(Self {
                 _library: library,
@@ -195,6 +232,12 @@ impl Updater {
         unsafe {
             (self.check)();
         }
+    }
+    pub fn available(&self) -> Option<super::UpdateNotice> {
+        // This public WinSparkle callback does not provide the display version.
+        UPDATE_AVAILABLE
+            .load(Ordering::Acquire)
+            .then_some(super::UpdateNotice { version: None })
     }
 }
 impl Drop for Updater {

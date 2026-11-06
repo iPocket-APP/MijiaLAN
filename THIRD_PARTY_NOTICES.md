@@ -1,7 +1,7 @@
 # Third-party notices
 
 - **MijiaLAN** — MIT, copyright iPocket-APP. The protocol, schema data, verified legacy profiles, shared-controller behavior and bridge mapping were ported from the sibling Swift project. Its original checkout is not modified by this project.
-- **MenuBarMijia / MijiaCore** — MIT. Xiaomi QR login, RC4 request signing, room parsing and related protocol behavior were reimplemented in Rust from the pinned Swift dependency used by MijiaLAN. See `licenses/MenuBarMijia/LICENSE`.
+- **MenuBarMijia / MijiaCore** — MIT, pinned 1.1.4 (`c6a9db1c84fa30125ed4b642b6745487dec94e89`). Xiaomi QR login, RC4 request signing, room parsing and related protocol behavior were reimplemented in Rust. The original repository is unavailable; the unchanged Swift reference is retained in native MijiaLAN's `Vendor/MenuBarMijia`. Rust builds do not fetch or compile this Swift dependency. See `licenses/MenuBarMijia/` for the retained license and reference provenance.
 - **hass-xiaomi-miot** — Apache-2.0, upstream commit `75bc74f67275bde6a8742b6638039819e10eaea5`. `resources/legacy-miio.json` contains converted data from the original project, with the original hand-checked model overrides applied. No Python templates are executed. See `licenses/hass-xiaomi-miot/` for the license and provenance.
 - **homebridge-miot** — MIT. Native HomeKit category mapping follows the rules already ported into MijiaLAN, with independent Rust implementation. See `licenses/homebridge-miot/`.
 

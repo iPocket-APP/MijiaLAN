@@ -16,6 +16,27 @@ pub fn feed_url(platform: &str) -> String {
     format!("{ORIGIN}/rs/{platform}/appcast.xml")
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdateNotice {
+    pub version: Option<String>,
+}
+impl UpdateNotice {
+    pub fn label(&self) -> String {
+        self.version
+            .as_ref()
+            .map(|version| format!("{} {version}", t("更新至")))
+            .unwrap_or_else(|| t("发现新版本"))
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct Presentation {
+    pub can_check: bool,
+    pub automatic_checks: bool,
+    pub automatic_downloads: Option<bool>,
+    pub notice: Option<UpdateNotice>,
+}
+
 pub struct Updater {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     runtime: Option<platform::Updater>,
@@ -82,6 +103,47 @@ impl Updater {
     }
     pub fn reason(&self) -> &str {
         &self.reason
+    }
+    pub fn available(&self) -> Option<UpdateNotice> {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        return self
+            .runtime
+            .as_ref()
+            .and_then(|updater| updater.available());
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        None
+    }
+    pub fn check_label(&self) -> String {
+        if self.available().is_some() {
+            t("查看更新…")
+        } else {
+            t("检查更新…")
+        }
+    }
+    pub fn automatically_downloads(&self) -> Option<bool> {
+        #[cfg(target_os = "macos")]
+        return self
+            .runtime
+            .as_ref()
+            .map(|updater| updater.automatically_downloads());
+        #[cfg(not(target_os = "macos"))]
+        None
+    }
+    pub fn set_automatically_downloads(&self, enabled: bool) {
+        #[cfg(target_os = "macos")]
+        if let Some(runtime) = &self.runtime {
+            runtime.set_automatically_downloads(enabled);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = enabled;
+    }
+    pub fn presentation(&self) -> Presentation {
+        Presentation {
+            can_check: self.can_check(),
+            automatic_checks: self.automatically_checks(),
+            automatic_downloads: self.automatically_downloads(),
+            notice: self.available(),
+        }
     }
     pub fn check(&self) {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
