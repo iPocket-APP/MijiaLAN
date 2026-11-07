@@ -9,8 +9,9 @@ use sha2::Sha256;
 use std::{
     net::Ipv4Addr,
     sync::atomic::{AtomicBool, Ordering},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use tokio::{runtime, time};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 #[derive(Clone)]
@@ -105,86 +106,142 @@ pub fn wait(ticket: &Ticket, region: &str, cancelled: &AtomicBool) -> Result<Ses
     if !regions().contains(&region) {
         return Err(Error::Validation("未知服务器地区".into()));
     }
+    let poll_url = account_url(&ticket.poll_url)?;
+    let runtime = runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| Error::Response("无法初始化扫码轮询".into()))?;
+    let scan = runtime.block_on(async {
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(8))
+            .redirect(Policy::none())
+            .build()
+            .map_err(|_| Error::Response("无法初始化登录网络服务".into()))?;
+        wait_for_scan(&client, poll_url, ticket.timeout, cancelled).await
+    })?;
+    drop(runtime);
+
     let http = http()?;
-    let end = Instant::now() + ticket.timeout;
-    while !cancelled.load(Ordering::Relaxed) && Instant::now() < end {
-        let response = match http.get(account_url(&ticket.poll_url)?).send() {
-            Err(e) if e.is_timeout() => continue,
-            Err(_) => {
-                std::thread::sleep(Duration::from_millis(500));
-                continue;
-            }
-            Ok(response) => response,
-        };
-        if !response.status().is_success() {
-            std::thread::sleep(Duration::from_millis(500));
-            continue;
+    let mut url = scan.location;
+    for _ in 0..5 {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(Error::Validation("扫码导入已取消".into()));
         }
-        let body = response
-            .text()
-            .map_err(|_| Error::Response("无法读取扫码结果".into()))?;
-        let value = parse_account_json(&body)?;
-        let (Some(user), Some(security), Some(location)) = (
-            value.get("userId"),
-            value["ssecurity"].as_str(),
-            value["location"].as_str(),
-        ) else {
-            continue;
-        };
-        let mut url = account_url(location)?;
-        for _ in 0..5 {
-            if cancelled.load(Ordering::Relaxed) {
-                return Err(Error::Validation("扫码导入已取消".into()));
+        let response = http
+            .get(url.clone())
+            .send()
+            .map_err(|_| Error::Response("已收到扫码确认，但无法交换登录凭据".into()))?;
+        for cookie in response.headers().get_all(reqwest::header::SET_COOKIE) {
+            if let Ok(cookie) = cookie.to_str()
+                && let Some(token) = cookie
+                    .split(';')
+                    .next()
+                    .and_then(|c| c.trim().strip_prefix("serviceToken="))
+                && !token.is_empty()
+            {
+                return Ok(Session {
+                    user_id: scan.user_id,
+                    ssecurity: scan.ssecurity,
+                    service_token: token.into(),
+                    region: region.into(),
+                });
             }
-            let response = http
-                .get(url.clone())
-                .send()
-                .map_err(|_| Error::Response("无法交换登录凭据".into()))?;
-            for cookie in response.headers().get_all(reqwest::header::SET_COOKIE) {
-                if let Ok(cookie) = cookie.to_str()
-                    && let Some(token) = cookie
-                        .split(';')
-                        .next()
-                        .and_then(|c| c.trim().strip_prefix("serviceToken="))
-                    && !token.is_empty()
-                {
-                    return Ok(Session {
+        }
+        if !response.status().is_redirection() {
+            break;
+        }
+        let next = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| Error::Response("登录跳转缺少地址".into()))?;
+        url = account_url(
+            url.join(next)
+                .map_err(|_| Error::Response("登录跳转地址无效".into()))?
+                .as_str(),
+        )?;
+    }
+    Err(Error::Response(
+        "已收到扫码确认，但未取得服务凭据，请重新扫码".into(),
+    ))
+}
+
+struct ScanResult {
+    user_id: String,
+    ssecurity: String,
+    location: Url,
+}
+
+async fn wait_for_scan(
+    client: &reqwest::Client,
+    url: Url,
+    lifetime: Duration,
+    cancelled: &AtomicBool,
+) -> Result<ScanResult> {
+    tokio::select! {
+        biased;
+        _ = async {
+            while !cancelled.load(Ordering::Relaxed) {
+                time::sleep(Duration::from_millis(100)).await;
+            }
+        } => Err(Error::Validation("扫码导入已取消".into())),
+        result = poll_scan(client, url, time::Instant::now() + lifetime) => result,
+    }
+}
+
+async fn poll_scan(
+    client: &reqwest::Client,
+    url: Url,
+    deadline: time::Instant,
+) -> Result<ScanResult> {
+    let mut last_failure = None;
+    while time::Instant::now() < deadline {
+        // The account service may leave this request pending until the user confirms.
+        let response = time::timeout_at(deadline, async {
+            let response = client.get(url.clone()).send().await?;
+            let status = response.status();
+            let body = if status.is_success() {
+                Some(response.text().await?)
+            } else {
+                None
+            };
+            Ok::<_, reqwest::Error>((status, body))
+        })
+        .await;
+        last_failure = Some(match response {
+            Err(_) => break,
+            Ok(Err(_)) => "无法连接或读取小米扫码服务，请检查网络后重新获取二维码".into(),
+            Ok(Ok((status, None))) => format!("小米扫码轮询返回 HTTP {}", status.as_u16()),
+            Ok(Ok((_, Some(body)))) => {
+                let value = parse_account_json(&body)?;
+                if let (Some(user), Some(security), Some(location)) = (
+                    value.get("userId"),
+                    value["ssecurity"].as_str(),
+                    value["location"].as_str(),
+                ) {
+                    return Ok(ScanResult {
                         user_id: user
                             .as_str()
                             .map(str::to_owned)
                             .unwrap_or_else(|| user.to_string()),
                         ssecurity: security.into(),
-                        service_token: token.into(),
-                        region: region.into(),
+                        location: account_url(location)?,
                     });
                 }
+                match value["code"].as_i64() {
+                    Some(code) if code != 0 => {
+                        format!("小米扫码服务返回错误 {code}，请重新获取二维码")
+                    }
+                    _ => "小米扫码服务未返回确认信息，请重新获取二维码".into(),
+                }
             }
-            if !response.status().is_redirection() {
-                break;
-            }
-            let next = response
-                .headers()
-                .get(reqwest::header::LOCATION)
-                .and_then(|v| v.to_str().ok())
-                .ok_or_else(|| Error::Response("登录跳转缺少地址".into()))?;
-            url = account_url(
-                url.join(next)
-                    .map_err(|_| Error::Response("登录跳转地址无效".into()))?
-                    .as_str(),
-            )?;
-        }
-        return Err(Error::Response(
-            "登录成功，但未取得服务凭据，请重新扫码".into(),
-        ));
+        });
+        time::sleep_until(deadline.min(time::Instant::now() + Duration::from_secs(1))).await;
     }
-    Err(Error::Validation(
-        if cancelled.load(Ordering::Relaxed) {
-            "扫码导入已取消"
-        } else {
-            "二维码已过期，请重新获取"
-        }
-        .into(),
-    ))
+    match last_failure {
+        Some(message) => Err(Error::Response(message)),
+        None => Err(Error::Validation("二维码已过期，请重新获取".into())),
+    }
 }
 
 pub fn rc4(key: &[u8], input: &[u8]) -> Result<Vec<u8>> {
@@ -387,4 +444,65 @@ pub struct ImportReport {
     pub imported: usize,
     pub skipped: Vec<String>,
     pub region: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    #[tokio::test]
+    async fn scan_keeps_waiting_past_the_short_http_timeout() {
+        let server = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = Url::parse(&format!("http://{}/poll", server.local_addr().unwrap())).unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let cancelled = AtomicBool::new(false);
+        let reply = async {
+            let (mut connection, _) = server.accept().await.unwrap();
+            assert!(connection.read(&mut [0; 1024]).await.unwrap() > 0);
+            time::sleep(Duration::from_secs(17)).await;
+            let body = r#"&&&START&&&{"userId":42,"ssecurity":"test","location":"https://sts.api.io.mi.com/sts"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            connection.write_all(response.as_bytes()).await.unwrap();
+        };
+        let (scan, ()) = time::timeout(Duration::from_secs(25), async {
+            tokio::join!(
+                wait_for_scan(&client, url, Duration::from_secs(24), &cancelled),
+                reply
+            )
+        })
+        .await
+        .unwrap();
+        assert_eq!(scan.unwrap().user_id, "42");
+    }
+
+    #[tokio::test]
+    async fn cancelling_scan_interrupts_the_pending_request() {
+        let server = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = Url::parse(&format!("http://{}/poll", server.local_addr().unwrap())).unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let cancelled = AtomicBool::new(false);
+        let cancel_after_request = async {
+            let (mut connection, _) = server.accept().await.unwrap();
+            assert!(connection.read(&mut [0; 1024]).await.unwrap() > 0);
+            cancelled.store(true, Ordering::Relaxed);
+            let mut tail = Vec::new();
+            connection.read_to_end(&mut tail).await.unwrap();
+        };
+        let (scan, ()) = time::timeout(Duration::from_secs(3), async {
+            tokio::join!(
+                wait_for_scan(&client, url, Duration::from_secs(30), &cancelled),
+                cancel_after_request
+            )
+        })
+        .await
+        .unwrap();
+        assert!(matches!(scan, Err(Error::Validation(message)) if message == "扫码导入已取消"));
+    }
 }

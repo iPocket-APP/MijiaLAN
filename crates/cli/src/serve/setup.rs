@@ -266,11 +266,7 @@ async fn status(State(wizard): State<Arc<Wizard>>) -> impl IntoResponse {
         Progress::Waiting(ticket) => ("waiting", None, qr_svg(&ticket.login_url)),
         Progress::Importing => ("importing", None, None),
         Progress::Done(text) => ("done", Some(text), None),
-        Progress::Failed(_) => (
-            "failed",
-            Some("导入失败，请检查米家区域、NAS 网络，或重新获取二维码。".into()),
-            None,
-        ),
+        Progress::Failed(message) => ("failed", Some(message), None),
     };
     let bridge = wizard.service.bridge.info();
     let devices: Vec<_> = wizard
