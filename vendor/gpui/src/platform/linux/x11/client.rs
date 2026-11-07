@@ -247,7 +247,7 @@ impl X11ClientStatePtr {
         }
         state.cursor_styles.remove(&x_window);
 
-        if state.windows.is_empty() {
+        if state.windows.is_empty() && state.common.quit_on_last_window_close {
             state.common.signal.stop();
         }
     }
@@ -761,15 +761,17 @@ impl X11Client {
             Event::ClientMessage(event) => {
                 let window = self.get_window(event.window)?;
                 let [atom, arg1, arg2, arg3, arg4] = event.data.as_data32();
-                let mut state = self.0.borrow_mut();
-
-                if atom == state.atoms.WM_DELETE_WINDOW {
-                    // window "x" button clicked by user
+                let closing = atom == self.0.borrow().atoms.WM_DELETE_WINDOW;
+                if closing {
+                    // Close callbacks may quit the app and borrow the platform again.
                     if window.should_close() {
-                        // Rest of the close logic is handled in drop_window()
                         window.close();
                     }
-                } else if atom == state.atoms._NET_WM_SYNC_REQUEST {
+                    return Some(());
+                }
+
+                let mut state = self.0.borrow_mut();
+                if atom == state.atoms._NET_WM_SYNC_REQUEST {
                     window.state.borrow_mut().last_sync_counter =
                         Some(x11rb::protocol::sync::Int64 {
                             lo: arg2,

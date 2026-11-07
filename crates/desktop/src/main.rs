@@ -184,6 +184,8 @@ fn run() -> anyhow::Result<()> {
     });
     application.run(move |cx| {
         trace_panel("startup_widgets");
+        #[cfg(target_os = "linux")]
+        cx.set_quit_on_last_window_close(false);
         gpui_component::init(cx);
         {
             use gpui_component::{Theme, ThemeMode};

@@ -750,6 +750,12 @@ impl App {
         self.platform.quit();
     }
 
+    /// Set whether the Linux platform stops its event loop after the last window closes.
+    #[cfg(target_os = "linux")]
+    pub fn set_quit_on_last_window_close(&self, enabled: bool) {
+        self.platform.set_quit_on_last_window_close(enabled);
+    }
+
     /// Schedules all windows in the application to be redrawn. This can be called
     /// multiple times in an update cycle and still result in a single redraw.
     pub fn refresh_windows(&mut self) {
