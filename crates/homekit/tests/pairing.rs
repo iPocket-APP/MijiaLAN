@@ -383,8 +383,9 @@ fn pair_controller(
 fn linux_service_reopens_a_paired_light_and_accepts_writes_with_the_old_controller() {
     use mijialan_core::{Device, Specification, Store, Token};
 
-    let model = "yeelink.light.lamp4";
-    let lamp = support::MiotDevice::with_spec(model, Specification::bundled(model).unwrap());
+    let model = "test.light.service";
+    let document = Specification::bundled("yeelink.light.lamp4").unwrap();
+    let lamp = support::MiotDevice::with_spec(model, document);
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("data");
     let keys = temp.path().join("keys");
@@ -400,6 +401,7 @@ fn linux_service_reopens_a_paired_light_and_accepts_writes_with_the_old_controll
     let controller = ControllerKeypair::from_seed("linux-controller".into(), [73; 32]);
     let (accessory, before, brightness) = {
         let engine = open();
+        engine.store.cache_spec(model, document).unwrap();
         engine
             .import(
                 Device {
