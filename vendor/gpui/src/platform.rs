@@ -479,6 +479,10 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         answers: &[PromptButton],
     ) -> Option<oneshot::Receiver<usize>>;
     fn activate(&self);
+    #[cfg(target_os = "linux")]
+    fn activate_with_token(&self, _token: &str) {
+        self.activate();
+    }
     fn is_active(&self) -> bool;
     fn is_hovered(&self) -> bool;
     fn set_title(&mut self, title: &str);

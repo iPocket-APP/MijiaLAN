@@ -63,8 +63,8 @@ pub fn text(value: impl AsRef<str>) -> String {
         "请安装正式发布包以启用自动更新" => {
             "Install the official app bundle or Windows MSI to enable updates"
         }
-        "此平台暂不支持应用内更新" => {
-            "In-app updates are not available on this platform yet"
+        "下载并安装新版 Linux 安装包以更新 MijiaLAN。" => {
+            "Download and install the new Linux package to update MijiaLAN."
         }
         "打开 MijiaLAN Rust" => "Open MijiaLAN Rust",
         "退出" => "Quit",
@@ -161,6 +161,9 @@ pub fn text(value: impl AsRef<str>) -> String {
         }
         "桥运行时需要电脑保持开机和网络连接。关闭窗口后继续在托盘后台运行。" => {
             "The computer must remain on and connected. Closing the window keeps the app running in the tray."
+        }
+        "最小化窗口可保持家庭桥运行。托盘可见时也可以关闭窗口收起。" => {
+            "Minimize the window to keep the Home bridge running. If the tray icon is visible, closing the window also keeps the bridge running."
         }
         "切换浅色 / 深色外观" => "Toggle light / dark appearance",
         "凭据保存在本项目独立的系统凭据存储中。扫码登录会话不持久化。" => {

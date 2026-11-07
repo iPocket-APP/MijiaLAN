@@ -64,6 +64,15 @@ impl ImportJob {
         result
     }
     pub fn start(self: &Arc<Self>, engine: Arc<Engine>, region: String) {
+        self.start_with_default(engine, region, true);
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn start_unbridged(self: &Arc<Self>, engine: Arc<Engine>, region: String) {
+        self.start_with_default(engine, region, false);
+    }
+
+    fn start_with_default(self: &Arc<Self>, engine: Arc<Engine>, region: String, bridged: bool) {
         if engine.is_demo() {
             self.0.lock().unwrap().progress =
                 Progress::Failed("请启动正式模式后扫码导入设备".into());
@@ -80,6 +89,18 @@ impl ImportJob {
         let job = self.clone();
         std::thread::spawn(move || {
             let result = (|| -> crate::Result<String> {
+                #[cfg(target_os = "linux")]
+                engine.store.vault.prepare_credentials().map_err(|error| {
+                    let hint = if crate::localization::english() {
+                        "Start and unlock Secret Service in your desktop session, then retry the import."
+                    } else {
+                        "请在桌面会话中启动并解锁 Secret Service（如 GNOME Keyring 或 KeePassXC），再重试导入。"
+                    };
+                    crate::Error::Storage(format!("{hint}\n{error}"))
+                })?;
+                if cancel.load(Ordering::Relaxed) {
+                    return Ok("导入已取消".into());
+                }
                 let ticket = cloud::start()?;
                 if cancel.load(Ordering::Relaxed) {
                     return Ok("导入已取消".into());
@@ -87,7 +108,7 @@ impl ImportJob {
                 job.set(generation, Progress::Waiting(ticket.clone()));
                 let session = cloud::wait(&ticket, &region, &cancel)?;
                 job.set(generation, Progress::Importing);
-                let report = session.import(&engine, &cancel)?;
+                let report = session.import_with_default(&engine, &cancel, bridged)?;
                 Ok(if crate::localization::english() {
                     format!(
                         "Imported {} devices from {}; skipped {} without LAN credentials",

@@ -213,6 +213,18 @@ impl Engine {
         }
         Ok(())
     }
+    #[cfg(target_os = "linux")]
+    pub fn select_bridged_devices(&self, selected: &BTreeSet<String>) -> Result<()> {
+        self.store.update(|config| {
+            for device in &mut config.devices {
+                device.bridged = selected.contains(&device.did);
+            }
+        })?;
+        for state in self.states.write().unwrap().values_mut() {
+            state.device.bridged = selected.contains(&state.device.did);
+        }
+        Ok(())
+    }
     pub fn states(&self) -> Vec<DeviceState> {
         self.states.read().unwrap().values().cloned().collect()
     }
@@ -588,7 +600,7 @@ impl Engine {
         for device in changed {
             self.clients.lock().unwrap().remove(&device.did);
             if let Some(state) = self.states.write().unwrap().get_mut(&device.did) {
-                state.device = device;
+                state.device.host = device.host;
             }
         }
         let states = self.states.read().unwrap();

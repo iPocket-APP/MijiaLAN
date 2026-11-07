@@ -1,0 +1,23 @@
+services:
+  mijialan:
+    image: mijialan-bridge:candidate
+    network_mode: host
+    environment:
+      MIJIALAN_LAN_IP: "192.168.1.10" # 改成群晖的局域网 IPv4
+      MIJIALAN_HAP_PORT: "51826"
+      MIJIALAN_SETUP_PORT: "17890"
+      MIJIALAN_SETUP: "false"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:mode=1777,size=16m
+    volumes:
+      - data:/data
+      - keys:/keys
+
+volumes:
+  data:
+  keys:

@@ -11,6 +11,9 @@ use std::{
     time::Duration,
 };
 
+#[cfg(target_os = "linux")]
+mod serve;
+
 #[derive(Parser)]
 #[command(
     name = "mijia-rust",
@@ -54,6 +57,9 @@ enum Command {
         region: String,
     },
     Bridge,
+    /// Run a persistent LAN bridge with a time-limited browser setup on Linux.
+    #[cfg(target_os = "linux")]
+    Serve(serve::Options),
     /// Export a redacted support report without starting or resetting the Home bridge.
     Diagnostics {
         #[arg(long)]
@@ -71,12 +77,19 @@ fn main() {
 }
 fn run() -> anyhow::Result<()> {
     let args = Args::parse();
+    #[cfg(target_os = "linux")]
+    if let Command::Serve(options) = args.command {
+        anyhow::ensure!(!args.demo, "serve 需要真实设备数据，不能与 --demo 同用");
+        return serve::run(options);
+    }
     let engine = Arc::new(if args.demo {
         Engine::demo()
     } else {
         Engine::open()?
     });
     match args.command {
+        #[cfg(target_os = "linux")]
+        Command::Serve(_) => unreachable!(),
         Command::Diagnostics { output } => {
             engine.refresh_all();
             let bridge = HomeKit::new(engine.clone());

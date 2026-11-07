@@ -8,6 +8,7 @@ mod value;
 pub(crate) use value::validate_write;
 
 const MAX_SERVICES: usize = 100;
+pub const MAX_BRIDGED_DEVICES: usize = 149;
 
 fn action_error(error: mijialan_core::Error) -> i32 {
     // Keep the underlying failure observable instead of reporting only HAP's
@@ -694,7 +695,7 @@ fn build_states(engine: &Engine, layout: &mut Layout, states: Vec<DeviceState>) 
         .iter()
         .filter(|s| included.contains(s.device.did.as_str()))
     {
-        if database.accessories.len() >= 150 {
+        if database.accessories.len() > MAX_BRIDGED_DEVICES {
             break;
         }
         let builder = plan_device(state, layout, &config.homekit_names);

@@ -4113,6 +4113,12 @@ impl Window {
         self.platform_window.activate();
     }
 
+    /// Activate using a desktop launcher's XDG activation token on Wayland.
+    #[cfg(target_os = "linux")]
+    pub fn activate_window_with_token(&self, token: &str) {
+        self.platform_window.activate_with_token(token);
+    }
+
     /// Minimize the current window at the platform level.
     pub fn minimize_window(&self) {
         self.platform_window.minimize();

@@ -1,0 +1,22 @@
+:root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
+body { margin: 0; color: light-dark(#18221f, #e5efeb); background: light-dark(#eef4f1, #16201e); }
+main { max-width: 42rem; margin: auto; padding: 2.5rem 1rem; }
+header { margin-bottom: 1.5rem; }
+.brand { color: light-dark(#176050, #80d8b9); font-weight: 700; }
+h1, h2, p { margin: 0 0 .75rem; }
+h1 { font-size: 2.25rem; }
+h2 { font-size: 1.2rem; }
+form, section { background: light-dark(#fff, #212e2a); padding: 1.25rem; border-radius: .85rem; margin-bottom: .85rem; }
+label { display: block; margin-bottom: .3rem; font-weight: 600; }
+input, select, button { font: inherit; }
+input:not([type=checkbox]), select, button { border-radius: .45rem; padding: .5rem .7rem; margin-bottom: .35rem; }
+input:not([type=checkbox]) { box-sizing: border-box; width: 100%; margin-bottom: .75rem; }
+button { color: white; background: #146452; border: 1px solid transparent; cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+:focus-visible { outline: 3px solid #298c73; outline-offset: 3px; }
+img { display: block; width: min(100%, 16.5rem); border-radius: .45rem; background: white; }
+.pin { font-size: 1.2rem; font-variant-numeric: tabular-nums; }
+#devices label { display: flex; align-items: baseline; gap: .65rem; font-weight: 400; }
+#devices { margin-bottom: .7rem; }
+#notice { overflow-wrap: anywhere; }
+[hidden] { display: none; }

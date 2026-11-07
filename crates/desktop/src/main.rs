@@ -1,6 +1,8 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod diagnostics;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(any(target_os = "macos", test))]
@@ -146,6 +148,23 @@ fn run() -> anyhow::Result<()> {
     }
     trace_panel("startup_engine");
     let demo = std::env::args().any(|a| a == "--demo");
+    #[cfg(target_os = "linux")]
+    let bus = linux::session().ok();
+    #[cfg(target_os = "linux")]
+    let (activation, activation_events) = async_channel::bounded(1);
+    #[cfg(target_os = "linux")]
+    let launch_token = std::env::var("XDG_ACTIVATION_TOKEN").unwrap_or_default();
+    #[cfg(target_os = "linux")]
+    if !demo
+        && let Some(bus) = &bus
+        && linux::reopen_existing(bus, activation, &launch_token)?
+    {
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    let initial_tray_host = bus.as_ref().is_some_and(linux::has_tray_host);
+    #[cfg(target_os = "linux")]
+    let tray_bus = bus.clone();
     let engine = Arc::new(if demo {
         Engine::demo_control_center()
     } else {
@@ -276,6 +295,8 @@ fn run() -> anyhow::Result<()> {
             }
         };
         let has_tray = receiver.is_some();
+        #[cfg(target_os = "linux")]
+        let tray_host = Rc::new(std::cell::Cell::new(has_tray && initial_tray_host));
         let command_session = session.clone();
         update_controls(cx, !engine.store.config().devices.is_empty());
         if cx.global::<updater::Updater>().enabled() {
@@ -306,6 +327,8 @@ fn run() -> anyhow::Result<()> {
             })
             .detach();
         }
+        #[cfg(target_os = "linux")]
+        let launch_token = RefCell::new(Some(launch_token).filter(|token| !token.is_empty()));
         let create = Rc::new(move |cx: &mut App| {
             let engine_view = engine.clone();
             let bridge_view = bridge.clone();
@@ -344,7 +367,18 @@ fn run() -> anyhow::Result<()> {
                 options.is_movable = false;
             }
             trace_panel("create");
+            #[cfg(target_os = "linux")]
+            let token = launch_token.borrow_mut().take();
             cx.open_window(options, move |window, cx| {
+                #[cfg(target_os = "linux")]
+                {
+                    window.set_app_id("mijialan-rust");
+                    if let Some(token) = token {
+                        window.on_next_frame(move |window, _| {
+                            window.activate_window_with_token(&token)
+                        });
+                    }
+                }
                 #[cfg(target_os = "macos")]
                 macos::position(
                     window,
@@ -449,6 +483,7 @@ fn run() -> anyhow::Result<()> {
         let show: Rc<dyn Fn(&mut App)> = Rc::new(reopen);
         if let Some(receiver) = receiver {
             let show = show.clone();
+            let current = current.clone();
             cx.spawn(async move |cx| {
                 while let Ok(command) = receiver.recv().await {
                     let _ = cx.update(|cx| match command {
@@ -497,8 +532,72 @@ fn run() -> anyhow::Result<()> {
             })
             .detach();
         }
+        #[cfg(target_os = "linux")]
+        {
+            let show = show.clone();
+            let current = current.clone();
+            cx.spawn(async move |cx| {
+                while let Ok(token) = activation_events.recv().await {
+                    if cx
+                        .update(|cx| {
+                            trace_panel("linux_activate");
+                            let had_window = !cx.windows().is_empty();
+                            show(cx);
+                            if !token.is_empty()
+                                && let Some(handle) = current.borrow().as_ref()
+                            {
+                                let _ = handle.update(cx, |_, window, _| {
+                                    if had_window {
+                                        window.activate_window_with_token(&token);
+                                    } else {
+                                        window.on_next_frame(move |window, _| {
+                                            window.activate_window_with_token(&token)
+                                        });
+                                    }
+                                });
+                            }
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
+        #[cfg(target_os = "linux")]
+        if has_tray && let Some(bus) = tray_bus {
+            let tray_host = tray_host.clone();
+            let show = show.clone();
+            cx.spawn(async move |cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(2))
+                        .await;
+                    let bus = bus.clone();
+                    let available = cx
+                        .background_executor()
+                        .spawn(async move { linux::has_tray_host(&bus) })
+                        .await;
+                    if cx
+                        .update(|cx| {
+                            let previously_available = tray_host.replace(available);
+                            if previously_available && !available && cx.windows().is_empty() {
+                                show(cx);
+                            }
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
         cx.set_global(ReopenState(show));
         cx.on_window_closed(move |cx| {
+            #[cfg(target_os = "linux")]
+            let has_tray = tray_host.get();
             if !has_tray && cx.windows().is_empty() {
                 cx.quit();
             }

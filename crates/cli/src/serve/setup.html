@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MijiaLAN 家庭桥设置</title>
+  <link rel="stylesheet" href="/setup.css">
+  <script src="/setup.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="brand">MijiaLAN</p>
+      <h1>群晖家庭桥</h1>
+      <p>把米家局域网设备加入 Apple「家庭」。配对后由这台 NAS 常驻运行。</p>
+    </header>
+    <form id="unlock" hidden>
+      <label for="code">一次性设置码</label>
+      <p>从 DSM Container Manager 的容器日志复制设置码。向导开放 20 分钟。</p>
+      <input id="code" type="password" autocomplete="one-time-code" required>
+      <button>打开向导</button>
+    </form>
+    <div id="wizard" hidden>
+      <form id="import">
+        <h2>1. 导入米家设备</h2>
+        <label for="region">米家账号区域</label>
+        <select id="region">
+          <option value="cn">中国大陆</option>
+          <option value="de">欧洲</option>
+          <option value="us">美国</option>
+          <option value="sg">新加坡</option>
+          <option value="ru">俄罗斯</option>
+          <option value="i2">印度</option>
+        </select>
+        <button id="import-button">获取米家登录码</button>
+        <p id="import-status" role="status"></p>
+        <img id="login-qr" alt="米家登录二维码" hidden>
+      </form>
+      <form id="bridge">
+        <h2>2. 选择家庭配件</h2>
+        <p id="devices-hint">设备导入后会显示在这里。</p>
+        <div id="devices"></div>
+        <button id="bridge-button" disabled>启用家庭桥</button>
+      </form>
+      <section>
+        <h2>3. 在 Apple「家庭」配对</h2>
+        <p id="pair-status" role="status">启用家庭桥后会显示配对码。</p>
+        <img id="pair-qr" alt="Apple 家庭配对二维码" hidden>
+        <p id="pin" class="pin"></p>
+        <button id="finish" hidden>完成并关闭向导</button>
+      </section>
+    </div>
+    <p id="notice" role="status">正在连接设置向导…</p>
+  </main>
+</body>
+</html>

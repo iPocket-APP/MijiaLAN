@@ -33,6 +33,7 @@ pub fn create() -> anyhow::Result<Tray> {
     let diagnostics = MenuItem::new(t("导出诊断信息…"), true, None);
     menu.append(&open)?;
     menu.append(&settings)?;
+    #[cfg(not(target_os = "linux"))]
     menu.append(&updates)?;
     menu.append(&diagnostics)?;
     menu.append(&quit)?;
@@ -77,9 +78,9 @@ pub fn create() -> anyhow::Result<Tray> {
             let _ = clicks.try_send(Command::Hide);
         }
     }));
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     let mut pixels = vec![0u8; 32 * 32 * 4];
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     for y in 0..32 {
         for x in 0..32 {
             let dx = x as f64 - 15.5;
@@ -92,8 +93,14 @@ pub fn create() -> anyhow::Result<Tray> {
             }
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     let icon = tray_icon::Icon::from_rgba(pixels, 32, 32)?;
+    #[cfg(target_os = "linux")]
+    let icon = tray_icon::Icon::from_rgba(
+        include_bytes!("../resources/windows/app-tray.rgba").to_vec(),
+        32,
+        32,
+    )?;
     #[cfg(target_os = "windows")]
     let icon = tray_icon::Icon::from_resource(1, Some((32, 32))).or_else(|_| {
         tray_icon::Icon::from_rgba(

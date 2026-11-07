@@ -5,7 +5,7 @@ use crate::{
 use anyhow::{Result, anyhow, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use ed25519_dalek::SigningKey;
-use mdns_sd::{ServiceDaemon, ServiceInfo};
+use mdns_sd::{IfKind, ServiceDaemon, ServiceInfo};
 use mijialan_core::Engine;
 use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,7 @@ use sha2::{Digest, Sha512};
 use std::{
     collections::BTreeMap,
     io::{Read, Write},
-    net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
@@ -173,17 +173,28 @@ impl HomeKit {
         }
         result
     }
+    fn load_identity(&self) -> Result<Option<Identity>> {
+        self.engine
+            .store
+            .vault
+            .get("homekit:identity")?
+            .map(|text| {
+                serde_json::from_str(&text).map_err(|_| anyhow!("桥接身份损坏，未覆盖配对数据"))
+            })
+            .transpose()
+    }
+    #[cfg(target_os = "linux")]
+    pub fn saved_pairing(&self) -> Result<Option<bool>> {
+        Ok(self
+            .load_identity()?
+            .map(|identity| !identity.pairings.is_empty()))
+    }
     pub fn start_at(&self, address: SocketAddr, announce: bool) -> Result<()> {
         let mut running = self.running.lock().unwrap();
         if running.is_some() {
             return Ok(());
         }
-        let identity = match self.engine.store.vault.get("homekit:identity")? {
-            Some(text) => {
-                serde_json::from_str(&text).map_err(|_| anyhow!("桥接身份损坏，未覆盖配对数据"))?
-            }
-            None => Identity::create(),
-        };
+        let identity = self.load_identity()?.unwrap_or_else(Identity::create);
         let layout = match self.engine.store.vault.get("homekit:layout")? {
             Some(text) => serde_json::from_str(&text)?,
             None => Layout::default(),
@@ -232,8 +243,13 @@ impl HomeKit {
         } else {
             None
         };
+        let advertised_ip = (!address.ip().is_unspecified()).then_some(address.ip());
         if let Some(mdns) = &mdns {
-            advertise(mdns, &shared)?;
+            if let Some(ip) = advertised_ip {
+                mdns.disable_interface(IfKind::All)?;
+                mdns.enable_interface(ip)?;
+            }
+            advertise(mdns, &shared, advertised_ip)?;
         }
         let worker = shared.clone();
         let thread = std::thread::Builder::new()
@@ -297,7 +313,7 @@ impl HomeKit {
                     if worker.dirty.swap(false, Ordering::Relaxed)
                         && let Some(mdns) = &mdns
                     {
-                        let _ = advertise(mdns, &worker);
+                        let _ = advertise(mdns, &worker, advertised_ip);
                     }
                     std::thread::sleep(Duration::from_millis(40));
                 }
@@ -407,7 +423,7 @@ impl Drop for HomeKit {
     }
 }
 
-fn advertise(mdns: &ServiceDaemon, shared: &Shared) -> Result<()> {
+fn advertise(mdns: &ServiceDaemon, shared: &Shared, address: Option<IpAddr>) -> Result<()> {
     let identity = shared.identity.lock().unwrap();
     let version = shared.layout.lock().unwrap().version;
     let hash = Sha512::digest(format!("{}{}", identity.setup_id, identity.device_id).as_bytes());
@@ -436,11 +452,15 @@ fn advertise(mdns: &ServiceDaemon, shared: &Shared) -> Result<()> {
         "_hap._tcp.local.",
         &name,
         &hostname,
-        "",
+        address.map(|ip| ip.to_string()).as_deref().unwrap_or(""),
         identity.port,
         properties.as_slice(),
-    )?
-    .enable_addr_auto();
+    )?;
+    let info = if address.is_none() {
+        info.enable_addr_auto()
+    } else {
+        info
+    };
     mdns.register(info)?;
     Ok(())
 }

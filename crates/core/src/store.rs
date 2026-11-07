@@ -67,6 +67,8 @@ impl Default for Config {
 pub struct Vault {
     path: Option<PathBuf>,
     values: Mutex<Option<BTreeMap<String, String>>>,
+    #[cfg(target_os = "linux")]
+    service_key: Option<Zeroizing<[u8; 32]>>,
 }
 
 impl Vault {
@@ -74,19 +76,27 @@ impl Vault {
         Self {
             path: None,
             values: Mutex::new(Some(BTreeMap::new())),
+            #[cfg(target_os = "linux")]
+            service_key: None,
         }
     }
     fn system(root: &Path) -> Self {
         Self {
             path: Some(root.join("credentials.enc")),
             values: Mutex::new(None),
+            #[cfg(target_os = "linux")]
+            service_key: None,
         }
     }
     fn entry() -> Result<keyring::Entry> {
         keyring::Entry::new(SERVICE, "master-key-v1")
             .map_err(|e| Error::Storage(format!("无法访问系统凭据存储：{e}")))
     }
-    fn master_key(create: bool) -> Result<Zeroizing<[u8; 32]>> {
+    fn master_key(&self, create: bool) -> Result<Zeroizing<[u8; 32]>> {
+        #[cfg(target_os = "linux")]
+        if let Some(key) = &self.service_key {
+            return Ok(key.clone());
+        }
         let entry = Self::entry()?;
         match entry.get_password() {
             Ok(text) => {
@@ -122,7 +132,7 @@ impl Vault {
                 if data.len() < 32 || &data[..4] != b"MLR1" {
                     return Err(Error::Storage("凭据文件损坏，未覆盖原数据".into()));
                 }
-                let key = Self::master_key(false)?;
+                let key = self.master_key(false)?;
                 let plain = Zeroizing::new(
                     ChaCha20Poly1305::new((&*key).into())
                         .decrypt((&data[4..16]).into(), &data[16..])
@@ -142,6 +152,15 @@ impl Vault {
         self.load(&mut values)?;
         Ok(values.as_ref().unwrap().get(key).cloned())
     }
+    #[cfg(target_os = "linux")]
+    pub(crate) fn prepare_credentials(&self) -> Result<()> {
+        if let Some(path) = &self.path {
+            let mut values = self.values.lock().unwrap();
+            self.load(&mut values)?;
+            self.master_key(!path.try_exists()?)?;
+        }
+        Ok(())
+    }
     pub fn set(&self, key: &str, value: Option<String>) -> Result<()> {
         let mut values = self.values.lock().unwrap();
         self.load(&mut values)?;
@@ -152,7 +171,7 @@ impl Vault {
             next.remove(key);
         }
         if let Some(path) = &self.path {
-            let key = Self::master_key(true)?;
+            let key = self.master_key(true)?;
             let encoded = Zeroizing::new(
                 serde_json::to_vec(&next).map_err(|_| Error::Storage("无法编码凭据".into()))?,
             );
@@ -176,13 +195,17 @@ pub struct Store {
     root: Option<PathBuf>,
     config: Mutex<Config>,
     memory_specs: Mutex<BTreeMap<String, String>>,
+    #[cfg(target_os = "linux")]
+    _service_lock: Option<fs::File>,
 }
 
 impl Store {
     pub fn open() -> Result<Self> {
         let dirs = ProjectDirs::from("xyz", "iPocket", "MijiaLAN Rust")
             .ok_or_else(|| Error::Storage("无法定位应用数据目录".into()))?;
-        let root = dirs.config_dir().to_path_buf();
+        Self::at(dirs.config_dir().to_path_buf())
+    }
+    fn at(root: PathBuf) -> Result<Self> {
         fs::create_dir_all(&root)?;
         let path = root.join("devices.json");
         let config = match fs::read(&path) {
@@ -196,7 +219,38 @@ impl Store {
             root: Some(root),
             config: Mutex::new(config),
             memory_specs: Mutex::new(BTreeMap::new()),
+            #[cfg(target_os = "linux")]
+            _service_lock: None,
         })
+    }
+    /// Open an explicitly provisioned Linux service store. Desktop callers keep using the OS vault.
+    #[cfg(target_os = "linux")]
+    pub fn open_service(root: PathBuf, key_path: &Path) -> Result<Self> {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        fs::create_dir_all(&root)?;
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .mode(0o600)
+            .open(root.join("service.lock"))?;
+        lock.try_lock().map_err(|error| {
+            Error::Storage(format!(
+                "无法独占桥接数据目录，请确认没有另一个服务正在使用它：{error}"
+            ))
+        })?;
+        let mut store = Self::at(root.clone())?;
+        let config = store.config();
+        let has_vault = root.join("credentials.enc").try_exists()?;
+        if !has_vault && (!config.devices.is_empty() || config.bridge_enabled) {
+            return Err(Error::Storage("桥接凭据文件缺失，请恢复数据卷备份".into()));
+        }
+        store.vault.service_key = Some(service_key(key_path, !has_vault)?);
+        store.vault.prepare_credentials()?;
+        store._service_lock = Some(lock);
+        Ok(store)
     }
     pub fn memory() -> Self {
         Self {
@@ -204,6 +258,8 @@ impl Store {
             root: None,
             config: Mutex::new(Config::default()),
             memory_specs: Mutex::new(BTreeMap::new()),
+            #[cfg(target_os = "linux")]
+            _service_lock: None,
         }
     }
     pub fn config(&self) -> Config {
@@ -277,6 +333,41 @@ impl Store {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn service_key(path: &Path, create: bool) -> Result<Zeroizing<[u8; 32]>> {
+    use std::{io::Read, os::unix::fs::PermissionsExt};
+
+    let invalid = || Error::Storage("桥接主密钥缺失或损坏，请恢复密钥卷备份".into());
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && create => {
+            let parent = path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .ok_or_else(invalid)?;
+            let mut key = Zeroizing::new([0; 32]);
+            rand::rngs::OsRng.fill_bytes(&mut *key);
+            let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+            temporary.write_all(&*key)?;
+            temporary.as_file().sync_all()?;
+            temporary
+                .persist_noclobber(path)
+                .map_err(|error| error.error)?;
+            fs::File::open(parent)?.sync_all()?;
+            return Ok(key);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err(invalid()),
+        Err(error) => return Err(error.into()),
+    };
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() != 32 || metadata.permissions().mode() & 0o077 != 0 {
+        return Err(invalid());
+    }
+    let mut key = Zeroizing::new([0; 32]);
+    (&file).read_exact(&mut *key)?;
+    Ok(key)
+}
+
 fn safe_model(model: &str) -> Option<String> {
     (!model.is_empty()
         && model.len() < 180
@@ -295,4 +386,42 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
         .persist(path)
         .map_err(|e| Error::Storage(format!("无法保存文件：{}", e.error)))?;
     Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_vault_reopens_and_fails_closed_on_missing_or_wrong_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("data");
+        let key_dir = temp.path().join("keys");
+        fs::create_dir(&key_dir).unwrap();
+        let key_path = key_dir.join("master.key");
+
+        let store = Store::open_service(root.clone(), &key_path).unwrap();
+        store.vault.set("fixture", Some("example".into())).unwrap();
+        assert!(Store::open_service(root.clone(), &key_path).is_err());
+        drop(store);
+
+        let ciphertext = fs::read(root.join("credentials.enc")).unwrap();
+        let key = fs::read(&key_path).unwrap();
+        let original = key_path.with_extension("bak");
+        fs::rename(&key_path, &original).unwrap();
+        assert!(Store::open_service(root.clone(), &key_path).is_err());
+        assert!(!key_path.exists());
+
+        fs::rename(original, &key_path).unwrap();
+        fs::write(&key_path, [0; 32]).unwrap();
+        assert!(Store::open_service(root.clone(), &key_path).is_err());
+        assert_eq!(fs::read(root.join("credentials.enc")).unwrap(), ciphertext);
+
+        fs::write(&key_path, key).unwrap();
+        let restored = Store::open_service(root, &key_path).unwrap();
+        assert_eq!(
+            restored.vault.get("fixture").unwrap().as_deref(),
+            Some("example")
+        );
+    }
 }

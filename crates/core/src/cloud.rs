@@ -308,6 +308,15 @@ impl Session {
         Ok(value["result"].clone())
     }
     pub fn import(&self, engine: &Engine, cancelled: &AtomicBool) -> Result<ImportReport> {
+        self.import_with_default(engine, cancelled, true)
+    }
+
+    pub(crate) fn import_with_default(
+        &self,
+        engine: &Engine,
+        cancelled: &AtomicBool,
+        bridged: bool,
+    ) -> Result<ImportReport> {
         let mut report = ImportReport::default();
         let mut order = vec![self.region.as_str()];
         order.extend(regions().iter().copied().filter(|r| *r != self.region));
@@ -360,7 +369,7 @@ impl Session {
                         host,
                         room,
                         port: crate::packet::PORT,
-                        bridged: true,
+                        bridged,
                     },
                     &token,
                 )?;

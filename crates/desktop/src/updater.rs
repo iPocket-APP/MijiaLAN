@@ -9,9 +9,12 @@ mod platform;
 use gpui::{App, Global};
 use mijialan_core::localization::text as t;
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub const ORIGIN: &str = env!("MIJIALAN_UPDATE_ORIGIN");
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub const PUBLIC_KEY: &str = env!("MIJIALAN_UPDATE_PUBLIC_KEY");
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub fn feed_url(platform: &str) -> String {
     format!("{ORIGIN}/rs/{platform}/appcast.xml")
 }
@@ -60,7 +63,7 @@ impl Updater {
             }
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        Self::unavailable(t("此平台暂不支持应用内更新"))
+        Self::unavailable(t("下载并安装新版 Linux 安装包以更新 MijiaLAN。"))
     }
     fn unavailable(reason: String) -> Self {
         Self {

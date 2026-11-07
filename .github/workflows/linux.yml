@@ -1,0 +1,115 @@
+name: Linux Build and Release
+run-name: Linux x86_64 · b${{ inputs.build_number || '1' }} · ${{ github.sha }}
+
+on:
+  push:
+    branches: [MijiaLAN-rs]
+  pull_request:
+    branches: [MijiaLAN-rs]
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: Linux build number
+        type: string
+        default: '1'
+      verified_run_id:
+        description: Candidate run ID after desktop and DS920+ acceptance. Leave empty to build a candidate.
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-${{ github.event.pull_request.number || github.ref }}-${{ inputs.verified_run_id || 'candidate' }}
+  cancel-in-progress: ${{ !inputs.verified_run_id }}
+
+env:
+  MIJIALAN_LINUX_BUILD: ${{ inputs.build_number || '1' }}
+
+jobs:
+  candidate:
+    if: ${{ !inputs.verified_run_id }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Restore Linux Rust cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ runner.temp }}/mijialan-cargo/registry
+            ${{ runner.temp }}/mijialan-cargo/git
+            ${{ runner.temp }}/mijialan-target
+          key: linux-amd64-bookworm-v1-${{ hashFiles('Cargo.lock', 'scripts/docker/linux-builder.Dockerfile') }}-${{ github.sha }}
+          restore-keys: linux-amd64-bookworm-v1-${{ hashFiles('Cargo.lock', 'scripts/docker/linux-builder.Dockerfile') }}-
+      - name: Build Debian 12 environment
+        run: docker build --platform linux/amd64 -t mijialan-linux-builder -f scripts/docker/linux-builder.Dockerfile scripts/docker
+      - name: Test and package Linux Release
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP"/{mijialan-cargo,mijialan-target,linux-output,bridge-context}
+          docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" \
+            -v "$GITHUB_WORKSPACE:/src:ro" -w /src \
+            -v "$RUNNER_TEMP/mijialan-cargo:/cargo" -e CARGO_HOME=/cargo \
+            -v "$RUNNER_TEMP/mijialan-target:/target" -e CARGO_TARGET_DIR=/target \
+            -v "$RUNNER_TEMP/linux-output:/output" -e MIJIALAN_ARTIFACT_DIR=/output \
+            -v "$RUNNER_TEMP/bridge-context:/bridge" -e MIJIALAN_BRIDGE_CONTEXT=/bridge \
+            -e MIJIALAN_LINUX_BUILD -e HOME=/tmp -e CARGO_BUILD_JOBS=3 -e CARGO_INCREMENTAL=0 \
+            -e RUSTFLAGS='-C link-arg=-fuse-ld=lld' \
+            mijialan-linux-builder bash -euo pipefail -c '
+              cargo fmt --all --check
+              cargo clippy --locked --workspace --release --all-targets -- -D warnings
+              cargo test --locked --workspace --release 2>&1 | tee /output/tests.log
+              desktop-file-validate packaging/linux/mijialan-rust.desktop
+              bash scripts/build-linux.sh release
+            '
+      - name: Build NAS image from the tested CLI
+        run: |
+          docker build --platform linux/amd64 --provenance=false --sbom=false \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            -f packaging/linux/bridge.Dockerfile -t mijialan-bridge:candidate "$RUNNER_TEMP/bridge-context"
+      - name: Verify installed packages and container startup
+        run: bash scripts/ci/test-linux-packages.sh "$RUNNER_TEMP/linux-output"
+      - name: Record the verified candidate
+        shell: bash
+        run: |
+          docker save mijialan-bridge:candidate | gzip -n > "$RUNNER_TEMP/linux-output/mijialan-bridge-amd64.tar.gz"
+          cp packaging/linux/compose.yaml "$RUNNER_TEMP/linux-output/compose.yaml"
+          python3 scripts/ci/linux_release.py record "$RUNNER_TEMP/linux-output"
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: MijiaLAN-Linux-x86_64-b${{ env.MIJIALAN_LINUX_BUILD }}
+          path: ${{ runner.temp }}/linux-output
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  release:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/MijiaLAN-rs' && inputs.verified_run_id }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    concurrency: mijialan-linux-publication
+    permissions:
+      actions: read
+      contents: write
+      packages: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CANDIDATE_RUN: ${{ inputs.verified_run_id }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Require a verified candidate for this source
+        run: python3 scripts/ci/linux_release.py resolve
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: MijiaLAN-Linux-x86_64-b${{ env.MIJIALAN_LINUX_BUILD }}
+          path: ${{ runner.temp }}/linux-candidate
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.verified_run_id }}
+      - name: Publish the tested image and Linux prerelease
+        run: python3 scripts/ci/linux_release.py publish "$RUNNER_TEMP/linux-candidate"

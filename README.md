@@ -2,7 +2,7 @@
 
 米家局域网客户端与 HomeKit 桥。此为 `MijiaLAN-rs` 分支，使用 Rust、GPUI 和 GPUI Component；仓库与产品名称仍为 MijiaLAN。Swift 版本保留在 `main` 分支，Rust 工程可直接从当前分支根目录构建。
 
-macOS 使用顶部菜单栏，Windows 使用右下角系统托盘，两者共享紧凑设备面板：左键切换面板，点击面板外部或按 Escape 收起，右键打开设置或退出。面板收起后仍保持设备轮询与 HomeKit 服务。Windows 面板按托盘所在显示器的工作区和 DPI 定位，并使用独立的房屋应用图标。Linux 使用系统托盘和桌面窗口；托盘采用 StatusNotifierItem，无需 GTK。
+macOS 使用顶部菜单栏，Windows 使用右下角系统托盘，两者共享紧凑设备面板：左键切换面板，点击面板外部或按 Escape 收起，右键打开设置或退出。面板收起后仍保持设备轮询与 HomeKit 服务。Windows 面板按托盘所在显示器的工作区和 DPI 定位，并使用独立的房屋应用图标。Linux 使用普通窗口和 StatusNotifierItem 托盘，并提供群晖浏览器配置的常驻家庭桥。[Linux 安装说明](docs/linux.md)
 
 Mac 界面沿用原 Swift 客户端的布局：360 pt 宽菜单栏面板，在线设备双列磁贴、离线设备三列网格，台灯亮度条、空调温控和分组设置。窗口按页面内容调整高度，长列表可滚动；外观可选择自动、浅色或深色。语言可在原生应用菜单「语言 / Language」中切换。控件由 GPUI 绘制，字体细节和转场与 SwiftUI 仍有差异。
 
@@ -41,7 +41,7 @@ bash scripts/package-macos-release.sh
 
 安装包内 App 显示名为 MijiaLAN，保留 `xyz.ipocket.MijiaLAN.Rust` 标识及已有 Rust 数据目录。打包不会发布 GitHub Release；复现步骤和验收边界见 [macOS 打包说明](docs/packaging.md#macos-release)。
 
-Windows 构建需要 Visual Studio C++ Build Tools、Windows SDK、CMake，以及用于收集分发许可的 Python 3.11+；CI 自动配置 Python 3.12。Linux 需要 C/C++ 编译工具、Clang、字体、X11 / Wayland 和 Vulkan 开发包，依赖清单见 [scripts/docker/Dockerfile](scripts/docker/Dockerfile)。GNOME 显示托盘图标通常还需要 StatusNotifierItem / AppIndicator 扩展。
+Windows 构建需要 Visual Studio C++ Build Tools、Windows SDK、CMake，以及用于收集分发许可的 Python 3.11+；CI 自动配置 Python 3.12。Linux Release 使用 Debian 12 构建环境，依赖见 [Linux Builder](scripts/docker/linux-builder.Dockerfile)。
 
 Windows / Linux 打包入口：
 
@@ -55,7 +55,7 @@ Windows / Linux 打包入口：
 bash scripts/build-linux.sh release
 ```
 
-Windows / Linux 产物位于 `artifacts/`，包含 SHA-256 清单。Linux x64 构建容器生成 Windows GNU Debug MSI / ZIP 和 Linux Debug DEB / tar.gz；这些是未签名的测试候选包。群晖 Windows 11 已验证紧凑托盘、扫码导入、凭据重读及台灯 GUI 调光和独立 LAN 读回；Windows 的 iPhone 家庭配对尚未验收。Linux 已完成干净 Debian 容器安装、CLI 运行及 33 项核心 / HomeKit 测试，Linux 桌面尚未验收。原生 Release 构建、容器复现与验证边界见 [打包说明](docs/packaging.md)。
+本地 Windows / Linux 产物位于 `artifacts/`，包含 SHA-256 清单。群晖 Windows 11 已验证紧凑托盘、扫码导入、凭据重读及台灯 GUI 调光和独立 LAN 读回。Windows 的 iPhone 家庭配对尚未验收。[打包说明](docs/packaging.md) · [Linux 桌面与群晖部署](docs/linux.md)
 
 GPUI 0.2.2 没有 tvOS 后端，不能将当前桌面项目直接打成 Apple TV 安装包。电视端需要单独的 tvOS 界面、遥控器焦点交互和平台适配；共享 Rust 协议核心可作为移植基础。
 
@@ -92,7 +92,7 @@ GPUI 0.2.2 没有 tvOS 后端，不能将当前桌面项目直接打成 Apple TV
 - 小米云登录会话只存在内存中；日常控制使用 LAN，不提供自建云、遥测或广告服务。
 - `--demo` 完全使用内存凭据。示例 Token 均为测试数据。
 
-Linux 真实使用需要可用且已解锁的 Secret Service。无桌面的服务环境也需要为运行用户配置相应凭据服务。
+Linux 桌面使用已解锁的 Secret Service。Linux `mijia-rust serve` 从独立的持久密钥卷读取主密钥，用加密数据卷保存凭据及配对状态。[群晖持久卷](docs/linux.md#群晖-ds920)
 
 首次联网可能触发 macOS「本地网络」、LuLu 或 Windows 防火墙提示。设备发现需要 UDP 广播；HomeKit 需要 TCP 与 mDNS。请按实际用途允许此应用，不需要关闭系统防火墙。详情见 [PRIVACY.md](PRIVACY.md)。
 

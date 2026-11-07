@@ -378,6 +378,98 @@ fn pair_controller(
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_service_reopens_a_paired_light_and_accepts_writes_with_the_old_controller() {
+    use mijialan_core::{Device, Specification, Store, Token};
+
+    let model = "yeelink.light.lamp4";
+    let lamp = support::MiotDevice::with_spec(model, Specification::bundled(model).unwrap());
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("data");
+    let keys = temp.path().join("keys");
+    std::fs::create_dir(&keys).unwrap();
+    let key = keys.join("master.key");
+    let open = || {
+        Arc::new(Engine::new(
+            Arc::new(Store::open_service(root.clone(), &key).unwrap()),
+            false,
+        ))
+    };
+    let listen = (Ipv4Addr::LOCALHOST, 0).into();
+    let controller = ControllerKeypair::from_seed("linux-controller".into(), [73; 32]);
+    let (accessory, before, brightness) = {
+        let engine = open();
+        engine
+            .import(
+                Device {
+                    did: "77".into(),
+                    name: "Fixture Lamp".into(),
+                    model: model.into(),
+                    host: Ipv4Addr::LOCALHOST,
+                    room: String::new(),
+                    port: lamp.port,
+                    bridged: true,
+                },
+                &Token::parse(support::TOKEN).unwrap(),
+            )
+            .unwrap();
+        engine.refresh("77").unwrap();
+        let bridge = HomeKit::new(engine);
+        bridge.start_at(listen, false).unwrap();
+        let before = bridge.info();
+        let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, before.port)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let accessory = pair_controller(&mut stream, &before.code, &controller);
+        let mut session = verify(&mut stream, &controller, &accessory);
+        let (_, body) = encrypted_request(&mut stream, &mut session, "GET", "/accessories", &[]);
+        let db: Value = serde_json::from_slice(&body).unwrap();
+        let light = &db["accessories"][1];
+        let brightness = light["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|service| service["characteristics"].as_array().unwrap())
+            .find(|characteristic| characteristic["type"] == "8")
+            .unwrap();
+        drop(stream);
+        bridge.stop();
+        (
+            accessory,
+            before,
+            (light["aid"].clone(), brightness["iid"].clone()),
+        )
+    };
+
+    let engine = open();
+    engine.refresh("77").unwrap();
+    let bridge = HomeKit::new(engine.clone());
+    assert_eq!(bridge.saved_pairing().unwrap(), Some(true));
+    bridge.start_at(listen, false).unwrap();
+    let after = bridge.info();
+    assert_eq!((after.port, after.uri), (before.port, before.uri));
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, after.port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let mut session = verify(&mut stream, &controller, &accessory);
+    let payload =
+        json!({"characteristics": [{"aid": brightness.0, "iid": brightness.1, "value": 42}]})
+            .to_string();
+    let (status, _) = encrypted_request(
+        &mut stream,
+        &mut session,
+        "PUT",
+        "/characteristics",
+        payload.as_bytes(),
+    );
+    assert_eq!(status, 204);
+    assert_eq!(engine.refresh("77").unwrap().values["2.2"], 42);
+    bridge.stop();
+}
+
 #[test]
 fn bad_udp_readings_do_not_corrupt_the_encrypted_hap_database_or_events() {
     use mijialan_core::{Device, Store, Token};

@@ -1197,9 +1197,11 @@ impl Dashboard {
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child(t(
-                        "桥运行时需要电脑保持开机和网络连接。关闭窗口后继续在托盘后台运行。",
-                    )),
+                    .child(t(if cfg!(target_os = "linux") {
+                        "最小化窗口可保持家庭桥运行。托盘可见时也可以关闭窗口收起。"
+                    } else {
+                        "桥运行时需要电脑保持开机和网络连接。关闭窗口后继续在托盘后台运行。"
+                    })),
             )
             .into_any_element()
     }
@@ -1247,12 +1249,21 @@ impl Dashboard {
             .child(div().text_sm().child(t(
                 "凭据保存在本项目独立的系统凭据存储中。扫码登录会话不持久化。",
             )))
-            .child(
-                Button::new("desktop-check-updates")
-                    .label(cx.global::<crate::updater::Updater>().check_label())
-                    .disabled(!cx.global::<crate::updater::Updater>().can_check())
-                    .on_click(|_, _, cx| crate::updater::check(cx)),
-            )
+            .when(!cfg!(target_os = "linux"), |view| {
+                view.child(
+                    Button::new("desktop-check-updates")
+                        .label(cx.global::<crate::updater::Updater>().check_label())
+                        .disabled(!cx.global::<crate::updater::Updater>().can_check())
+                        .on_click(|_, _, cx| crate::updater::check(cx)),
+                )
+            })
+            .when(cfg!(target_os = "linux"), |view| {
+                view.child(
+                    div()
+                        .text_sm()
+                        .child(cx.global::<crate::updater::Updater>().reason().to_owned()),
+                )
+            })
             .when(cx.global::<crate::updater::Updater>().enabled(), |view| {
                 view.child(
                     Switch::new("desktop-automatic-checks")
