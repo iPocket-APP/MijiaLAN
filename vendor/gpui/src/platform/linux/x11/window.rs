@@ -402,9 +402,12 @@ impl X11WindowState {
 
         let visual_set = find_visuals(xcb, x_screen_index);
 
-        let visual = match visual_set.transparent {
-            Some(visual) => visual,
-            None => {
+        let visual = match (params.window_background, visual_set.transparent) {
+            // Software Vulkan can present to the root visual on X11 even when
+            // presentation to a 32-bit alpha visual yields a blank window.
+            (WindowBackgroundAppearance::Opaque, _) => visual_set.inherit,
+            (_, Some(visual)) => visual,
+            (_, None) => {
                 log::warn!("Unable to find a transparent visual",);
                 visual_set.inherit
             }

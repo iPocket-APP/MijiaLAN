@@ -1077,9 +1077,10 @@ impl PlatformWindow for WaylandWindow {
 
     fn request_decorations(&self, decorations: WindowDecorations) {
         let mut state = self.borrow_mut();
-        state.decorations = decorations;
+        // Without a decoration protocol, the compositor leaves the frame to the client.
         if let Some(decoration) = state.decoration.as_ref() {
             decoration.set_mode(decorations.to_xdg());
+            state.decorations = decorations;
             update_window(state);
         }
     }

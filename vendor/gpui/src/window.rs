@@ -965,6 +965,8 @@ impl Window {
                 focus,
                 show,
                 display_id,
+                #[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "x11"))]
+                window_background,
                 window_min_size,
                 #[cfg(target_os = "macos")]
                 tabbing_identifier,

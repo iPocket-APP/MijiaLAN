@@ -2,9 +2,11 @@
 set -euo pipefail
 dist="$(cd "$1" && pwd)"
 image="${2:-mijialan-bridge:candidate}"
+x11_check="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-linux-x11.py"
 
 for os in debian:12-slim ubuntu:24.04; do
-  docker run --rm --platform linux/amd64 -v "$dist:/packages:ro" "$os" bash -eu -c '
+  docker run --rm --platform linux/amd64 -v "$dist:/packages:ro" \
+    -v "$x11_check:/test-linux-x11.py:ro" "$os" bash -eu -c '
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
     apt-get install -y -qq --no-install-recommends /packages/*.deb
@@ -19,7 +21,13 @@ for os in debian:12-slim ubuntu:24.04; do
     done
     test -s /usr/share/applications/mijialan-rust.desktop
     test -s /usr/share/icons/hicolor/scalable/apps/mijialan-rust.svg
-  '
+    if [[ "$1" == debian:12-slim ]]; then
+      apt-get install -y -qq --no-install-recommends \
+        dbus fonts-dejavu-core mesa-vulkan-drivers openbox python3 \
+        tigervnc-standalone-server x11-apps x11-utils
+      dbus-run-session -- python3 /test-linux-x11.py
+    fi
+  ' smoke "$os"
 done
 
 name="mijialan-bridge-smoke-$$"

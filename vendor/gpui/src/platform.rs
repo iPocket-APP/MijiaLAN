@@ -1184,6 +1184,9 @@ pub(crate) struct WindowParams {
     #[cfg_attr(feature = "wayland", allow(dead_code))]
     pub display_id: Option<DisplayId>,
 
+    #[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "x11"))]
+    pub window_background: WindowBackgroundAppearance,
+
     pub window_min_size: Option<Size<Pixels>>,
     #[cfg(target_os = "macos")]
     pub tabbing_identifier: Option<String>,
