@@ -329,25 +329,24 @@ impl Dashboard {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let weak = cx.entity().downgrade();
-        let included = self
-            .engine
-            .store
-            .config()
-            .devices
-            .iter()
-            .find(|d| d.did == did)
-            .is_some_and(|d| d.bridged);
+        let engine = self.engine.clone();
         tile.context_menu(move |menu, _, _| {
+            let state = engine.state(&did);
+            let supported = state.as_ref().is_some_and(maps_to_home);
+            let included = state.as_ref().is_some_and(|s| s.device.bridged);
             let target = weak.clone();
             let bridge_did = did.clone();
             let retry = weak.clone();
             let retry_did = did.clone();
             menu.item(
-                PopupMenuItem::new(if included {
+                PopupMenuItem::new(if !supported {
+                    homekit_unavailable(state.as_ref())
+                } else if included {
                     l("不放进「家庭」", "Remove from Home")
                 } else {
                     l("放进「家庭」", "Show in Home")
                 })
+                .disabled(!supported)
                 .on_click(move |_, _, cx| {
                     let _ = target.update(cx, |this, cx| {
                         this.compact_set_bridged(&bridge_did, !included, cx)
@@ -384,7 +383,7 @@ impl Dashboard {
         let p = Palette::new(cx);
         let info = self.bridge.info();
         let config = self.engine.store.config();
-        let selected = config.devices.iter().filter(|d| d.bridged).count();
+        let mut selected = 0;
         let mut body = div()
             .flex()
             .flex_col()
@@ -416,6 +415,8 @@ impl Dashboard {
             let did = device.did.clone();
             let bridged = device.bridged;
             let state = self.engine.state(&did);
+            let supported = state.as_ref().is_some_and(maps_to_home);
+            selected += usize::from(bridged && supported);
             devices = devices.child(
                 div()
                     .flex()
@@ -434,19 +435,29 @@ impl Dashboard {
                             .flex_col()
                             .gap(px(4.))
                             .child(label(device_name(device), 13., p.primary).truncate())
-                            .child(label(device.room.clone(), 11., p.secondary)),
+                            .child(label(
+                                if supported {
+                                    device.room.clone()
+                                } else {
+                                    homekit_unavailable(state.as_ref())
+                                },
+                                11.,
+                                p.secondary,
+                            )),
                     )
                     .child(
                         self.compact_toggle(
                             SharedString::from(format!("bridge-device:{did}")),
-                            bridged,
-                            true,
+                            bridged && supported,
+                            supported,
                             false,
                             p,
                         )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.compact_set_bridged(&did, !bridged, cx)
-                        })),
+                        .when(supported, |toggle| {
+                            toggle.on_click(cx.listener(move |this, _, _, cx| {
+                                this.compact_set_bridged(&did, !bridged, cx)
+                            }))
+                        }),
                     ),
             );
         }
@@ -1924,6 +1935,7 @@ impl Dashboard {
             cx,
         ));
         if self.session.borrow().compact.expanded.contains(&management) {
+            let supported = maps_to_home(&state);
             let bridged = self
                 .engine
                 .store
@@ -1941,12 +1953,23 @@ impl Dashboard {
                     .justify_between()
                     .child(label(l("在「家庭」中显示", "Show in Home"), 12., p.primary))
                     .child(
-                        self.compact_toggle("show-device", bridged, true, true, p)
-                            .on_click(cx.listener(move |this, _, _, cx| {
+                        self.compact_toggle(
+                            "show-device",
+                            bridged && supported,
+                            supported,
+                            true,
+                            p,
+                        )
+                        .when(supported, |toggle| {
+                            toggle.on_click(cx.listener(move |this, _, _, cx| {
                                 this.compact_set_bridged(&did, !bridged, cx)
-                            })),
+                            }))
+                        }),
                     ),
             );
+            if !supported {
+                content = content.child(label(homekit_unavailable(Some(&state)), 11., p.secondary));
+            }
             content = content.child(
                 div()
                     .id("remove-device")
@@ -2785,7 +2808,12 @@ impl Dashboard {
     fn compact_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = Palette::new(cx);
         let config = self.engine.store.config();
-        let selected = config.devices.iter().filter(|d| d.bridged).count();
+        let selected = self
+            .engine
+            .states()
+            .iter()
+            .filter(|state| state.device.bridged && maps_to_home(state))
+            .count();
         let awake = config.keep_awake;
         let mut body = div()
             .flex()

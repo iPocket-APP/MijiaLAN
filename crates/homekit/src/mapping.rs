@@ -48,8 +48,13 @@ pub enum Transform {
     Active,
     Working(u8),
     Percent,
+    Brightness {
+        power: String,
+        scaled: bool,
+    },
     Mired,
     Option(Value),
+    MomentaryOption(Value),
     FanSpeed {
         power: String,
     },
@@ -117,7 +122,7 @@ impl Binding {
     pub fn read(&self, engine: &Engine, stale: bool) -> Result<Value, i32> {
         match &self.transform {
             Transform::Fixed(value) => return Ok(value.clone()),
-            Transform::Action(_, _) => return Ok(json!(false)),
+            Transform::Action(_, _) | Transform::MomentaryOption(_) => return Ok(json!(false)),
             _ => {}
         }
         let state = engine.state(&self.did).ok_or(-70402)?;
@@ -126,7 +131,7 @@ impl Binding {
     fn read_state(&self, state: &DeviceState, stale: bool) -> Result<Value, i32> {
         match &self.transform {
             Transform::Fixed(value) => return Ok(value.clone()),
-            Transform::Action(_, _) => return Ok(json!(false)),
+            Transform::Action(_, _) | Transform::MomentaryOption(_) => return Ok(json!(false)),
             _ => {}
         }
         if !stale && !state.online {
@@ -145,14 +150,19 @@ impl Binding {
         if state.errors.contains_key(&self.key) {
             return Err(-70402);
         }
-        if let Some(result) = controls::read(&self.transform, value, state)? {
+        // Firmware can report options absent from the specification. Keep those
+        // readings, while rejecting malformed values before converting a mode.
+        if !property.choices.is_empty() && !valid_option_reading(property, value) {
+            return Err(-70402);
+        }
+        if let Some(result) = controls::read(&self.transform, property, value, state)? {
             return Ok(result);
         }
         Ok(match &self.transform {
             Transform::Cleaning { .. } => json!(mijialan_core::vacuum::is_cleaning(
                 mijialan_core::vacuum::status_description(property, value).ok_or(-70402)?
             )),
-            Transform::Direct => value.clone(),
+            Transform::Direct | Transform::Brightness { scaled: false, .. } => value.clone(),
             Transform::Active => json!(if as_bool(value).map_err(|_| -70402)? {
                 1
             } else {
@@ -176,7 +186,7 @@ impl Binding {
             } else {
                 0
             }),
-            Transform::Percent => {
+            Transform::Percent | Transform::Brightness { scaled: true, .. } => {
                 let [min, max, _] = property.range.ok_or(-70402)?;
                 let raw = value.as_f64().filter(|v| v.is_finite()).ok_or(-70402)?;
                 if !min.is_finite() || !max.is_finite() || max <= min || raw < min || raw > max {
@@ -220,6 +230,7 @@ impl Binding {
                     Ok(())
                 };
             }
+            Transform::MomentaryOption(_) if !as_bool(value)? => return Ok(()),
             _ => {}
         }
         let state = engine.state(&self.did).ok_or(-70402)?;
@@ -232,6 +243,13 @@ impl Binding {
             .iter()
             .find(|p| p.key() == self.key)
             .ok_or(-70402)?;
+        if let Transform::Brightness { power, .. } = &self.transform
+            && value.as_f64() == Some(0.)
+        {
+            return engine
+                .write(&self.did, power, json!(false))
+                .map_err(|_| -70402);
+        }
         if let Transform::Cleaning { start, dock } = &self.transform {
             let on = as_bool(value)?;
             let current = state
@@ -270,7 +288,7 @@ impl Binding {
             return Ok(());
         }
         let output = match &self.transform {
-            Transform::Direct => {
+            Transform::Direct | Transform::Brightness { scaled: false, .. } => {
                 if property.format == "bool" {
                     json!(as_bool(value)?)
                 } else if let Some(number) = value.as_f64() {
@@ -289,20 +307,20 @@ impl Binding {
                 .find(|(n, _)| Some(*n as u64) == value.as_u64())
                 .map(|(_, v)| v.clone())
                 .ok_or(-70410)?,
-            Transform::Option(option) => {
+            Transform::Option(option) | Transform::MomentaryOption(option) => {
                 if as_bool(value)? {
                     option.clone()
                 } else {
                     return Ok(());
                 }
             }
-            Transform::Percent | Transform::Mired => {
+            Transform::Percent | Transform::Brightness { scaled: true, .. } | Transform::Mired => {
                 let number = value.as_f64().filter(|n| n.is_finite()).ok_or(-70410)?;
                 let [min, max, step] = property.range.ok_or(-70410)?;
                 if ![min, max, step].iter().all(|v| v.is_finite()) || min > max || step <= 0. {
                     return Err(-70410);
                 }
-                let raw = if matches!(self.transform, Transform::Percent) {
+                let raw = if !matches!(self.transform, Transform::Mired) {
                     if !(0. ..=100.).contains(&number) {
                         return Err(-70410);
                     }
@@ -338,6 +356,27 @@ fn as_bool(value: &Value) -> Result<bool, i32> {
 }
 fn equivalent(a: &Value, b: &Value) -> bool {
     a == b || a.as_f64().zip(b.as_f64()).is_some_and(|(a, b)| a == b)
+}
+
+fn valid_option_reading(property: &Property, value: &Value) -> bool {
+    match property.format.as_str() {
+        "bool" => as_bool(value).is_ok(),
+        "string" => value.is_string(),
+        _ => value.as_f64().is_some_and(|number| {
+            number.is_finite()
+                && property
+                    .range
+                    .is_none_or(|[min, max, _]| (min..=max).contains(&number))
+        }),
+    }
+}
+
+fn listed_option(property: &Property, value: &Value) -> bool {
+    property.choices.is_empty()
+        || property
+            .choices
+            .iter()
+            .any(|choice| equivalent(&choice.value, value))
 }
 
 pub struct Database {
@@ -466,7 +505,7 @@ impl Database {
 }
 
 struct Builder<'a> {
-    engine: &'a Engine,
+    configured_names: &'a BTreeMap<String, String>,
     layout: &'a mut Layout,
     device: &'a DeviceState,
     aid: u64,
@@ -503,10 +542,7 @@ impl Builder<'_> {
             .iid(&self.device.device.did, &format!("{key}:configured-name"));
         let name_key = format!("{}:{key}", self.device.device.did);
         let configured_name = self
-            .engine
-            .store
-            .config()
-            .homekit_names
+            .configured_names
             .get(&name_key)
             .cloned()
             .unwrap_or(name.into());
@@ -594,6 +630,10 @@ impl Builder<'_> {
         let Some(service) = self.service(&key, "49", title) else {
             return;
         };
+        let transform = match transform {
+            Transform::Option(value) if !property.readable => Transform::MomentaryOption(value),
+            transform => transform,
+        };
         self.characteristic(
             service,
             &format!("{key}:on"),
@@ -603,6 +643,24 @@ impl Builder<'_> {
             transform,
             true,
             None,
+        );
+    }
+
+    fn brightness(&mut self, service: usize, key: &str, property: &Property, power: &Property) {
+        self.characteristic(
+            service,
+            key,
+            "8",
+            "int",
+            Some(property),
+            Transform::Brightness {
+                power: power.key(),
+                scaled: property
+                    .range
+                    .is_some_and(|[min, max, _]| min < max && max != 100.),
+            },
+            true,
+            Some([0., 100., 1.]),
         );
     }
 }
@@ -625,170 +683,24 @@ fn build_states(engine: &Engine, layout: &mut Layout, states: Vec<DeviceState>) 
         names: BTreeMap::new(),
         warnings: Vec::new(),
     };
-    let included: BTreeSet<_> = engine
-        .store
-        .config()
+    let config = engine.store.config();
+    let included: BTreeSet<_> = config
         .devices
         .iter()
         .filter(|d| d.bridged)
-        .map(|d| d.did.clone())
+        .map(|d| d.did.as_str())
         .collect();
     for state in states
-        .into_iter()
-        .filter(|s| included.contains(&s.device.did) && !s.spec.properties.is_empty())
-        .take(149)
+        .iter()
+        .filter(|s| included.contains(s.device.did.as_str()))
     {
-        let aid = layout.aid(&state.device.did);
-        let mut builder = Builder {
-            engine,
-            layout,
-            device: &state,
-            aid,
-            services: vec![information(
-                &state.device.name,
-                &state.device.model,
-                &state.device.did,
-            )],
-            bindings: BTreeMap::new(),
-            names: BTreeMap::new(),
-            consumed: BTreeSet::new(),
-            service_indices: BTreeMap::new(),
-            omitted_services: 0,
-        };
-        let props = &state.spec.properties;
-        let power = controls::power(&state);
-        let native = native(&mut builder, &state);
-        if let Some(power) = power.filter(|_| !native) {
-            let kind = state.spec.kind.as_str();
-            let service_type = match kind {
-                "light" => "43",
-                "fan" => "B7",
-                "air-purifier" => "BB",
-                _ => "47",
-            };
-            let s = builder
-                .service("primary", service_type, &state.device.name)
-                .expect("primary service is added before optional services");
-            builder.primary(s);
-            let active = ["fan", "air-purifier"].contains(&kind);
-            builder.characteristic(
-                s,
-                "primary:power",
-                if active { "B0" } else { "25" },
-                if active { "uint8" } else { "bool" },
-                Some(power),
-                if active {
-                    Transform::Active
-                } else {
-                    Transform::Direct
-                },
-                true,
-                if active { Some([0., 1., 1.]) } else { None },
-            );
-            if kind == "air-purifier" {
-                controls::purifier(&mut builder, s, &state, power);
-            } else if kind == "fan" {
-                controls::fan(&mut builder, s, &state, power);
-            } else if service_type == "47" {
-                builder.characteristic(
-                    s,
-                    "primary:in-use",
-                    "26",
-                    "bool",
-                    Some(power),
-                    Transform::Direct,
-                    false,
-                    None,
-                );
-            }
-            for p in props {
-                if !p.writable {
-                    continue;
-                }
-                if kind == "light" && p.name == "brightness" {
-                    builder.characteristic(
-                        s,
-                        "primary:brightness",
-                        "8",
-                        "int",
-                        Some(p),
-                        Transform::Direct,
-                        true,
-                        Some([0., 100., 1.]),
-                    );
-                }
-                if kind == "light"
-                    && p.name == "color-temperature"
-                    && let Some([min, max, _]) = p.range.filter(|r| r[0] > 0.)
-                {
-                    builder.characteristic(
-                        s,
-                        "primary:ct",
-                        "CE",
-                        "uint32",
-                        Some(p),
-                        Transform::Mired,
-                        true,
-                        Some([(1_000_000. / max).round(), (1_000_000. / min).round(), 1.]),
-                    );
-                }
-            }
+        if database.accessories.len() >= 150 {
+            break;
         }
-        let reviewed = mijialan_core::Specification::bundled(&state.device.model).is_some();
-        for p in props
-            .iter()
-            .filter(|p| p.readable && !p.writable && (reviewed || !p.vendor_defined))
-        {
-            if builder.consumed.contains(&p.key()) {
-                continue;
-            }
-            let (service, characteristic, range) = match p.name.as_str() {
-                "temperature" => ("8A", "11", [-40., 100., 0.1]),
-                "relative-humidity" => ("82", "10", [0., 100., 1.]),
-                "pm2.5-density" => ("8D", "C6", [0., 1000., 1.]),
-                "filter-life-level" => ("BA", "AB", [0., 100., 1.]),
-                _ => continue,
-            };
-            let Some(s) = builder.service(&format!("sensor:{}", p.key()), service, p.label())
-            else {
-                continue;
-            };
-            if service == "8D" {
-                builder.characteristic(
-                    s,
-                    &format!("sensor:{}:quality", p.key()),
-                    "95",
-                    "uint8",
-                    None,
-                    Transform::Fixed(json!(0)),
-                    false,
-                    Some([0., 5., 1.]),
-                );
-            }
-            if service == "BA" {
-                builder.characteristic(
-                    s,
-                    &format!("sensor:{}:change", p.key()),
-                    "AC",
-                    "uint8",
-                    Some(p),
-                    Transform::FilterChange,
-                    false,
-                    Some([0., 1., 1.]),
-                );
-            }
-            builder.characteristic(
-                s,
-                &format!("sensor:{}:value", p.key()),
-                characteristic,
-                "float",
-                Some(p),
-                Transform::Direct,
-                false,
-                Some(range),
-            );
+        let builder = plan_device(state, layout, &config.homekit_names);
+        if builder.services.len() == 1 {
+            continue;
         }
-        controls::extras(&mut builder, &state, reviewed);
         if builder.omitted_services > 0 {
             database.warnings.push(if mijialan_core::localization::english() {
                 format!("Some extra Home controls for {} exceed the bridge limit; use the client for those controls.", state.device.name)
@@ -798,11 +710,169 @@ fn build_states(engine: &Engine, layout: &mut Layout, states: Vec<DeviceState>) 
         }
         database
             .accessories
-            .push(json!({"aid":aid,"services":builder.services}));
+            .push(json!({"aid":builder.aid,"services":builder.services}));
         database.bindings.extend(builder.bindings);
         database.names.extend(builder.names);
     }
     database
+}
+
+/// Support follows the same service plan as the bridge, without using live readings
+/// or changing saved inclusion preferences, identities or configured names.
+pub fn maps_to_home(state: &DeviceState) -> bool {
+    plan_device(state, &mut Layout::default(), &BTreeMap::new())
+        .services
+        .len()
+        > 1
+}
+
+fn plan_device<'a>(
+    state: &'a DeviceState,
+    layout: &'a mut Layout,
+    configured_names: &'a BTreeMap<String, String>,
+) -> Builder<'a> {
+    let aid = layout.aid(&state.device.did);
+    let mut builder = Builder {
+        configured_names,
+        layout,
+        device: state,
+        aid,
+        services: vec![information(
+            &state.device.name,
+            &state.device.model,
+            &state.device.did,
+        )],
+        bindings: BTreeMap::new(),
+        names: BTreeMap::new(),
+        consumed: BTreeSet::new(),
+        service_indices: BTreeMap::new(),
+        omitted_services: 0,
+    };
+    let props = &state.spec.properties;
+    let power = controls::power(state);
+    let native = native(&mut builder, state);
+    if let Some(power) = power.filter(|_| !native) {
+        let kind = state.spec.kind.as_str();
+        let service_type = match kind {
+            "light" => "43",
+            "fan" => "B7",
+            "air-purifier" => "BB",
+            _ => "47",
+        };
+        let s = builder
+            .service("primary", service_type, &state.device.name)
+            .expect("primary service is added before optional services");
+        builder.primary(s);
+        let active = ["fan", "air-purifier"].contains(&kind);
+        builder.characteristic(
+            s,
+            "primary:power",
+            if active { "B0" } else { "25" },
+            if active { "uint8" } else { "bool" },
+            Some(power),
+            if active {
+                Transform::Active
+            } else {
+                Transform::Direct
+            },
+            true,
+            if active { Some([0., 1., 1.]) } else { None },
+        );
+        if kind == "air-purifier" {
+            controls::purifier(&mut builder, s, state, power);
+        } else if kind == "fan" {
+            controls::fan(&mut builder, s, state, power);
+        } else if service_type == "47" {
+            builder.characteristic(
+                s,
+                "primary:in-use",
+                "26",
+                "bool",
+                Some(power),
+                Transform::Direct,
+                false,
+                None,
+            );
+        }
+        for p in props {
+            if !p.writable {
+                continue;
+            }
+            if kind == "light" && p.name == "brightness" {
+                builder.brightness(s, "primary:brightness", p, power);
+            }
+            if kind == "light"
+                && p.name == "color-temperature"
+                && let Some([min, max, _]) = p.range.filter(|r| r[0] > 0.)
+            {
+                builder.characteristic(
+                    s,
+                    "primary:ct",
+                    "CE",
+                    "uint32",
+                    Some(p),
+                    Transform::Mired,
+                    true,
+                    Some([(1_000_000. / max).round(), (1_000_000. / min).round(), 1.]),
+                );
+            }
+        }
+    }
+    let reviewed = mijialan_core::Specification::bundled(&state.device.model).is_some();
+    for p in props
+        .iter()
+        .filter(|p| p.readable && !p.writable && (reviewed || !p.vendor_defined))
+    {
+        if builder.consumed.contains(&p.key()) {
+            continue;
+        }
+        let (service, characteristic, range) = match p.name.as_str() {
+            "temperature" => ("8A", "11", [-40., 100., 0.1]),
+            "relative-humidity" => ("82", "10", [0., 100., 1.]),
+            "pm2.5-density" => ("8D", "C6", [0., 1000., 1.]),
+            "filter-life-level" => ("BA", "AB", [0., 100., 1.]),
+            _ => continue,
+        };
+        let Some(s) = builder.service(&format!("sensor:{}", p.key()), service, p.label()) else {
+            continue;
+        };
+        if service == "8D" {
+            builder.characteristic(
+                s,
+                &format!("sensor:{}:quality", p.key()),
+                "95",
+                "uint8",
+                None,
+                Transform::Fixed(json!(0)),
+                false,
+                Some([0., 5., 1.]),
+            );
+        }
+        if service == "BA" {
+            builder.characteristic(
+                s,
+                &format!("sensor:{}:change", p.key()),
+                "AC",
+                "uint8",
+                Some(p),
+                Transform::FilterChange,
+                false,
+                Some([0., 1., 1.]),
+            );
+        }
+        builder.characteristic(
+            s,
+            &format!("sensor:{}:value", p.key()),
+            characteristic,
+            "float",
+            Some(p),
+            Transform::Direct,
+            false,
+            Some(range),
+        );
+    }
+    controls::extras(&mut builder, state, reviewed);
+    builder
 }
 
 fn information(name: &str, model: &str, serial: &str) -> Value {

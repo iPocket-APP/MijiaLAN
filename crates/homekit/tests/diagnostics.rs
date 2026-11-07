@@ -60,6 +60,7 @@ fn exported_fields_match_native_without_reading_or_creating_bridge_credentials()
     assert_eq!(data["app"]["implementation"], "rust");
     assert_eq!(data["devices"][0]["did"], "123");
     assert_eq!(data["devices"][0]["homeIncluded"], true);
+    assert_eq!(data["devices"][0]["homeKitSupported"], true);
     assert!(
         data["devices"][0]["specType"]
             .as_str()

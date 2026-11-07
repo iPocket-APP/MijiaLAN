@@ -30,6 +30,8 @@ pub fn text(value: impl AsRef<str>) -> String {
             "The device answered discovery but not encrypted requests. Check its token and LAN support."
         }
         "设备" => "Devices",
+        "还没读到设备规格" => "Device specifications are not available yet.",
+        "「家庭」没有对应的配件类型" => "No matching accessory type in Home.",
         "设置…" => "Settings…",
         "检查更新…" => "Check for Updates…",
         "查看更新…" => "View Update…",

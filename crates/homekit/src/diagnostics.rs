@@ -200,7 +200,7 @@ pub fn report(
         }).collect();
         json!({"did":state.device.did, "model":state.device.model, "name":state.device.name,
             "health":if state.online {"online"} else if state.error.is_some() {"offline"} else {"unknown"},
-            "homeIncluded":state.device.bridged, "specType":spec_type,
+            "homeIncluded":state.device.bridged, "homeKitSupported":crate::mapping::maps_to_home(state), "specType":spec_type,
             "lastError":state.error, "lastSeen":probe.and_then(|p| p.last_seen).map(timestamp),
             "retryFailures":probe.map_or(0, |p| p.retry_failures),
             "nextRetryAt":probe.and_then(|p| p.next_retry_at).map(timestamp),

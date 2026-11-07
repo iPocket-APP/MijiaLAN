@@ -9,11 +9,19 @@ use gpui_component::{
 };
 use mijialan_core::localization::text as t;
 use mijialan_core::{DeviceState, Engine, Property, Token, cloud, discovery, engine::numeric};
-use mijialan_homekit::HomeKit;
+use mijialan_homekit::{HomeKit, mapping::maps_to_home};
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::BTreeMap, net::Ipv4Addr, rc::Rc, sync::Arc, time::Duration};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod compact;
+
+fn homekit_unavailable(state: Option<&DeviceState>) -> String {
+    t(if state.is_none_or(|state| state.spec.kind.is_empty()) {
+        "还没读到设备规格"
+    } else {
+        "「家庭」没有对应的配件类型"
+    })
+}
 
 #[derive(Clone, PartialEq, Debug)]
 enum Page {
@@ -1142,14 +1150,9 @@ impl Dashboard {
         }
         for state in self.engine.states() {
             let did = state.device.did.clone();
-            let included = self
-                .engine
-                .store
-                .config()
-                .devices
-                .iter()
-                .find(|d| d.did == did)
-                .is_some_and(|d| d.bridged);
+            let supported = maps_to_home(&state);
+            let unavailable = (!supported).then(|| homekit_unavailable(Some(&state)));
+            let included = state.device.bridged;
             content = content.child(
                 div()
                     .flex()
@@ -1158,11 +1161,25 @@ impl Dashboard {
                     .p_3()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .child(state.device.name)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(state.device.name)
+                            .when_some(unavailable, |column, message| {
+                                column.child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(message),
+                                )
+                            }),
+                    )
                     .child(
                         Switch::new(SharedString::from(format!("bridge-device:{did}")))
-                            .checked(included)
-                            .disabled(self.busy > 0)
+                            .checked(included && supported)
+                            .disabled(self.busy > 0 || !supported)
                             .on_click(cx.listener(move |this, on: &bool, _, cx| {
                                 let id = did.clone();
                                 let on = *on;

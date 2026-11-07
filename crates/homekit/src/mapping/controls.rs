@@ -9,6 +9,7 @@ fn reading<'a>(state: &'a DeviceState, key: &str) -> Result<&'a Value, i32> {
 }
 pub(super) fn read(
     t: &Transform,
+    property: &Property,
     value: &Value,
     state: &DeviceState,
 ) -> Result<Option<Value>, i32> {
@@ -57,20 +58,35 @@ pub(super) fn read(
         } else {
             0
         }),
-        Transform::ClimateTarget { modes, .. } => json!(
-            modes
-                .iter()
-                .find(|(_, v)| equivalent(v, value))
-                .or_else(|| modes.iter().find(|(n, _)| *n == 0))
-                .or_else(|| modes.first())
-                .ok_or(-70402)?
-                .0
-        ),
+        Transform::ClimateTarget { modes, .. } => {
+            if !listed_option(property, value) {
+                return Err(-70402);
+            }
+            json!(
+                modes
+                    .iter()
+                    .find(|(_, v)| equivalent(v, value))
+                    .or_else(|| modes.iter().find(|(n, _)| *n == 0))
+                    .or_else(|| modes.first())
+                    .ok_or(-70402)?
+                    .0
+            )
+        }
         Transform::ClimateCurrent { mode, heat, cool } => {
             if !as_bool(value).map_err(|_| -70402)? {
                 json!(0)
             } else {
+                let mode_property = state
+                    .spec
+                    .properties
+                    .iter()
+                    .find(|p| p.key() == *mode)
+                    .ok_or(-70402)?;
                 let mode = reading(state, mode)?;
+                if !valid_option_reading(mode_property, mode) || !listed_option(mode_property, mode)
+                {
+                    return Err(-70402);
+                }
                 json!(if heat.as_ref().is_some_and(|v| equivalent(v, mode)) {
                     2
                 } else if cool.as_ref().is_some_and(|v| equivalent(v, mode)) {
@@ -92,16 +108,14 @@ pub(super) fn read(
         Transform::Running { rpm } => {
             if !as_bool(value).map_err(|_| -70402)? {
                 json!(0)
-            } else {
-                json!(if reading(state, rpm.as_deref().ok_or(-70402)?)?
-                    .as_f64()
-                    .ok_or(-70402)?
-                    > 0.
-                {
+            } else if let Some(key) = rpm {
+                json!(if reading(state, key)?.as_f64().ok_or(-70402)? > 0. {
                     2
                 } else {
                     1
                 })
+            } else {
+                json!(2)
             }
         }
         _ => return Ok(None),
@@ -683,7 +697,17 @@ pub(super) fn extras(b: &mut Builder<'_>, state: &DeviceState, reviewed: bool) {
                         let mut titles = BTreeSet::new();
                         for (index, c) in p.choices.iter().enumerate() {
                             let title = c.label(mijialan_core::localization::english());
+                            let placeholder = !reviewed
+                                && ["none", "null"].contains(
+                                    &c.description_en
+                                        .to_lowercase()
+                                        .chars()
+                                        .filter(|c| c.is_alphabetic())
+                                        .collect::<String>()
+                                        .as_str(),
+                                );
                             if b.consumed.contains(&format!("{}={}", p.key(), c.value))
+                                || placeholder
                                 || !titles.insert(title)
                             {
                                 continue;
@@ -885,16 +909,7 @@ pub(super) fn bath_heater(b: &mut Builder<'_>, state: &DeviceState) -> bool {
                 && p.writable
                 && p.range.is_some_and(|r| r[0] >= 0. && r[1] == 100.)
         }) {
-            b.characteristic(
-                s,
-                "bath:light:brightness",
-                "8",
-                "int",
-                Some(p),
-                Transform::Direct,
-                true,
-                Some([0., 100., 1.]),
-            );
+            b.brightness(s, "bath:light:brightness", p, on);
         }
         built = true;
     }

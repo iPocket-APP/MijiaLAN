@@ -1,6 +1,7 @@
 use mijialan_core::{Specification, Token, client::parse_json, engine::numeric, packet};
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     net::{Ipv4Addr, UdpSocket},
     sync::{
         Arc, Mutex,
@@ -28,6 +29,9 @@ impl MiotDevice {
         )
     }
     pub fn with_spec(model: &str, document: &str) -> Self {
+        Self::with_readings(model, document, BTreeMap::new())
+    }
+    pub fn with_readings(model: &str, document: &str, mut actual: BTreeMap<String, Value>) -> Self {
         let spec = Specification::for_model(model, document).unwrap();
         let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         socket
@@ -43,8 +47,6 @@ impl MiotDevice {
             (phase.clone(), writes.clone(), stop.clone());
         let thread = std::thread::spawn(move || {
             let token = Token::parse(TOKEN).unwrap();
-            let mut actual: std::collections::BTreeMap<String, Value> =
-                std::collections::BTreeMap::new();
             let mut buffer = [0; 65535];
             while !worker_stop.load(Ordering::Relaxed) {
                 let (len, from) = match socket.recv_from(&mut buffer) {
