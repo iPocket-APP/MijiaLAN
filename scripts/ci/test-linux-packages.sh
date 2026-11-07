@@ -8,8 +8,8 @@ for os in debian:12-slim ubuntu:24.04; do
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
     apt-get install -y -qq --no-install-recommends /packages/*.deb
-    test "$(dpkg-query -W -f="${Architecture}" mijialan-rust)" = amd64
-    dpkg --compare-versions "$(dpkg-query -W -f="${Version}" mijialan-rust)" gt 0.1.0
+    test "$(dpkg-query -W -f="\${Architecture}" mijialan-rust)" = amd64
+    dpkg --compare-versions "$(dpkg-query -W -f="\${Version}" mijialan-rust)" gt 0.1.0
     mijia-rust --help | grep -q serve
     mijia-rust --demo list >/tmp/devices.json
     test -s /tmp/devices.json
