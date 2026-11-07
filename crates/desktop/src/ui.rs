@@ -1537,13 +1537,15 @@ impl Render for Dashboard {
             if cfg!(target_os = "macos") {
                 return self.panel(content, scroll, cx);
             }
-            div()
+            let body = div()
                 .key_context("MijiaLAN")
                 .track_focus(&self.focus)
                 .on_action(cx.listener(|this, _: &Refresh, _, cx| this.refresh(cx)))
                 .on_action(cx.listener(|this, _: &AddDevice, _, cx| this.go(Page::Add, cx)))
                 .on_action(cx.listener(|this, _: &Settings, _, cx| this.go(Page::Settings, cx)))
-                .size_full()
+                .w_full()
+                .flex_1()
+                .min_h_0()
                 .flex()
                 .bg(cx.theme().background)
                 .text_color(cx.theme().foreground)
@@ -1633,7 +1635,22 @@ impl Render for Dashboard {
                                     t(&self.status)
                                 )),
                         ),
+                );
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .when(
+                    matches!(window.window_decorations(), Decorations::Client { .. }),
+                    |layout| {
+                        layout.child(
+                            gpui_component::TitleBar::new()
+                                .text_sm()
+                                .child("MijiaLAN Rust"),
+                        )
+                    },
                 )
+                .child(body)
                 .into_any_element()
         }
     }
