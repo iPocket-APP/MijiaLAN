@@ -13,7 +13,7 @@ pub const MAX_BRIDGED_DEVICES: usize = 149;
 fn action_error(error: mijialan_core::Error) -> i32 {
     // Keep the underlying failure observable instead of reporting only HAP's
     // generic communication status; do not log request bodies or credentials.
-    eprintln!("HomeKit action failed: {error}");
+    eprintln!("HomeKit command failed: {error}");
     -70402
 }
 
@@ -248,7 +248,7 @@ impl Binding {
             && value.as_f64() == Some(0.)
         {
             return engine
-                .write(&self.did, power, json!(false))
+                .write_confirmed(&self.did, &[(power.clone(), json!(false))], None)
                 .map_err(|_| -70402);
         }
         if let Transform::Cleaning { start, dock } = &self.transform {
@@ -283,10 +283,9 @@ impl Binding {
                     .validate(value)
                     .map_err(|_| -70410)?;
             }
-            for (key, value) in writes {
-                engine.write(&self.did, &key, value).map_err(|_| -70402)?;
-            }
-            return Ok(());
+            return engine
+                .write_confirmed(&self.did, &writes, None)
+                .map_err(action_error);
         }
         let output = match &self.transform {
             Transform::Direct | Transform::Brightness { scaled: false, .. } => {
@@ -340,9 +339,13 @@ impl Binding {
             _ => return Err(-70404),
         };
         property.validate(&output).map_err(|_| -70410)?;
+        let power = match &self.transform {
+            Transform::Brightness { power, .. } => Some(power.as_str()),
+            _ => None,
+        };
         engine
-            .write(&self.did, &self.key, output)
-            .map_err(|_| -70402)
+            .write_confirmed(&self.did, &[(self.key.clone(), output)], power)
+            .map_err(action_error)
     }
 }
 fn as_bool(value: &Value) -> Result<bool, i32> {
@@ -355,7 +358,7 @@ fn as_bool(value: &Value) -> Result<bool, i32> {
         })
         .ok_or(-70410)
 }
-fn equivalent(a: &Value, b: &Value) -> bool {
+pub(crate) fn equivalent(a: &Value, b: &Value) -> bool {
     a == b || a.as_f64().zip(b.as_f64()).is_some_and(|(a, b)| a == b)
 }
 
@@ -883,7 +886,7 @@ fn information(name: &str, model: &str, serial: &str) -> Value {
         {"iid":4,"type":"21","format":"string","perms":["pr"],"value":hap_string(model)},
         {"iid":5,"type":"23","format":"string","perms":["pr"],"value":hap_string(name)},
         {"iid":6,"type":"30","format":"string","perms":["pr"],"value":hap_string(&format!("mijia-{serial}"))},
-        {"iid":7,"type":"52","format":"string","perms":["pr"],"value":"0.1.0"}
+        {"iid":7,"type":"52","format":"string","perms":["pr"],"value":env!("CARGO_PKG_VERSION")}
     ]})
 }
 

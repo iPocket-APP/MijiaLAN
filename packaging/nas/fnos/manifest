@@ -1,0 +1,13 @@
+appname=mijialan
+display_name=MijiaLAN
+version=@VERSION@
+desc=米家局域网控制与 Apple 家庭桥接
+platform=x86
+source=thirdparty
+maintainer=iPocket
+maintainer_url=https://github.com/iPocket-APP/MijiaLAN
+ctl_stop=true
+desktop_uidir=ui
+desktop_applaunchname=mijialan.main
+service_port=17890
+disable_authorization_path=true

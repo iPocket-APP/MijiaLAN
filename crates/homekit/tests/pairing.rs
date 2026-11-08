@@ -913,8 +913,7 @@ fn real_tcp_pairing_multi_frame_database_writes_events_and_admin_permissions() {
         serde_json::from_slice::<Value>(&event).unwrap()["characteristics"][0]["value"],
         true
     );
-    // A controller must receive the authoritative value even if the successful
-    // command leaves it unchanged (as with momentary presets and actions).
+    // A successful write of the confirmed value must not echo back to its origin.
     let body = json!({"characteristics":[{"aid":aid,"iid":iid,"value":true}]}).to_string();
     assert_eq!(
         encrypted_request(
@@ -926,11 +925,6 @@ fn real_tcp_pairing_multi_frame_database_writes_events_and_admin_permissions() {
         )
         .0,
         204
-    );
-    let (_, event) = read_encrypted(&mut stream, &mut session);
-    assert_eq!(
-        serde_json::from_slice::<Value>(&event).unwrap()["characteristics"][0]["value"],
-        true
     );
     let body = json!({"characteristics":[{"aid":aid,"iid":iid,"ev":false}]}).to_string();
     assert_eq!(

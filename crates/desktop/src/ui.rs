@@ -1232,7 +1232,11 @@ impl Dashboard {
             .flex()
             .flex_col()
             .gap_5()
-            .child(self.heading("设置", "MijiaLAN Rust 0.1.0", cx))
+            .child(self.heading(
+                "设置",
+                concat!("MijiaLAN Rust ", env!("CARGO_PKG_VERSION")),
+                cx,
+            ))
             .child(languages)
             .child(
                 Button::new("theme")

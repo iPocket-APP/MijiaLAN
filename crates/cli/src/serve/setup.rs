@@ -96,11 +96,31 @@ fn matches_secret(expected: &str, actual: &str) -> bool {
     bool::from(expected.as_bytes().ct_eq(actual.as_bytes()))
 }
 
-pub(super) async fn run(service: Arc<Service>, address: SocketAddrV4) -> Result<()> {
+pub(super) async fn run(
+    service: Arc<Service>,
+    address: SocketAddrV4,
+    code_file: Option<&std::path::Path>,
+) -> Result<()> {
     let listener = TcpListener::bind(address)
         .await
         .with_context(|| format!("无法在 {address} 打开设置向导，请检查 NAS 地址和端口占用"))?;
-    let code = hex::encode(rand::random::<[u8; 24]>());
+    let mut supplied = false;
+    let code = if let Some(path) = code_file.filter(|path| path.exists()) {
+        let text = std::fs::read_to_string(path)?;
+        let code = text.trim();
+        anyhow::ensure!(
+            (12..=64).contains(&code.len())
+                && code
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')),
+            "一次性设置码须为 12–64 位英文字母、数字、连字符或下划线"
+        );
+        std::fs::remove_file(path)?;
+        supplied = true;
+        code.to_owned()
+    } else {
+        hex::encode(rand::random::<[u8; 24]>())
+    };
     let wizard = Arc::new(Wizard {
         service,
         import: Arc::new(ImportJob::default()),
@@ -118,7 +138,9 @@ pub(super) async fn run(service: Arc<Service>, address: SocketAddrV4) -> Result<
         "请在可信局域网打开 {}，向导将在 20 分钟后关闭",
         wizard.origin
     );
-    println!("一次性设置码: {code}");
+    if !supplied {
+        println!("一次性设置码: {code}");
+    }
     serve(listener, wizard).await?;
     println!("浏览器设置向导已关闭");
     Ok(())
@@ -224,7 +246,7 @@ async fn unlock(
     {
         return Err((
             StatusCode::UNAUTHORIZED,
-            "设置码错误或已使用。可从原浏览器继续，或在 DSM 重新启动向导。".into(),
+            "设置码错误或已使用。可从原浏览器继续，或重新开启套件的设置窗口。".into(),
         ));
     }
     auth.code = None;

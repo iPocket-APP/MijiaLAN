@@ -863,14 +863,37 @@ impl Connection {
                             .as_ref()
                             .ok_or(-70409)
                             .and_then(|a| mapping::validate_write(a, value))
-                            .and_then(|value| binding.write(&shared.engine, &value));
+                            .and_then(|requested| {
+                                binding.write(&shared.engine, &requested)?;
+                                Ok(requested)
+                            });
                         match result {
                             Err(error) => status = error,
-                            Ok(()) => {
-                                // Momentary actions and presets may read back false even after
-                                // a successful true write. Echo their authoritative state.
+                            Ok(requested) => {
                                 if let Some(last) = self.subscriptions.get_mut(&(aid, iid)) {
-                                    *last = Value::Null;
+                                    let current = shared.database.read().unwrap().read(
+                                        &shared.engine,
+                                        aid,
+                                        iid,
+                                        false,
+                                    );
+                                    let dimmed_off = matches!(
+                                        binding.transform,
+                                        mapping::Transform::Brightness { .. }
+                                    ) && requested.as_f64() == Some(0.);
+                                    *last = match current {
+                                        // The originating controller already knows the value it
+                                        // wrote. Zero brightness preserves the saved dimmer level.
+                                        Ok(value)
+                                            if dimmed_off
+                                                || mapping::equivalent(&value, &requested) =>
+                                        {
+                                            json!({"aid":aid,"iid":iid,"value":value})
+                                        }
+                                        // Momentary switches need a corrective event even when
+                                        // their real state never changed.
+                                        _ => Value::Null,
+                                    };
                                 }
                             }
                         }

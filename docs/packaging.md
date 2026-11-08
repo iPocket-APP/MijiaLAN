@@ -31,7 +31,7 @@ bash scripts/package-macos-release.sh
 
 日志保存在相邻的 `logs/`。若已签名的 staging App 不变，可以用同一环境变量加 `--package-existing` 重试公证与封装；不会重新编译。打包脚本不安装或替换当前客户端，也不会上传 GitHub Release。已有本地 Rust 用户首次改用 Developer ID 版本时，系统可能要求重新允许该签名读取凭据。
 
-`build-macos.sh` 的默认本地 Debug 包仍叫 `MijiaLAN Rust.app`，便于并行开发；可通过 `MIJIALAN_APP_OUTPUT`、`MIJIALAN_APP_NAME` 和 `MIJIALAN_BUILD_NUMBER` 指定单独 staging 路径、显示名和 build 号。`resources/macos/AppIcon.icns` 从现有应用 SVG 生成，保留 Lucide 许可。
+`build-macos.sh` 的默认本地 Debug 包仍叫 `MijiaLAN Rust.app`，便于并行开发；可通过 `MIJIALAN_APP_OUTPUT`、`MIJIALAN_APP_NAME` 和 `MIJIALAN_BUILD_NUMBER` 指定单独 staging 路径、显示名和 build 号。`resources/macos/AppIcon.icon` 来自原生 Swift 版。Xcode 的 `actool` 生成分层资产与旧系统用的 ICNS，Lucide 许可随包分发。
 
 ## 当前候选包
 

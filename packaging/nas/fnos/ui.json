@@ -1,0 +1,13 @@
+{
+  ".url": {
+    "mijialan.main": {
+      "title": "MijiaLAN",
+      "icon": "images/icon_{0}.png",
+      "type": "url",
+      "protocol": "http",
+      "port": "17890",
+      "url": "/",
+      "allUsers": false
+    }
+  }
+}

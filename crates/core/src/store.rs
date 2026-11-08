@@ -13,6 +13,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+#[cfg(feature = "system-vault")]
 const SERVICE: &str = "xyz.ipocket.MijiaLAN.Rust";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +89,7 @@ impl Vault {
             service_key: None,
         }
     }
+    #[cfg(feature = "system-vault")]
     fn entry() -> Result<keyring::Entry> {
         keyring::Entry::new(SERVICE, "master-key-v1")
             .map_err(|e| Error::Storage(format!("无法访问系统凭据存储：{e}")))
@@ -97,6 +99,16 @@ impl Vault {
         if let Some(key) = &self.service_key {
             return Ok(key.clone());
         }
+        Self::system_master_key(create)
+    }
+    #[cfg(not(feature = "system-vault"))]
+    fn system_master_key(_: bool) -> Result<Zeroizing<[u8; 32]>> {
+        Err(Error::Storage(
+            "此构建需要使用 serve 及独立的服务密钥".into(),
+        ))
+    }
+    #[cfg(feature = "system-vault")]
+    fn system_master_key(create: bool) -> Result<Zeroizing<[u8; 32]>> {
         let entry = Self::entry()?;
         match entry.get_password() {
             Ok(text) => {

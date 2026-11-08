@@ -119,11 +119,10 @@ def release_by_tag(tag):
     return None
 
 
-def publish(folder):
+def stage(folder, dist, nas=None):
     run_id = resolve()
     version, build = identity()
     source = git('rev-parse', 'HEAD')
-    tag = f'rs-linux-v{version}-b{build}'
     repo = os.environ['GITHUB_REPOSITORY']
     info = json.loads((folder / 'build-info.json').read_text())
     names = package_names(version, build)
@@ -134,20 +133,42 @@ def publish(folder):
             digest(folder / name) != info['files'][name] for name in expected):
         raise ValueError('Missing or invalid Linux candidate assets')
 
-    release = release_by_tag(tag)
-    if release and (not release['draft'] or release['target_commitish'] != source):
-        raise ValueError('Release is already public or belongs to another source')
+
+    if nas is not None:
+        prefix = f'MijiaLAN-rs-{version}-b{build}'
+        spk = f'{prefix}-synology-geminilake-test.spk'
+        fpk = f'{prefix}-fnos-x86_64-test.fpk'
+        hashes = dict(line.split(maxsplit=1)[::-1]
+                      for line in (nas / 'NAS-SHA256SUMS.txt').read_text().splitlines())
+        if set(hashes) != {spk, fpk} or any(digest(nas / name) != hashes[name] for name in hashes):
+            raise ValueError('Missing or invalid NAS candidate assets')
+    dist.mkdir(parents=True, exist_ok=True)
     image = f'ghcr.io/{repo.split("/")[0].lower()}/mijialan-bridge:{version}-rs-linux.{build}'
     pinned = publish_image(folder, image, info)
 
+    for name in names:
+        shutil.copyfile(folder / name, dist / name)
+    template = (folder / 'compose.yaml').read_text()
+    if template.count(f'image: {TEMPLATE_IMAGE}') != 1:
+        raise ValueError('Unexpected NAS Compose template')
+    (dist / 'compose.yaml').write_text(template.replace(f'image: {TEMPLATE_IMAGE}', f'image: {pinned}'))
+    if nas is not None:
+        shutil.copyfile(nas / spk, dist / spk)
+    return pinned
+
+
+def publish(folder):
+    run_id = resolve()
+    version, build = identity()
+    source = git('rev-parse', 'HEAD')
+    tag = f'rs-linux-v{version}-b{build}'
+    repo = os.environ['GITHUB_REPOSITORY']
+    release = release_by_tag(tag)
+    if release and (not release['draft'] or release['target_commitish'] != source):
+        raise ValueError('Release is already public or belongs to another source')
     with tempfile.TemporaryDirectory(prefix='mijialan-linux-release-') as directory:
         dist = Path(directory)
-        for name in names:
-            shutil.copyfile(folder / name, dist / name)
-        template = (folder / 'compose.yaml').read_text()
-        if template.count(f'image: {TEMPLATE_IMAGE}') != 1:
-            raise ValueError('Unexpected NAS Compose template')
-        (dist / 'compose.yaml').write_text(template.replace(f'image: {TEMPLATE_IMAGE}', f'image: {pinned}'))
+        pinned = stage(folder, dist)
         checksum_file(dist / 'SHA256SUMS.txt', list(dist.iterdir()))
         files = sorted(dist.iterdir())
         hashes = {file.name: 'sha256:' + digest(file) for file in files}
@@ -183,10 +204,16 @@ if __name__ == '__main__':
     commands.add_parser('resolve')
     for command in ['record', 'publish']:
         commands.add_parser(command).add_argument('folder', type=Path)
+    staging = commands.add_parser('stage')
+    staging.add_argument('folder', type=Path)
+    staging.add_argument('dist', type=Path)
+    staging.add_argument('--nas', type=Path, required=True)
     args = parser.parse_args()
     if args.command == 'resolve':
         print(resolve())
     elif args.command == 'record':
         record(args.folder)
+    elif args.command == 'stage':
+        print(stage(args.folder, args.dist, args.nas))
     else:
         publish(args.folder)

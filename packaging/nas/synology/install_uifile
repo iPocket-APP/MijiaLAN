@@ -1,0 +1,15 @@
+[
+  {
+    "step_title": "MijiaLAN 局域网设置",
+    "items": [
+      {
+        "type": "textfield",
+        "subitems": [
+          {"key": "wizard_lan_ip", "desc": "NAS 局域网 IPv4 地址", "validator": {"allowBlank": false}},
+          {"key": "wizard_hap_port", "desc": "HomeKit 端口", "defaultValue": "51826", "validator": {"allowBlank": false}},
+          {"key": "wizard_setup_code", "desc": "一次性设置码（12–64 位字母、数字、- 或 _）", "inputType": "password", "validator": {"allowBlank": false}}
+        ]
+      }
+    ]
+  }
+]

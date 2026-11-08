@@ -1,5 +1,5 @@
 use crate::{
-    Device, Error, MiioClient, Result, Specification, Store, Token, legacy::Profile, spec,
+    Device, Error, MiioClient, Property, Result, Specification, Store, Token, legacy::Profile, spec,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -482,11 +482,7 @@ impl Engine {
         };
         let mut client = client.as_ref().map(|c| c.lock().unwrap());
         if let Some(client) = client.as_mut() {
-            if let Some(profile) = Profile::for_model(&state.device.model) {
-                profile.write(client, property, &value)?;
-            } else {
-                client.set_property(did, property.siid, property.piid, value.clone())?;
-            }
+            send_property(client, &state.device, property, &value)?;
         }
         if let Some(state) = self.states.write().unwrap().get_mut(did) {
             state.values.insert(key.into(), value);
@@ -494,6 +490,100 @@ impl Engine {
             state.revision += 1;
         }
         Ok(())
+    }
+    /// Apply a HomeKit write and publish the settled values together. Power is
+    /// evaluated inside the same device queue as the brightness write.
+    pub fn write_confirmed(
+        &self,
+        did: &str,
+        writes: &[(String, Value)],
+        power: Option<&str>,
+    ) -> Result<()> {
+        let device = self.device(did)?;
+        let client = if self.demo {
+            None
+        } else {
+            Some(self.client(&device)?)
+        };
+        let mut client = client.as_ref().map(|client| client.lock().unwrap());
+        let matches_device = |state: &DeviceState| {
+            state.device.host == device.host
+                && state.device.port == device.port
+                && state.device.model == device.model
+        };
+        let state = self
+            .state(did)
+            .filter(|state| state.online && matches_device(state))
+            .ok_or_else(|| Error::Validation("设备离线或配置已变更".into()))?;
+        let power = power
+            .filter(|key| {
+                state.values.get(*key).and_then(Value::as_bool) != Some(true)
+                    || state.errors.contains_key(*key)
+            })
+            .map(|key| (key.to_owned(), json!(true)));
+        let plan = power
+            .iter()
+            .chain(writes)
+            .map(|(key, value)| {
+                let property = state
+                    .spec
+                    .properties
+                    .iter()
+                    .find(|p| p.key() == *key)
+                    .ok_or_else(|| Error::Validation("属性不存在".into()))?;
+                property.validate(value)?;
+                Ok((property, value))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut readings = BTreeMap::new();
+        let result = (|| {
+            for (property, value) in plan {
+                let key = property.key();
+                let Some(client) = client.as_deref_mut() else {
+                    readings.insert(key, value.clone());
+                    continue;
+                };
+                send_property(client, &device, property, value)?;
+                if !property.readable {
+                    continue;
+                }
+                let mut confirmed = false;
+                for attempt in 0..3 {
+                    if attempt != 0 {
+                        std::thread::sleep(Duration::from_millis(250));
+                    }
+                    if let Some(actual) = read_property(client, &device, property)? {
+                        confirmed = &actual == value
+                            || actual
+                                .as_f64()
+                                .zip(value.as_f64())
+                                .is_some_and(|(a, b)| (a - b).abs() < 0.000001);
+                        readings.insert(key.clone(), actual);
+                        if confirmed {
+                            break;
+                        }
+                    }
+                }
+                if !confirmed {
+                    return Err(Error::Response("设备已接受指令，但尚未确认状态变化".into()));
+                }
+            }
+            Ok(())
+        })();
+        if !readings.is_empty() {
+            let mut states = self.states.write().unwrap();
+            let current = states
+                .get_mut(did)
+                .filter(|state| matches_device(state))
+                .ok_or_else(|| Error::Validation("设备配置已变更".into()))?;
+            for (key, value) in readings {
+                current.errors.remove(&key);
+                current.values.insert(key, value);
+            }
+            current.revision += 1;
+        }
+        result
     }
     pub fn remove(&self, did: &str) -> Result<()> {
         self.store.remove(did)?;
@@ -731,6 +821,43 @@ impl Drop for Poller {
         self.0.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
+fn send_property(
+    client: &mut MiioClient,
+    device: &Device,
+    property: &Property,
+    value: &Value,
+) -> Result<()> {
+    if let Some(profile) = Profile::for_model(&device.model) {
+        profile.write(client, property, value)
+    } else {
+        client.set_property(&device.did, property.siid, property.piid, value.clone())
+    }
+}
+
+fn read_property(
+    client: &mut MiioClient,
+    device: &Device,
+    property: &Property,
+) -> Result<Option<Value>> {
+    if let Some(profile) = Profile::for_model(&device.model) {
+        let spec = Specification {
+            kind: String::new(),
+            properties: vec![property.clone()],
+            actions: Vec::new(),
+            compatibility: Vec::new(),
+        };
+        return Ok(profile.read(client, &spec)?.remove(&property.key()));
+    }
+    let values = client.get_properties(&device.did, &[(property.siid, property.piid)])?;
+    Ok(values.into_iter().find_map(|mut item| {
+        (item["siid"].as_u64() == Some(property.siid.into())
+            && item["piid"].as_u64() == Some(property.piid.into())
+            && item["code"].as_i64() == Some(0))
+        .then(|| item.as_object_mut()?.remove("value"))
+        .flatten()
+    }))
+}
+
 pub fn numeric(value: f64, format: &str) -> Value {
     if !value.is_finite() {
         return Value::Null;

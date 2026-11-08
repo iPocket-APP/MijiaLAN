@@ -1,0 +1,10 @@
+[
+  {
+    "stepTitle": "MijiaLAN 局域网设置",
+    "items": [
+      {"type": "text", "field": "wizard_lan_ip", "label": "NAS 局域网 IPv4 地址", "rules": [{"required": true, "message": "请输入 NAS 的局域网地址"}]},
+      {"type": "text", "field": "wizard_hap_port", "label": "HomeKit 端口", "initValue": "51826", "rules": [{"required": true, "message": "请输入 HomeKit 端口"}]},
+      {"type": "password", "field": "wizard_setup_code", "label": "一次性设置码（12–64 位字母、数字、- 或 _）", "rules": [{"required": true, "message": "请设置一次性设置码"}]}
+    ]
+  }
+]

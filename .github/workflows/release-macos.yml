@@ -15,6 +15,10 @@ on:
         description: Optional exact Build run ID for this source commit
         type: string
         default: '0'
+      linux_run_id:
+        description: Successful Linux and NAS run on the same commit (unified public release)
+        type: string
+        default: ''
       publish:
         description: Publish a public Rust prerelease after verification (false produces preview artifacts only)
         type: boolean
@@ -136,8 +140,51 @@ jobs:
           retention-days: 14
           overwrite: true
 
+  linux:
+    needs: source
+    if: ${{ inputs.publish && inputs.linux_run_id }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANDIDATE_RUN: ${{ inputs.linux_run_id }}
+      MIJIALAN_LINUX_BUILD: ${{ needs.source.outputs.build_number }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.source_sha }}
+          persist-credentials: false
+      - run: python3 scripts/ci/linux_release.py resolve
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: MijiaLAN-Linux-x86_64-b${{ env.MIJIALAN_LINUX_BUILD }}
+          path: build/linux-input
+          run-id: ${{ inputs.linux_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: MijiaLAN-NAS-x86_64-b${{ env.MIJIALAN_LINUX_BUILD }}-test
+          path: build/nas-input
+          run-id: ${{ inputs.linux_run_id }}
+          github-token: ${{ github.token }}
+      - run: python3 scripts/ci/linux_release.py stage build/linux-input build/linux-dist --nas build/nas-input
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: verified-linux-distribution
+          path: build/linux-dist
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+          overwrite: true
+
   distribution:
-    needs: [source, macos]
+    needs: [source, macos, linux]
+    if: >-
+      !cancelled() && needs.source.result == 'success' && needs.macos.result == 'success' &&
+      (needs.linux.result == 'success' || (!inputs.linux_run_id && needs.linux.result == 'skipped'))
     runs-on: ubuntu-24.04
     environment: macos-release
     steps:
@@ -159,6 +206,11 @@ jobs:
           path: build/windows-input
           run-id: ${{ needs.source.outputs.run_id }}
           github-token: ${{ github.token }}
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        if: ${{ needs.linux.result == 'success' }}
+        with:
+          name: verified-linux-distribution
+          path: build/linux-dist
       - name: Verify and collect distribution
         env:
           RUST_UPDATE_PRIVATE_KEY: ${{ secrets.RUST_UPDATE_PRIVATE_KEY }}
@@ -168,7 +220,9 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends wixl msitools
-          python3 scripts/ci/release.py collect --source "$SOURCE_SHA" --version "$VERSION" --build "$BUILD" --windows build/windows-input --mac build/signed-macos
+          linux=()
+          if [[ -d build/linux-dist ]]; then linux=(--linux build/linux-dist); fi
+          python3 scripts/ci/release.py collect --source "$SOURCE_SHA" --version "$VERSION" --build "$BUILD" --windows build/windows-input --mac build/signed-macos "${linux[@]}"
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: MijiaLAN-rs-${{ needs.source.outputs.version }}-b${{ needs.source.outputs.build_number }}-preview
@@ -201,7 +255,11 @@ jobs:
           VERSION: ${{ needs.source.outputs.version }}
           BUILD: ${{ needs.source.outputs.build_number }}
           BUILD_RUN: ${{ needs.source.outputs.run_id }}
-        run: python3 scripts/ci/release.py publish --source "$SOURCE_SHA" --version "$VERSION" --build "$BUILD" --run "$BUILD_RUN"
+          LINUX_RUN: ${{ inputs.linux_run_id }}
+        run: |
+          linux=()
+          if [[ -n "$LINUX_RUN" ]]; then linux=(--linux-run "$LINUX_RUN"); fi
+          python3 scripts/ci/release.py publish --source "$SOURCE_SHA" --version "$VERSION" --build "$BUILD" --run "$BUILD_RUN" "${linux[@]}"
 
   refresh-updates:
     needs: [source, publish]

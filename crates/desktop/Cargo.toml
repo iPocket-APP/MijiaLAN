@@ -9,7 +9,7 @@ name = "mijialan-rust"
 path = "src/main.rs"
 
 [dependencies]
-mijialan-core.workspace = true
+mijialan-core = { workspace = true, features = ["system-vault"] }
 mijialan-homekit.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true

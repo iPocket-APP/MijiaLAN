@@ -1,0 +1,27 @@
+{
+  "fill" : {
+    "solid" : "extended-srgb:0.11765,0.65098,0.58039,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "House.svg",
+          "name" : "House"
+        }
+      ],
+      "name" : "House",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.35
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.12
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : "shared"
+  }
+}

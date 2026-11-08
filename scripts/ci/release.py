@@ -110,6 +110,13 @@ def collect(args):
             if not file.is_file() or mac_hashes.get(file.name) != digest(file):
                 raise ValueError('Signed Mac package is missing or checksum mismatch')
             shutil.copyfile(file, args.dist / file.name)
+    if args.linux is not None:
+        linux = {f'{name}-linux-x86_64.deb', f'{name}-linux-x86_64.tar.gz',
+                 f'{name}-synology-geminilake-test.spk', 'compose.yaml'}
+        if {p.name for p in args.linux.iterdir()} != linux:
+            raise ValueError('Missing or unexpected Linux and Synology release files')
+        for file in args.linux.iterdir():
+            shutil.copyfile(file, args.dist / file.name)
     updates.prepare_feeds(args.dist, args.version, args.build)
     files = sorted(p for p in args.dist.iterdir() if p.name != 'SHA256SUMS.txt')
     (args.dist / 'SHA256SUMS.txt').write_text(''.join(f'{digest(p)}  {p.name}\n' for p in files))
@@ -129,8 +136,11 @@ def publish(args):
     required = {f'{name}-macos-{arch}.{extension}' for arch in ['arm64', 'x86_64'] for extension in ['zip', 'dmg']}
     required |= {f'{name}-windows-x86_64.{ext}' for ext in ['zip', 'msi']}
     required |= {'rust-update-feeds.zip', 'rust-update-feeds.zip.sig', 'SHA256SUMS.txt'}
+    if args.linux_run:
+        required |= {f'{name}-linux-x86_64.deb', f'{name}-linux-x86_64.tar.gz',
+                     f'{name}-synology-geminilake-test.spk', 'compose.yaml'}
     if set(expected) != required:
-        raise ValueError('Expected both Mac architectures, Windows ZIP/MSI, signed feeds and checksum manifest')
+        raise ValueError('Release files do not match the requested desktop and NAS distribution')
     updates.build_number(args.build)
     # The shared publisher is main-only: retain the existing Pages environment's branch restrictions.
     site_config = api('contents/update-site.json?ref=main')
@@ -144,6 +154,21 @@ def publish(args):
         if match and not item['draft'] and int(match[1]) >= int(args.build):
             raise ValueError('Rust update builds must increase monotonically across all versions')
     body = f'''MijiaLAN Rust 体验版 {args.version}（构建 {args.build}）。\n\n源码：`{args.source}`，CI 构建：[Build run {args.run}](https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{args.run})。发布复用该次已验证的 Release 程序，无需重新编译。\n\n- macOS Apple Silicon / Intel：分别提供 DMG / ZIP，内置 Sparkle 自动更新。Developer ID 签名、Hardened Runtime，App 和 DMG 均完成 Apple 公证及票据验证。\n- Windows x64：推荐 MSI 安装包，内置 WinSparkle 自动更新；便携 ZIP 保留为手动更新方式。未做 Authenticode 签名；需要 [Microsoft Visual C++ v14 x64 运行库](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/)。\n- 校验值见 `SHA256SUMS.txt`。现有 Rust 配置及桥身份继续沿用，Swift 版与 Rust 版数据独立。\n\n构建经过格式、Clippy、Release 测试和包内 CLI 验证；具体支持范围及实机边界见[项目说明](https://github.com/{os.environ['GITHUB_REPOSITORY']}/tree/{args.source})。\n'''
+    notes = Path(f'docs/releases/rs-v{args.version}.md')
+    if notes.is_file():
+        body += '\n' + notes.read_text().strip() + '\n'
+    if args.linux_run:
+        repo = os.environ['GITHUB_REPOSITORY']
+        body += f"""
+### Linux 和 NAS
+
+- Debian 12 / Ubuntu 24.04 x86_64 桌面版提供 DEB 与便携包。
+- 群晖容器版通过 `compose.yaml` 使用固定摘要的 GHCR 镜像。
+- 群晖原生 SPK 是 Geminilake 测试包。已通过解包、非 root 启停、设置码和存储测试，仍需在 DSM 套件中心验收。
+- 飞牛 x86_64 FPK 是本地验收包，和 SPK 一起保存在同次 Actions 的 `MijiaLAN-NAS-x86_64-b{args.build}-test`。飞牛应用中心上架另行提交。
+
+[Linux / NAS 构建与测试包](https://github.com/{repo}/actions/runs/{args.linux_run}) · [安装说明](https://github.com/{repo}/blob/{args.source}/docs/linux.md)
+"""
     release = previous or api('releases', 'POST', dict(tag_name=tag, target_commitish=args.source, name=f'MijiaLAN {args.version}-rs.{args.build} · Rust 体验版', body=body, draft=True, prerelease=True, make_latest='false'))
     existing = {a['name']: a['digest'] for a in release['assets']}
     for p in files:
@@ -193,7 +218,12 @@ if __name__ == '__main__':
     for cmd in ['collect', 'publish']:
         r = sub.add_parser(cmd)
         r.add_argument('--source', required=True); r.add_argument('--version', required=True); r.add_argument('--build', required=True); r.add_argument('--dist', type=Path, default=Path('distribution'))
-        if cmd == 'collect': r.add_argument('--windows', type=Path, required=True); r.add_argument('--mac', type=Path, required=True)
-        else: r.add_argument('--run', required=True)
+        if cmd == 'collect':
+            r.add_argument('--windows', type=Path, required=True)
+            r.add_argument('--mac', type=Path, required=True)
+            r.add_argument('--linux', type=Path)
+        else:
+            r.add_argument('--run', required=True)
+            r.add_argument('--linux-run', type=int)
     args = p.parse_args()
     {'resolve': resolve, 'collect': collect, 'publish': publish, 'refresh-site': refresh_site}[args.command](args)

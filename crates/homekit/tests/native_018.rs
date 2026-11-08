@@ -88,7 +88,7 @@ fn write_only_motor_control_reads_off_and_only_on_sends_a_command() {
 }
 
 #[test]
-fn light_brightness_scales_and_zero_only_writes_the_power_switch() {
+fn light_brightness_powers_on_first_and_zero_preserves_the_level() {
     let source = Specification::bundled("yeelink.light.lamp4").unwrap();
     for (maximum, raw, percent) in [(255, 128, 50), (65535, 32768, 50), (100, 40, 40)] {
         let mut spec: Value = serde_json::from_str(source).unwrap();
@@ -111,7 +111,7 @@ fn light_brightness_scales_and_zero_only_writes_the_power_switch() {
         let (engine, server) = fixture(
             "test.light.scaled",
             &spec.to_string(),
-            [("2.2", json!(raw))],
+            [("2.1", json!(false)), ("2.2", json!(raw))],
         );
         let db = mapping::build(&engine, &mut Layout::default());
         let (aid, iid) = characteristic(&db, "2.2", "8");
@@ -121,11 +121,14 @@ fn light_brightness_scales_and_zero_only_writes_the_power_switch() {
         assert_eq!(db.read(&engine, aid, iid, false), Ok(json!(100)));
         binding.write(&engine, &json!(0)).unwrap();
         let commands = server.commands.lock().unwrap();
-        assert_eq!(commands.len(), 2);
-        assert_eq!(commands[0]["params"][0]["piid"], 2);
-        assert_eq!(commands[0]["params"][0]["value"], maximum);
-        assert_eq!(commands[1]["params"][0]["piid"], 1);
-        assert_eq!(commands[1]["params"][0]["value"], false);
+        assert_eq!(commands.len(), 3);
+        assert_eq!(commands[0]["params"][0]["piid"], 1);
+        assert_eq!(commands[0]["params"][0]["value"], true);
+        assert_eq!(commands[1]["params"][0]["piid"], 2);
+        assert_eq!(commands[1]["params"][0]["value"], maximum);
+        assert_eq!(commands[2]["params"][0]["piid"], 1);
+        assert_eq!(commands[2]["params"][0]["value"], false);
+        assert_eq!(engine.state("77").unwrap().values["2.2"], maximum);
     }
 }
 

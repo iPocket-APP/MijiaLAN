@@ -34,9 +34,12 @@ cp "$binary_root/$profile/mijialan-rust" "$bundle/Contents/MacOS/mijialan-rust"
 cp "$binary_root/$profile/mijia-rust" "$bundle/Contents/MacOS/mijia-rust"
 cp LICENSE THIRD_PARTY_NOTICES.md PRIVACY.md "$bundle/Contents/Resources/"
 ditto licenses "$bundle/Contents/Resources/Licenses"
-if [[ -f resources/macos/AppIcon.icns ]]; then
-  cp resources/macos/AppIcon.icns "$bundle/Contents/Resources/AppIcon.icns"
-fi
+icon_info="$(mktemp -t mijialan-icon-info)"
+trap 'rm -f "$icon_info"' EXIT
+xcrun actool "$PWD/resources/macos/AppIcon.icon" \
+  --compile "$bundle/Contents/Resources" --app-icon AppIcon \
+  --platform macosx --target-device mac --minimum-deployment-target 11.0 \
+  --output-format human-readable-text --output-partial-info-plist "$icon_info"
 cat > "$bundle/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -61,9 +64,7 @@ if [[ -n "${MIJIALAN_APP_NAME:-}" ]]; then
   plutil -replace CFBundleName -string "$MIJIALAN_APP_NAME" "$bundle/Contents/Info.plist"
   plutil -replace CFBundleDisplayName -string "$MIJIALAN_APP_NAME" "$bundle/Contents/Info.plist"
 fi
-if [[ -f "$bundle/Contents/Resources/AppIcon.icns" ]]; then
-  plutil -insert CFBundleIconFile -string AppIcon "$bundle/Contents/Info.plist"
-fi
+/usr/libexec/PlistBuddy -c "Merge '$icon_info'" "$bundle/Contents/Info.plist"
 if [[ "${2:-}" == preview ]]; then
   plutil -replace CFBundleIdentifier -string xyz.ipocket.MijiaLAN.Rust.Preview "$bundle/Contents/Info.plist"
   plutil -replace CFBundleName -string "MijiaLAN Rust Preview" "$bundle/Contents/Info.plist"

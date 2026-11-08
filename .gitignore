@@ -21,6 +21,8 @@ __pycache__/
 *.pkg
 *.msi
 *.deb
+*.spk
+*.fpk
 *.zip
 *.tar.gz
 *.swp

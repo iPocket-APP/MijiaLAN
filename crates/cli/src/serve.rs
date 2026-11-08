@@ -23,6 +23,9 @@ pub struct Options {
     data_dir: PathBuf,
     #[arg(long, default_value = "/keys/master.key")]
     key_file: PathBuf,
+    /// Consume an administrator-provisioned one-time setup code.
+    #[arg(long)]
+    setup_code_file: Option<PathBuf>,
     /// Open a maintenance setup window for an already configured bridge.
     #[arg(long, env = "MIJIALAN_SETUP")]
     setup: bool,
@@ -101,10 +104,15 @@ pub async fn run(options: Options) -> Result<()> {
     let _poller = engine.start_polling();
 
     let mut shutting_down = false;
-    if options.setup || !service.bridge.info().paired {
+    let code_file = options.setup_code_file.as_deref();
+    let staged_setup = code_file
+        .map(std::path::Path::try_exists)
+        .transpose()?
+        .unwrap_or(false);
+    if options.setup || staged_setup || !service.bridge.info().paired {
         let address = SocketAddrV4::new(ip, options.setup_port);
         tokio::select! {
-            result = setup::run(service.clone(), address) => {
+            result = setup::run(service.clone(), address, code_file) => {
                 if let Err(error) = result {
                     if !service.bridge.info().running {
                         return Err(error);

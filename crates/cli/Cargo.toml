@@ -8,6 +8,10 @@ license.workspace = true
 name = "mijia-rust"
 path = "src/main.rs"
 
+[features]
+default = ["system-vault"]
+system-vault = ["mijialan-core/system-vault"]
+
 [dependencies]
 mijialan-core.workspace = true
 mijialan-homekit.workspace = true

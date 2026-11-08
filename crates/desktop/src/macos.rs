@@ -1,4 +1,5 @@
 //! Native panel placement and application lifetime; device logic remains in the shared Rust core.
+pub mod login_item;
 mod menu;
 pub use menu::{defer_panel_dismiss, is_tracking_menu, show_popup_menu};
 

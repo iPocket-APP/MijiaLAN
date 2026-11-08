@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["system-vault"]
+system-vault = ["dep:keyring"]
+
 [dependencies]
 aes = "0.8.4"
 cbc = { version = "0.1.2", features = ["alloc", "block-padding"] }
@@ -30,10 +34,10 @@ tokio = { version = "1", features = ["macros", "net", "rt", "time"] }
 tokio = { version = "1", features = ["io-util"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-keyring = { version = "3.6.3", features = ["apple-native"] }
+keyring = { version = "3.6.3", optional = true, features = ["apple-native"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-keyring = { version = "3.6.3", features = ["windows-native"] }
+keyring = { version = "3.6.3", optional = true, features = ["windows-native"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3.6.3", features = ["sync-secret-service", "crypto-rust"] }
+keyring = { version = "3.6.3", optional = true, features = ["sync-secret-service", "crypto-rust"] }

@@ -2805,6 +2805,88 @@ impl Dashboard {
             .child(self.compact_icon("chevron.right", 10., p.tertiary))
             .on_click(cx.listener(move |this, _, _, cx| this.go(route.clone(), cx)))
     }
+    #[cfg(target_os = "macos")]
+    fn compact_login_item(&self, p: Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::macos::login_item::{self, Status};
+
+        let demo = self.engine.is_demo();
+        let status = if demo { None } else { login_item::status() };
+        let description = if demo {
+            l(
+                "演示模式中无法更改登录项。",
+                "Login items are disabled in demo mode.",
+            )
+        } else {
+            match status {
+                Some(Status::PendingApproval) => l(
+                    "请在系统设置中允许 MijiaLAN 自动启动。",
+                    "Allow MijiaLAN to launch in System Settings.",
+                ),
+                None => l(
+                    "macOS 暂时无法读取登录项状态。",
+                    "Login item status is unavailable.",
+                ),
+                _ => l(
+                    "登录 Mac 后在菜单栏启动 MijiaLAN。",
+                    "Start MijiaLAN in the menu bar when you log in.",
+                ),
+            }
+        };
+        section(l("启动", "Startup"), p)
+            .child(
+                group(p).child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .px(px(12.))
+                        .py(px(11.))
+                        .child(self.compact_icon("power", 24., p.primary))
+                        .child(
+                            div()
+                                .flex_1()
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.))
+                                .child(label(l("登录时启动", "Launch at Login"), 13., p.primary))
+                                .child(label(description, 11., p.secondary)),
+                        )
+                        .child(
+                            Switch::new("launch-at-login")
+                                .checked(status.is_some_and(|status| status != Status::Disabled))
+                                .disabled(status.is_none())
+                                .on_click(cx.listener(move |this, enabled, _, cx| {
+                                    if !this.engine.is_demo() {
+                                        let result = login_item::set(*enabled);
+                                        this.error = result.is_err();
+                                        this.status =
+                                            result.err().map_or_else(String::new, |error| {
+                                                l(
+                                                    &format!("无法更改登录项。{error}"),
+                                                    &format!(
+                                                        "Could not change the login item. {error}"
+                                                    ),
+                                                )
+                                            });
+                                    }
+                                    cx.notify();
+                                })),
+                        ),
+                ),
+            )
+            .when(status == Some(Status::PendingApproval), |view| {
+                view.child(
+                    self.compact_button(
+                        "login-items-settings",
+                        l("打开登录项设置…", "Open Login Items Settings…"),
+                        p,
+                        false,
+                    )
+                    .on_click(|_, _, _| login_item::open_settings()),
+                )
+            })
+    }
+
     fn compact_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = Palette::new(cx);
         let config = self.engine.store.config();
@@ -2822,6 +2904,10 @@ impl Dashboard {
             .px(px(16.))
             .pt(px(6.))
             .pb(px(14.));
+        #[cfg(target_os = "macos")]
+        {
+            body = body.child(self.compact_login_item(p, cx)).child(divider(p));
+        }
         body = body.child(
             section(l("Apple「家庭」", "Apple Home"), p)
                 .child(
