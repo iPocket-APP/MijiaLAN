@@ -39,6 +39,9 @@ struct LocalizationTests {
             let power = try #require(DeviceCapabilityCatalog.capabilities(schema: schema, model: "yeelink.light.lamp4").first { $0.name == "on" && $0.service == "light" })
             #expect(power.formatted(.bool(true)) == "On")
             #expect(power.formatted(nil) == "No Reading")
+            let purifier = try #require(DeviceSchema.bundled(model: "zhimi.airpurifier.rma1"))
+            let pm = try #require(DeviceCapabilityCatalog.capabilities(schema: purifier, model: "zhimi.airpurifier.rma1").first { $0.name == "pm2.5-density" })
+            #expect(pm.formatted(.number(9)) == "9 µg/m³")
         }
         L10n.$overrideLanguage.withValue(.zhHans) {
             #expect(MiioError.invalidToken.errorDescription == "token 应为 32 位十六进制")

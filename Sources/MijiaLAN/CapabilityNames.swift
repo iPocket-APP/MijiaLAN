@@ -144,7 +144,8 @@ public enum CapabilityNames {
         case "days": return L10n.tr(" 天", " d")
         case "watt": return " W"
         case "arcdegrees": return "°"
-        case "micrograms-per-cubic-meter": return " µg/m³"
+        // Purifier specs spell it out with a Greek mu.
+        case "micrograms-per-cubic-meter", "μg/m3": return " µg/m³"
         case "grams": return " g"
         case "none", nil: return ""
         default: return " " + (unit ?? "")
