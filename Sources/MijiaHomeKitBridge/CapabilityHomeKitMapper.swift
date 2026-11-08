@@ -6,6 +6,8 @@ import MijiaLAN
 public enum CapabilityHAPBinding: Sendable {
     public enum Conversion: Sendable {
         case direct, active, running, mired, fanSpeed, purifierMode, filterChange
+        /// Map the device's PM2.5 reading in µg/m³ to the five HomeKit air quality levels.
+        case airQuality
         /// Power as a HAP current state: off is 0 (inactive), on is the given working state.
         case working(UInt8)
         /// Power plus the mode property as HAP current heater cooler state.
@@ -183,8 +185,8 @@ public enum CapabilityHomeKitMapper {
             let key = "sensor:" + cap.id
             builder.service(key, type: type)
             if cap.name == "pm2.5-density" {
-                // No invented air-quality scale: HAP 0 means unknown; PM2.5 remains the actual measurement.
-                builder.add(key, type: HAPCharacteristicType(rawValue: "95"), format: .uint8, binding: .constant(.uint8(0)), min: 0, max: 5)
+                // Report the air quality grade alongside the raw PM2.5 reading.
+                builder.add(key, type: HAPCharacteristicType(rawValue: "95"), format: .uint8, binding: .property(cap.id, .airQuality), min: 0, max: 5)
             }
             if cap.name == "filter-life-level" {
                 builder.add(key, type: HAPCharacteristicType(rawValue: "AC"), format: .uint8, binding: .property(cap.id, .filterChange), min: 0, max: 1)
@@ -661,6 +663,9 @@ public enum CapabilityHomeKitMapper {
                 return .int32(Int32(mired))
             case .purifierMode: return n.map { .uint8($0 == 0 ? 1 : 0) }
             case .filterChange: return n.map { .uint8($0 <= 0 ? 1 : 0) }
+            case .airQuality:
+                // Use the historical HJ 633-2012 PM2.5 breakpoints as fixed thresholds for device readings.
+                return n.map { pm in .uint8(1 + UInt8([35.0, 75, 115, 150].filter { pm > $0 }.count)) }
             case .fanSpeed:
                 guard let power = s.value("fan", "on")?.boolValue else { return nil }
                 return n.map { .float(power ? $0 : 0) }

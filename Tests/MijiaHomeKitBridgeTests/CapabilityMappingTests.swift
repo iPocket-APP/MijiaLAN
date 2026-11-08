@@ -133,6 +133,23 @@ struct CapabilityMappingTests {
         #expect(CapabilityHomeKitMapper.value(binding, snapshot: s, legacyValues: [:], names: [:]) == .uint8(0))
     }
 
+    @Test("HomeKit air quality uses the device PM2.5 thresholds")
+    func purifierAirQuality() throws {
+        var s = try snapshot("zhimi.airpurifier.rma1")
+        var ids: [String: UInt64] = [:]
+        let plan = CapabilityHomeKitMapper.plan(snapshot: s, legacyDevice: smart(s), names: [:], identifiers: &ids)
+        let quality = try #require(plan.services.first { $0.type.rawValue == "8D" }?.characteristics.first { $0.type.rawValue == "95" })
+        let binding = try #require(plan.bindings[quality.iid])
+        #expect(CapabilityHomeKitMapper.value(binding, snapshot: s, legacyValues: [:], names: [:]) == nil)
+        s.health = LANDeviceHealth(state: .online)
+        let grades: [(pm: Double, level: UInt8)] = [(0, 1), (9, 1), (35, 1), (36, 2), (75, 2), (76, 3), (115, 3), (116, 4), (150, 4), (151, 5), (600, 5)]
+        for (pm, level) in grades {
+            s.readings["p:3:4"] = DeviceReading(value: .number(pm), code: 0)
+            #expect(CapabilityHomeKitMapper.value(binding, snapshot: s, legacyValues: [:], names: [:]) == .uint8(level), "PM2.5 \(pm)")
+        }
+        #expect(throws: HAPError.self) { try CapabilityHomeKitMapper.commands(binding, value: .uint8(1), snapshot: s) }
+    }
+
     @Test("The air conditioner companion's climate never reads a mode MijiaCore was not given")
     func companionUnlistedMode() throws {
         var s = try snapshot("lumi.acpartner.mcn02")
