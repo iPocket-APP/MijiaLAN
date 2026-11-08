@@ -4,5 +4,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential musl-tools curl ca-certificates git python3 binutils librsvg2-bin \
     && rm -rf /var/lib/apt/lists/* \
     && rustup target add x86_64-unknown-linux-musl
-ENV CC_x86_64_unknown_linux_musl=musl-gcc \
-    CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
+# Compile C dependencies with musl headers. Rust's default final linker
+# emits a static PIE without the interpreter injected by musl-gcc.
+ENV CC_x86_64_unknown_linux_musl=musl-gcc
