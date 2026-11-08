@@ -29,6 +29,8 @@ actor WireHAPController {
     private(set) var accessoryKey = Data()
     private(set) var receivedFrames = 0
     private(set) var largestFrame = 0
+    /// Do not silently hide an EVENT that overtakes the response to the current request.
+    private(set) var eventsBeforeLastResponse = 0
 
     init(port: UInt16) {
         connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
@@ -57,7 +59,22 @@ actor WireHAPController {
 
     func close() { connection.cancel() }
 
+    /// A corrupt authenticated frame cannot be retried on the same session. The peer must close it,
+    /// rather than leave Home waiting until this test client's own five-second watchdog fires.
+    func peerClosesAfterInvalidFrame() async throws -> Bool {
+        guard readKey != nil else { throw Failure.invalidPairing }
+        try await send(Data([1, 0] + [UInt8](repeating: 0, count: 17)))
+        let start = ContinuousClock.now
+        do {
+            _ = try await readRaw()
+            return false
+        } catch {
+            return start.duration(to: .now) < .seconds(2)
+        }
+    }
+
     func request(_ method: String, _ path: String, body: Data = Data()) async throws -> Message {
+        eventsBeforeLastResponse = 0
         let contentType = path.hasPrefix("/pair") ? "application/pairing+tlv8" : "application/hap+json"
         var bytes = Data("\(method) \(path) HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: \(contentType)\r\nContent-Length: \(body.count)\r\n\r\n".utf8)
         bytes.append(body)
@@ -75,9 +92,15 @@ actor WireHAPController {
         try await send(bytes)
         while true {
             let message = try await receive()
-            if message.event { events.append(message) }
+            if message.event { eventsBeforeLastResponse += 1; events.append(message) }
             else { return message }
         }
+    }
+
+    /// Events that arrived while a `request` waited for its response, i.e. between a request and its response.
+    func takeEventsBeforeResponses() -> [Message] {
+        defer { events.removeAll() }
+        return events
     }
 
     func nextEvent() async throws -> Message {

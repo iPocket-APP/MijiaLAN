@@ -100,6 +100,21 @@ public actor HAPBridge {
     private var onCharacteristicChange: (@Sendable (_ subscribers: Set<Int>, _ eventData: Data) async -> Void)?
     private var notificationTail: Task<Void, Never>?
 
+    private struct WriteOrigin: Sendable {
+        let bridgeID: ObjectIdentifier
+        let token = UUID()
+    }
+
+    private struct PendingWrite {
+        let connectionID: Int
+        var knownValue: HAPCharacteristicValue?
+    }
+
+    // A task-local follows awaited adapters and their child tasks without mixing concurrent writers.
+    // Tokens also bound the lifetime: a child task that outlives its write must not mute later events.
+    @TaskLocal private static var writeOrigin: WriteOrigin?
+    private var pendingWrites: [String: [UUID: PendingWrite]] = [:]
+
     /// Set the handler called when a subscribed characteristic value changes.
     public func setCharacteristicChangeHandler(
         _ handler: @escaping @Sendable (_ subscribers: Set<Int>, _ eventData: Data) async -> Void
@@ -276,7 +291,12 @@ public actor HAPBridge {
         return nil
     }
 
-    public func writeCharacteristic(aid: UInt64, iid: UInt64, value: HAPCharacteristicValue) async throws {
+    func characteristicType(aid: UInt64, iid: UInt64) -> HAPCharacteristicType? {
+        accessories[aid]?.services.lazy.flatMap(\.characteristics).first { $0.iid == iid }?.type
+    }
+
+    public func writeCharacteristic(aid: UInt64, iid: UInt64, value: HAPCharacteristicValue,
+                                    originatingConnectionID: Int? = nil) async throws {
         guard var accessory = accessories[aid] else {
             throw HAPError.notFound
         }
@@ -302,12 +322,25 @@ public actor HAPBridge {
 
         guard found, let normalizedValue else { throw HAPError.notFound }
         let key = Self.handlerKey(aid: aid, iid: iid)
-        if let handler = writeHandlers[key] {
-            try await handler(normalizedValue)
+        let origin = originatingConnectionID.map { connectionID in
+            let origin = WriteOrigin(bridgeID: ObjectIdentifier(self))
+            pendingWrites[key, default: [:]][origin.token] = PendingWrite(connectionID: connectionID, knownValue: normalizedValue)
+            return origin
         }
-        // Handlers that perform a real device readback own the resulting value. A failed write never changes cache.
-        if !managedValues.contains(key) {
-            updateCharacteristic(aid: aid, iid: iid, value: normalizedValue)
+        defer {
+            if let origin {
+                pendingWrites[key]?[origin.token] = nil
+                if pendingWrites[key]?.isEmpty == true { pendingWrites[key] = nil }
+            }
+        }
+        try await Self.$writeOrigin.withValue(origin) {
+            if let handler = writeHandlers[key] {
+                try await handler(normalizedValue)
+            }
+            // Handlers that perform a real device readback own the resulting value. A failed write never changes cache.
+            if !managedValues.contains(key) {
+                updateCharacteristic(aid: aid, iid: iid, value: normalizedValue)
+            }
         }
     }
 
@@ -349,7 +382,7 @@ public actor HAPBridge {
 
                     // Notify subscribers if value changed
                     if forceNotify || recovered || oldValue != normalized {
-                        notifySubscribers(aid: aid, iid: iid, value: normalized)
+                        notifySubscribers(aid: aid, iid: iid, value: normalized, includeOrigin: forceNotify || recovered)
                     }
                     return
                 }
@@ -388,9 +421,10 @@ public actor HAPBridge {
         }
     }
 
-    private func notifySubscribers(aid: UInt64, iid: UInt64, value: HAPCharacteristicValue?, status: HAPStatus = .success) {
+    private func notifySubscribers(aid: UInt64, iid: UInt64, value: HAPCharacteristicValue?,
+                                   status: HAPStatus = .success, includeOrigin: Bool = false) {
         let key = Self.handlerKey(aid: aid, iid: iid)
-        guard let subscribers = subscriptions[key], !subscribers.isEmpty else {
+        guard var subscribers = subscriptions[key], !subscribers.isEmpty else {
             logger.debug("Event notify: aid=\(aid) iid=\(iid) — no subscribers")
             return
         }
@@ -399,7 +433,22 @@ public actor HAPBridge {
             return
         }
 
-        logger.debug("Event notify: aid=\(aid) iid=\(iid) status=\(status.rawValue) → \(subscribers.count) subscriber(s)")
+        if var writes = pendingWrites[key] {
+            // The PUT acknowledges the requested value. Once a different value or error has been
+            // queued for the writer, a later return to the requested value must reach it too.
+            if !includeOrigin, status == .success, let value, let origin = Self.writeOrigin,
+               origin.bridgeID == ObjectIdentifier(self), let write = writes[origin.token],
+               write.knownValue == value, subscribers.remove(write.connectionID) != nil {
+                logger.debug("Event echo suppressed: connection \(write.connectionID) aid=\(aid) iid=\(iid)")
+            }
+            for (token, write) in writes where subscribers.contains(write.connectionID) {
+                writes[token]?.knownValue = status == .success ? value : nil
+            }
+            pendingWrites[key] = writes
+        }
+        guard !subscribers.isEmpty else { return }
+
+        logger.debug("Event notify: aid=\(aid) iid=\(iid) status=\(status.rawValue) value=\(String(describing: value)) → \(subscribers.count) subscriber(s)")
         let eventData = Self.buildEventPayload(aid: aid, iid: iid, value: value, status: status)
         enqueueNotification(subscribers: subscribers, eventData: eventData)
     }

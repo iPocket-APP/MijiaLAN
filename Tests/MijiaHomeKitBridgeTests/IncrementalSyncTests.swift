@@ -192,8 +192,8 @@ struct IncrementalSyncTests {
         await fixture.stop()
     }
 
-    @Test("Same-value HomeKit writes still force a confirmation event after delta suppression")
-    func forcedConfirmation() async throws {
+    @Test("An acknowledged same-value property write does not manufacture a change event")
+    func sameValueWrite() async throws {
         let fixture = try await Fixture.make()
         let events = CapturedEvents()
         let iid = try #require(await fixture.hap.accessoryDatabase().first { $0.aid == 2 }?.services.flatMap(\.characteristics).first { $0.type == .rotationSpeed }?.iid)
@@ -201,10 +201,16 @@ struct IncrementalSyncTests {
         await fixture.hap.setCharacteristicChangeHandler { _, data in await events.append(data) }
         try await fixture.hap.writeCharacteristic(aid: 2, iid: iid, value: .float(50))
         await fixture.settle()
-        for _ in 0..<100 where await events.count == 0 { try await Task.sleep(for: .milliseconds(2)) }
-        #expect(await events.count >= 1)
         #expect(await fixture.hap.readStatus(aid: 2, iid: iid) == .success)
         #expect(await fixture.hap.readCharacteristic(aid: 2, iid: iid) == .float(50))
+        // A subsequent change is a FIFO barrier: any notification from the no-op write precedes it.
+        await fixture.hap.updateCharacteristic(aid: 2, iid: iid, value: .float(60))
+        for _ in 0..<100 {
+            if await events.captured().last.map({ String(decoding: $0, as: UTF8.self).contains("60") }) == true { break }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        let eventCount = await events.count
+        #expect(eventCount == 1)
         await fixture.stop()
     }
 

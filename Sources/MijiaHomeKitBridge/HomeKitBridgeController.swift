@@ -131,10 +131,16 @@ public final class HomeKitBridgeController {
     @ObservationIgnored private var capabilityHiddenIDs: Set<String>?
     @ObservationIgnored private var capabilityStructureDirty = true
     @ObservationIgnored private var capabilityPushTask: Task<Void, Never>?
+    /// Devices with writes from Home still waiting for the device, by count. Their readings are published once the
+    /// writes finish: a light read mid-fade would otherwise tell Home a level it did not ask for.
+    @ObservationIgnored private var settlingWrites: [String: Int] = [:]
     @ObservationIgnored private var savedLayout: Layout?
     @ObservationIgnored private var savedCapabilityIIDs: [String: [String: UInt64]]?
     @ObservationIgnored private var capabilityIIDs: [String: [String: UInt64]] = [:]
     static let capabilityIIDsKey = "homekit_capability_iids_v1"
+    /// Per miIO attempt for writes from Apple Home, which shows "Updating" until it has the device's answer.
+    /// Wi-Fi power save delays answers by up to about 2 s, the same allowance as the reachability probe.
+    static let writeAttemptTimeout: Duration = .milliseconds(2500)
     @ObservationIgnored private var secrets: HomeKitBridgeSecrets?
     @ObservationIgnored var bridge: HAPBridge?
     @ObservationIgnored private var service: AppleHAPService?
@@ -570,7 +576,7 @@ public final class HomeKitBridgeController {
     private func commitCapabilityValues(bridge: HAPBridge) async {
         guard let capabilities else { return }
         let legacyDevices = Dictionary(capabilities.synthesizedHome().devices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for (did, entry) in capabilityPlans {
+        for (did, entry) in capabilityPlans where settlingWrites[did] == nil {
             guard let snapshot = capabilities.snapshots[did] else { continue }
             let forced = forceRefresh.remove(did) != nil
             let legacy = legacyDevices[did].map {
@@ -612,7 +618,18 @@ public final class HomeKitBridgeController {
             case .legacy(let role) where role.isConfiguredName: try await handleWrite(deviceId: did, role: role, value: value)
             default:
                 let commands = try CapabilityHomeKitMapper.commands(binding, value: value, snapshot: snapshot)
-                if !commands.isEmpty { try await capabilities.execute(did: did, .batch(commands), coalesce: true) }
+                // Not coalesced: a controller sends its next write only after this one's response, so waiting for
+                // a later value only delays every write, such as each step of a brightness slider.
+                if !commands.isEmpty {
+                    settlingWrites[did, default: 0] += 1
+                    defer {
+                        settlingWrites[did, default: 1] -= 1
+                        if settlingWrites[did] == 0 { settlingWrites[did] = nil }
+                    }
+                    try await MiioClient.$attemptTimeout.withValue(Self.writeAttemptTimeout) {
+                        try await capabilities.execute(did: did, .batch(commands))
+                    }
+                }
             }
         } catch {
             if let bridge { await pushCapabilityValues(bridge: bridge) }
@@ -624,8 +641,12 @@ public final class HomeKitBridgeController {
         }
         if let bridge {
             await pushCapabilityValues(bridge: bridge)
-            if let entry = capabilityPlans[did], let current = await bridge.readCharacteristic(aid: entry.aid, iid: iid) {
-                // A momentary button is already false in the cache; still notify Home to undo its optimistic true.
+            // A correction restores the confirmed value after an optimistic write, such as a momentary button.
+            // Zero brightness turns the lamp off while preserving its last level. Resending that level
+            // here would overwrite the controller's completed dimmer gesture.
+            if let entry = capabilityPlans[did],
+               entry.characteristics[iid]?.type != .brightness || value != .int32(0),
+               let current = await bridge.readCharacteristic(aid: entry.aid, iid: iid), current != value {
                 await bridge.updateCharacteristic(aid: entry.aid, iid: iid, value: current, forceNotify: true)
             }
         }

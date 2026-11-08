@@ -741,6 +741,9 @@ public enum CapabilityHomeKitMapper {
         case .option(let id, let v): return n == 0 ? [] : [.set(id, v)]
         case .property(let id, let conversion):
             guard let c = s.capabilities.first(where: { $0.id == id }) else { throw HAPError.notFound }
+            // Home can write brightness before On. Like the app's dimmer, confirm power in the
+            // device queue first: Yeelight rejects set_bright while off, which Home sees as unreachable.
+            let primaryLightBrightness = s.schema.category == "light" && s.capability("light", "brightness")?.id == id
             switch conversion {
             case .mired:
                 guard n > 0 else { throw HAPError.invalidValue }
@@ -776,9 +779,12 @@ public enum CapabilityHomeKitMapper {
                 guard (0...100).contains(n), let lo = c.min, let hi = c.max, hi > lo else { throw HAPError.invalidValue }
                 if c.name == "brightness", n == 0, let power = s.capability("light", "on") { return [.set(power.id, .bool(false))] }
                 let raw = lo + ((n * (hi - lo) / 100) / c.step).rounded() * c.step
-                return [.set(id, .number(min(hi, max(lo, raw))))]
+                let target = min(hi, max(lo, raw))
+                if primaryLightBrightness { return [.setLightBrightness(target)] }
+                return [.set(id, .number(target))]
             case .active, .direct:
                 if c.name == "brightness", n == 0, let power = s.capability("light", "on") { return [.set(power.id, .bool(false))] }
+                if primaryLightBrightness { return [.setLightBrightness(n)] }
                 return [.set(id, c.format == "bool" ? .bool(n != 0) : .number(n))]
             default: throw HAPError.readOnly
             }
