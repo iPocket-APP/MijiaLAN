@@ -2,6 +2,7 @@ import AppKit
 import MijiaCore
 import MijiaHomeKitBridge
 import MijiaLAN
+import ServiceManagement
 import SwiftUI
 
 struct ControlCenterSettings: View {
@@ -13,6 +14,10 @@ struct ControlCenterSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            LaunchAtLoginSettings()
+
+            Divider()
+
             SettingsSection(L10n.tr("Apple「家庭」", "Apple Home")) {
                 SettingsGroup {
                     SettingsToggleRow(L10n.tr("启用家庭桥接", "Enable Home Bridge"), symbol: "house", isOn: $bridge.isEnabled,
@@ -106,6 +111,81 @@ struct ControlCenterSettings: View {
         }
         .font(.system(size: 13))
         .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 14)
+    }
+}
+
+private struct LaunchAtLoginSettings: View {
+    @Environment(\.panelPresented) private var panelPresented
+    @State private var status: SMAppService.Status?
+    @State private var errorMessage: String?
+
+    private let isEphemeral = ProcessInfo.processInfo.environment["MIJIALAN_EPHEMERAL"] == "1" ||
+        ProcessInfo.processInfo.environment["MIJIALAN_UI_PREVIEW"] == "1"
+
+    var body: some View {
+        SettingsSection(L10n.tr("启动", "Startup")) {
+            SettingsGroup {
+                SettingsToggleRow(L10n.tr("登录时启动", "Launch at Login"), symbol: "power",
+                                  isOn: Binding(get: { registered == true }, set: setRegistered),
+                                  subtitle: subtitle, statusColor: status == .requiresApproval ? .orange : nil)
+                    .disabled(registered == nil)
+            }
+            if status == .requiresApproval {
+                Button(L10n.tr("打开登录项设置…", "Open Login Items Settings…")) {
+                    SMAppService.openSystemSettingsLoginItems()
+                }
+                .controlSize(.small).padding(.leading, 3)
+            }
+            if let errorMessage {
+                Text(L10n.tr("无法更改登录项。\(errorMessage)", "Could not change the login item. \(errorMessage)"))
+                    .font(.system(size: 11)).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true).padding(.leading, 3)
+            }
+        }
+        .onChange(of: panelPresented, initial: true) { _, presented in
+            guard presented, !isEphemeral else { return }
+            status = SMAppService.mainApp.status
+            errorMessage = nil
+        }
+    }
+
+    // A pending item is still registered. The switch can remove it while macOS approval is outstanding.
+    private var registered: Bool? {
+        switch status {
+        case .enabled, .requiresApproval: true
+        // A fresh main app can report .notFound before its first successful registration.
+        case .notRegistered, .notFound: false
+        default: nil
+        }
+    }
+
+    private var subtitle: String {
+        if isEphemeral { return L10n.tr("预览模式下无法更改登录项。", "Login items can’t be changed in preview mode.") }
+        if status == .requiresApproval {
+            return L10n.tr("系统尚未允许自动启动。请在系统设置中允许 MijiaLAN。",
+                           "macOS hasn’t allowed automatic launch. Allow MijiaLAN in System Settings.")
+        }
+        if registered == nil, status != nil {
+            return L10n.tr("macOS 暂时无法读取登录项状态。", "macOS couldn’t read the login item status.")
+        }
+        return L10n.tr("登录 Mac 后在菜单栏启动 MijiaLAN。", "Start MijiaLAN in the menu bar when you log in.")
+    }
+
+    private func setRegistered(_ requested: Bool) {
+        guard !isEphemeral else { return }
+        let service = SMAppService.mainApp
+        status = service.status
+        errorMessage = nil
+        guard let registered, registered != requested else { return }
+
+        var failure: String?
+        do {
+            if requested { try service.register() } else { try service.unregister() }
+        } catch {
+            failure = error.localizedDescription
+        }
+        status = service.status
+        if self.registered != requested { errorMessage = failure }
     }
 }
 
