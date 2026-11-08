@@ -6,15 +6,14 @@ from pathlib import Path
 import socket
 import subprocess
 import sys
-import tarfile
 import tempfile
 import urllib.error
 import urllib.request
 
 
 def unpack(path, dest):
-    with tarfile.open(path) as package:
-        package.extractall(dest, filter="data")
+    dest.mkdir()
+    subprocess.run(["tar", "-xf", path, "-C", dest, "--no-same-owner", "--no-same-permissions"], check=True)
 
 
 def test_package(package, root, fnos):

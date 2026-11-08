@@ -1,4 +1,4 @@
-//! Expected native 0.1.4 behavior, using the same manufacturer specifications.
+//! Expected native bridge behavior, using the same manufacturer specifications.
 use super::*;
 
 fn binding<'a>(db: &'a Database, service: &str, kind: &str) -> &'a Binding {
@@ -148,6 +148,43 @@ fn purifier_speed_selects_favorite_mode_and_power_in_order() {
     assert_eq!(plan(b, &state, json!(0)), [(power, json!(false))]);
     characteristic(&db, "BB", "A7");
 }
+
+#[test]
+fn purifier_air_quality_uses_pm25_and_preserves_the_raw_reading() {
+    let model = "zhimi.airpurifier.rma1";
+    let (engine, mut state) = vacuum_fixture(model, Specification::bundled(model).unwrap());
+    let pm25 = state
+        .spec
+        .properties
+        .iter()
+        .find(|p| p.name == "pm2.5-density")
+        .unwrap();
+    assert_eq!(pm25.display(&json!(35)), "35 µg/m³");
+    let key = pm25.key();
+    state.values.remove(&key);
+    let db = snapshot(&engine, state.clone());
+    let quality = binding(&db, "8D", "95");
+    let density = binding(&db, "8D", "C6");
+    assert_eq!(quality.key, key);
+    assert_eq!(quality.read_state(&state, false), Err(-70402));
+    assert_eq!(quality.write(&engine, &json!(1)), Err(-70404));
+    for (pm, grade) in [
+        (0, 1),
+        (35, 1),
+        (36, 2),
+        (75, 2),
+        (76, 3),
+        (115, 3),
+        (116, 4),
+        (150, 4),
+        (151, 5),
+    ] {
+        state.values.insert(key.clone(), json!(pm));
+        assert_eq!(quality.read_state(&state, false), Ok(json!(grade)));
+        assert_eq!(density.read_state(&state, false), Ok(json!(pm)));
+    }
+}
+
 #[test]
 fn climate_gears_share_a_native_slider_and_writable_temperature_is_not_a_sensor() {
     let (engine, mut state) = vacuum_fixture(

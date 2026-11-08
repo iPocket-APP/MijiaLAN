@@ -109,6 +109,7 @@ pub enum Transform {
     },
     Mapped(Vec<(u8, Value)>),
     FilterChange,
+    AirQuality,
 }
 #[derive(Clone)]
 pub struct Binding {
@@ -187,6 +188,16 @@ impl Binding {
             } else {
                 0
             }),
+            Transform::AirQuality => {
+                let pm25 = value.as_f64().filter(|v| *v >= 0.).ok_or(-70402)?;
+                // Match the native bridge's thresholds for the five HomeKit grades.
+                json!(
+                    1 + [35., 75., 115., 150.]
+                        .into_iter()
+                        .filter(|limit| pm25 > *limit)
+                        .count()
+                )
+            }
             Transform::Percent | Transform::Brightness { scaled: true, .. } => {
                 let [min, max, _] = property.range.ok_or(-70402)?;
                 let raw = value.as_f64().filter(|v| v.is_finite()).ok_or(-70402)?;
@@ -846,8 +857,8 @@ fn plan_device<'a>(
                 &format!("sensor:{}:quality", p.key()),
                 "95",
                 "uint8",
-                None,
-                Transform::Fixed(json!(0)),
+                Some(p),
+                Transform::AirQuality,
                 false,
                 Some([0., 5., 1.]),
             );

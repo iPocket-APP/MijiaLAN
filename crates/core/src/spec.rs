@@ -210,6 +210,7 @@ impl Property {
             "percentage" => "%",
             "celsius" => " °C",
             "kelvin" => " K",
+            "micrograms-per-cubic-meter" | "μg/m3" => " µg/m³",
             "none" => "",
             other => other,
         };

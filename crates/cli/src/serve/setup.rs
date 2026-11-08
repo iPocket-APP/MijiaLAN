@@ -544,7 +544,9 @@ mod tests {
             unreachable!()
         };
         let wizard = fixture(Instant::now() + Duration::from_millis(25));
-        let error = run(wizard.service.clone(), address).await.unwrap_err();
+        let error = run(wizard.service.clone(), address, None)
+            .await
+            .unwrap_err();
         assert_eq!(
             error.downcast_ref::<std::io::Error>().unwrap().kind(),
             std::io::ErrorKind::AddrInUse
