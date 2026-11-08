@@ -13,6 +13,7 @@ struct MijiaLANApp: App {
         LANLocalization.configure()
         // Before anything creates a hap-swift logger.
         LoggingSystem.bootstrap(UnifiedLogHandler.init)
+        UnifiedLogHandler.configureMiioTrace()
         let model = AppModel()
         _model = State(initialValue: model)
         delegate.model = model

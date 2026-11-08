@@ -161,7 +161,7 @@ struct CapabilityMappingTests {
         #expect(CapabilityHomeKitMapper.value(binding, snapshot: s, legacyValues: [:], names: [:]).flatMap { brightness.normalizedRead($0) } == .int32(100))
         s.readings["p:2:2"] = DeviceReading(value: .number(128), code: 0)
         #expect(CapabilityHomeKitMapper.value(binding, snapshot: s, legacyValues: [:], names: [:]).flatMap { brightness.normalizedRead($0) } == .int32(50))
-        #expect(try CapabilityHomeKitMapper.commands(binding, value: .int32(100), snapshot: s) == [.set("p:2:2", .number(255))])
+        #expect(try CapabilityHomeKitMapper.commands(binding, value: .int32(100), snapshot: s) == [.setLightBrightness(255)])
         #expect(try CapabilityHomeKitMapper.commands(binding, value: .int32(0), snapshot: s) == [.set("p:2:1", .bool(false))])
         // A light that counts to 100 keeps its readings as they are.
         var plain = try snapshot("yeelink.light.lamp4", model: "test.light.lamp4")

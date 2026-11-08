@@ -1,5 +1,6 @@
 import Foundation
 import MijiaCore
+import Synchronization
 
 /// One miIO device on the LAN. Calls are serialized per device (the actor), which is also what the firmware expects.
 ///
@@ -31,6 +32,15 @@ public actor MiioClient {
     static let clockMaxAge: Duration = .seconds(120)
     /// "User ack timeout": a request ID the device already used, or (pre-MIoT firmware) a method it does not know.
     static let userAckTimeoutCode = -9999
+    /// A shorter per-attempt wait for calls someone is waiting on, such as a write from Apple Home, which shows
+    /// "Updating" until it is answered: a lost packet is then retried sooner. Never lengthens the client's wait.
+    @TaskLocal public static var attemptTimeout: Duration?
+    private static let traceSink = Mutex<(@Sendable (String) -> Void)?>(nil)
+
+    /// Installs an opt-in sink for LAN call timings and payloads. Nil disables tracing.
+    public nonisolated static func setTrace(_ sink: (@Sendable (String) -> Void)?) {
+        traceSink.withLock { $0 = sink }
+    }
 
     public init(
         host: String,
@@ -63,6 +73,29 @@ public actor MiioClient {
     /// wrong token shows up; that case throws `MiioError.noEncryptedReply` rather than `.timeout`.
     /// `timeout` overrides the client's per-attempt wait for this call.
     public func call(_ method: String, params: JSONValue = .array([]), timeout: Duration? = nil, retryCount: Int? = nil) async throws -> JSONValue {
+        guard let trace = Self.traceSink.withLock({ $0 }) else {
+            return try await attempt(method, params: params, timeout: timeout, retryCount: retryCount)
+        }
+        let started = ContinuousClock.now
+        func record(_ outcome: String) {
+            let line = "\(host) \(method) \(params.compactJSONString) -> \(outcome) after \(started.duration(to: .now))"
+            let deviceToken = MiioToken.hex(token)
+            trace(deviceToken.isEmpty ? line : line.replacingOccurrences(
+                of: deviceToken, with: "<redacted>", options: .caseInsensitive))
+        }
+        do {
+            let result = try await attempt(method, params: params, timeout: timeout, retryCount: retryCount)
+            // miIO.info replies can include a device token and network information.
+            record(method == "miIO.info" ? "<device info omitted>" : result.compactJSONString)
+            return result
+        } catch {
+            record(String(describing: error))
+            throw error
+        }
+    }
+
+    private func attempt(_ method: String, params: JSONValue, timeout: Duration?, retryCount: Int?) async throws -> JSONValue {
+        let timeout = timeout ?? Self.attemptTimeout.map { min($0, self.timeout) }
         await acquire()
         defer { release() }
         try Task.checkCancellation()

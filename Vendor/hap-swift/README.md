@@ -24,8 +24,18 @@ passes it to characteristic handling so pairing administration can enforce contr
 despite the upstream log text calling them a hash. MijiaLAN's app log handler also disables debug/trace dumps
 by default and marks dynamic HAP log content private.
 
-`CharacteristicProtocol.handleGetAccessories` checks the trace log level before converting its JSON response
-body to a string, avoiding that extra allocation when body tracing is disabled.
+`CharacteristicProtocol` checks the debug log level before converting accessory/read response bodies to strings,
+avoiding that extra allocation in normal operation. Diagnostic messages include connection IDs; the Apple
+transport also records connection endpoints, response/event submission and socket completion. PUT diagnostics
+include request values, per-characteristic write errors and 207 response statuses; peer closure has a separate
+marker from receive/decryption failures. These are disabled
+by the app's default info log level. Its explicit `MIJIALAN_HAP_DIAGNOSTICS=1` launch option copies only selected
+transport/characteristic/event categories to local stderr; pairing payloads, key material and trace are excluded.
+An absolute `MIJIALAN_HAP_DIAGNOSTICS_FILE` path instead enables a private rotating local capture: two files of
+at most 4 MiB each, a bounded 128 KiB pending queue and a serial utility worker. This lets an intermittent
+failure retain its preceding requests without unbounded disk growth or synchronous file I/O in HAP handlers.
+`MIJIALAN_TRACE_FILE` enables the same rotating capture with miIO calls and their elapsed times included.
+Device-info responses are omitted and the device token is redacted from miIO messages.
 
 Modified Swift files carry an explicit modification notice. `Package.swift` omits upstream test targets because
 only sources are vendored; MijiaLAN maintains its own bridge and protocol regression tests.
@@ -73,6 +83,44 @@ subscription snapshot. Cache mutation order alone does not preserve delivery ord
 when an asynchronous send suspends. A delayed unavailable event could previously
 arrive after a same-value recovery event and leave Home displaying an old error.
 Regression cases cover both existing subscribers and subscribing while unavailable.
+
+### Response priority and failed sessions (2026-11-08)
+
+`HAPConnectionContext` now queues events while receiving or handling an HTTP request, and drains them in FIFO
+order only after submitting its complete response. Encrypting frames in counter order alone did not enforce
+this: initial subscription events and notifications from an awaited write handler could reach the controller
+before the HTTP acknowledgement. The gate also spans incomplete encrypted frames and fragmented HTTP requests;
+idle notifications still send immediately. This follows the response/event separation used by
+[HAP-NodeJS](https://github.com/homebridge/HAP-NodeJS/blob/latest/src/lib/util/eventedhttp.ts).
+
+An authentication/decryption failure now closes that TCP connection and removes its subscriptions. Previously
+processing stopped but the connection stayed open with the same failing frame at its head, so the controller
+could keep waiting on a session that could never recover. Invalid complete requests, over-limit incomplete
+requests and response-encryption failures also close the unusable connection. Pairing storage is unchanged.
+
+Real UDP/TCP regressions cover the `yeelink.light.lamp4` legacy `get_prop` path, power-off/brightness/colour
+temperature reads, initial subscriptions, partial read failures and same-value recovery, and a suspended write
+handler. The controller fixture now records events that arrive before a response rather than silently hiding
+that ordering. A corrupt-frame regression distinguishes prompt peer closure from the client's own watchdog.
+
+### Write-origin events (2026-11-08)
+
+Characteristic PUTs now carry their originating connection through the awaited write handler. Ordinary
+confirmed values matching that write are sent to other subscribers but not echoed back to the writer,
+following the origin exclusion in [Apple HomeKit ADK](https://github.com/apple/HomeKitADK/blob/master/HAP/HAPIPAccessoryServer.c)
+and [HAP-NodeJS](https://github.com/homebridge/HAP-NodeJS/blob/latest/src/lib/util/eventedhttp.ts).
+Linked characteristic changes, errors, recovery and explicit corrective notifications still reach it.
+The context is task-local, scoped to a bridge and characteristic, and expires when the write returns.
+The bridge tracks which value was last queued for the writing connection. A correction or error can
+therefore be followed by another event returning to the original value. Regressions cover two controllers,
+linked updates, physical changes, failures, resets and context lifetime.
+
+### Power and level writes (2026-11-08)
+
+Within a characteristic PUT, power-on writes run before level writes and power-off writes run afterward.
+The status response follows the original order. Standalone nonzero brightness writes use the same device
+queue operation as the app dimmer, which turns on an off lamp before setting its level. Confirming reads are
+published after pending Home writes complete, keeping a lamp's intermediate fade levels out of Home.
 
 ### Primary service (2026-11-05)
 
