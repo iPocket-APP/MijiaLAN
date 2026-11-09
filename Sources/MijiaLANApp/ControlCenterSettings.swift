@@ -373,18 +373,35 @@ private struct SettingsHomeKitDeviceRow: View {
             .padding(.horizontal, 12).padding(.vertical, 10)
             if expanded.wrappedValue, !services.isEmpty {
                 VStack(spacing: 0) {
-                    ForEach(services) { service in
-                        Divider().padding(.leading, 46).padding(.trailing, 12)
-                        SettingsHomeKitServiceRow(service: service, deviceSymbol: DevicePresentation.symbol(model.devices.snapshots[device.did]),
-                                                  enabled: included, isOn: Binding(
-                            get: { model.isInHomeKit(device, service: service) },
-                            set: { model.setInHomeKit(device, service: service, $0) }
-                        ))
+                    if device.model == "cuco.plug.v3" {
+                        serviceRows(services.filter { $0.isPrimary || $0.kind != .switch }, included: included)
+                        let advanced = services.filter { !$0.isPrimary && $0.kind == .switch }
+                        if !advanced.isEmpty {
+                            Divider().padding(.leading, 46).padding(.trailing, 12)
+                            PanelDisclosure(L10n.tr("高级项目（\(advanced.count)）", "Advanced Controls (\(advanced.count))"),
+                                            deviceID: device.did, section: "homekitAdvanced") {
+                                VStack(spacing: 0) { serviceRows(advanced, included: included) }
+                            }
+                            .padding(.leading, 12).padding(.trailing, 12).padding(.vertical, 8)
+                        }
+                    } else {
+                        serviceRows(services, included: included)
                     }
                 }
                 .padding(.bottom, 4)
                 .transition(.opacity)
             }
+        }
+    }
+
+    private func serviceRows(_ services: [CapabilityHomeKitService], included: Bool) -> some View {
+        let deviceSymbol = DevicePresentation.symbol(model.devices.snapshots[device.did])
+        return ForEach(services) { service in
+            Divider().padding(.leading, 46).padding(.trailing, 12)
+            SettingsHomeKitServiceRow(service: service, deviceSymbol: deviceSymbol, enabled: included, isOn: Binding(
+                get: { model.isInHomeKit(device, service: service) },
+                set: { model.setInHomeKit(device, service: service, $0) }
+            ))
         }
     }
 
@@ -418,18 +435,30 @@ private struct SettingsHomeKitServiceRow: View {
     let enabled: Bool
     @Binding var isOn: Bool
 
+    private var hasNumberedHomeName: Bool {
+        service.kind == .switch && service.name != service.defaultName
+            && service.name.range(of: #"^(?:开关|Switch)\s+[0-9]+$"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
     var body: some View {
+        let title = hasNumberedHomeName ? service.defaultName : service.name
         HStack(spacing: 8) {
             Image(systemName: service.isPrimary ? deviceSymbol : service.kind.symbol).font(.system(size: 13))
                 .foregroundStyle(.secondary).frame(width: 18).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
-                Text(service.name).font(.system(size: 12)).foregroundStyle(enabled ? .primary : .secondary)
+                Text(title).font(.system(size: 12)).foregroundStyle(enabled ? .primary : .secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(service.isPrimary ? L10n.tr("主控件 · \(service.kind.title)", "Main control · \(service.kind.title)") : service.kind.title)
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                let detail = if service.isPrimary {
+                    L10n.tr("主控件 · \(service.kind.title)", "Main control · \(service.kind.title)")
+                } else if hasNumberedHomeName {
+                    L10n.tr("「家庭」名称 \(service.name)", "Home name \(service.name)")
+                } else {
+                    service.kind.title
+                }
+                Text(detail).font(.system(size: 11)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 4)
-            Toggle(L10n.tr("在「家庭」中显示\(service.name)", "Show \(service.name) in Home"), isOn: $isOn)
+            Toggle(L10n.tr("在「家庭」中显示\(title)", "Show \(title) in Home"), isOn: $isOn)
                 .labelsHidden().toggleStyle(.switch).controlSize(.mini).disabled(!enabled)
         }
         .padding(.leading, 46).padding(.trailing, 12).padding(.vertical, 5)

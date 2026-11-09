@@ -71,12 +71,18 @@ public struct CapabilityHomeKitService: Identifiable, Equatable, Sendable {
     public let key: String
     /// The name Home shows: one the user gave it in Home, else the service's own, else the accessory's.
     public let name: String
+    /// The device's original label before a Home controller assigned a name.
+    public let defaultName: String
     public let kind: Kind
     public let isPrimary: Bool
     public var id: String { key }
 
-    public init(key: String, name: String, kind: Kind, isPrimary: Bool) {
-        self.key = key; self.name = name; self.kind = kind; self.isPrimary = isPrimary
+    public init(key: String, name: String, kind: Kind, isPrimary: Bool, defaultName: String? = nil) {
+        self.key = key
+        self.name = name
+        self.defaultName = defaultName ?? name
+        self.kind = kind
+        self.isPrimary = isPrimary
     }
 }
 
@@ -274,12 +280,14 @@ public enum CapabilityHomeKitMapper {
         let p = plan(snapshot: s, legacyDevice: legacyDevice, names: names, identifiers: &ids)
         return zip(p.serviceKeys, p.services).map { key, service in
             // Home prefers the Configured Name; a service with neither, such as the main one, shows the accessory's.
-            let name = [HomeKitAccessoryMapper.configuredNameType, .name].lazy.compactMap { type -> String? in
+            let titles = [HomeKitAccessoryMapper.configuredNameType, .name].lazy.compactMap { type -> (name: String, original: String?)? in
                 guard let c = service.characteristics.first(where: { $0.type == type }), let binding = p.bindings[c.iid],
                       case .string(let text)? = value(binding, snapshot: s, legacyValues: [:], names: names) else { return nil }
-                return text
+                if case .name(_, let title) = binding { return (text, HAPString.bounded(title)) }
+                return (text, nil)
             }.first
-            return CapabilityHomeKitService(key: key, name: name ?? p.info.name, kind: kind(of: service.type), isPrimary: service.isPrimary)
+            return CapabilityHomeKitService(key: key, name: titles?.name ?? p.info.name, kind: kind(of: service.type),
+                                            isPrimary: service.isPrimary, defaultName: titles?.original)
         }
     }
 

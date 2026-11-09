@@ -79,6 +79,13 @@ struct ServiceSelectionTests {
                 // A name given in Home wins.
                 let renamed = CapabilityHomeKitMapper.services(snapshot: s, legacyDevice: smart(s), names: ["sensor:p:3:4": "卧室空气"])
                 #expect(renamed.first { $0.key == "sensor:p:3:4" }?.name == "卧室空气")
+
+                let plug = try snapshot("cuco.plug.v3")
+                let plugServices = CapabilityHomeKitMapper.services(snapshot: plug, legacyDevice: smart(plug),
+                                                                    names: ["control:p:8:1": "开关 14"])
+                let countdown = try #require(plugServices.first { $0.key == "control:p:8:1" })
+                #expect(countdown.name == "开关 14")
+                #expect(countdown.defaultName == plug.capabilitiesByID["p:8:1"]?.displayTitle)
             }
         }
     }
