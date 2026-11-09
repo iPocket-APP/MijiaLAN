@@ -233,6 +233,8 @@ private struct SoftwareUpdateSettings: View {
 }
 
 struct SettingsHomeKitManagement: View {
+    /// The panel session's key for a device row that lists its services.
+    static let expansionSection = "homekit"
     let model: AppModel
     @Bindable var bridge: HomeKitBridgeController
     @State private var confirmingReset = false
@@ -284,6 +286,8 @@ struct SettingsHomeKitManagement: View {
                     }
                     Text(L10n.tr("关闭已加入的设备，会同时移除它在「家庭」中的房间、场景和自动化。已原生接入 HomeKit 的设备可关闭，避免重复。", "Turning off an included device also removes its room, scenes, and automations from Home. Turn off devices already connected through native HomeKit to avoid duplicates."))
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text(L10n.tr("点按设备可逐项选择显示在「家庭」中的控件和传感器。关闭某一项会移除用到它的场景和自动化；全部关闭等于不显示该设备。", "Click a device to choose which of its controls and sensors appear in Home. Turning one off removes it from scenes and automations; turning them all off removes the device."))
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -324,13 +328,67 @@ private struct HomeKitServiceLimitNotice: View {
     }
 }
 
+/// A device's switch, and under it, once expanded, each service it publishes with a switch of its own.
 private struct SettingsHomeKitDeviceRow: View {
     let model: AppModel
     let device: LocalDevice
+    @Environment(\.panelSession) private var session
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var localExpanded = false
 
     private var supported: Bool { model.homeKitSupports(device) }
+    private var expanded: Binding<Bool> {
+        session?.expansion(deviceID: device.did, section: SettingsHomeKitManagement.expansionSection) ?? $localExpanded
+    }
 
     var body: some View {
+        let services = supported ? model.homeKitServices(device) : []
+        let included = supported && model.isInHomeKit(device)
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                if services.isEmpty {
+                    summary(services)
+                } else {
+                    Button {
+                        withAnimation(reduceMotion ? nil : PanelMotion.animation) { expanded.wrappedValue.toggle() }
+                    } label: {
+                        HStack(spacing: 10) {
+                            summary(services)
+                            Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(.tertiary)
+                                .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(DevicePresentation.name(device))
+                    .accessibilityValue(expanded.wrappedValue ? L10n.tr("已展开", "Expanded") : L10n.tr("已收起", "Collapsed"))
+                    .accessibilityHint(L10n.tr("显示要加入「家庭」的控件和传感器", "Shows the controls and sensors that go to Home"))
+                }
+                Toggle(L10n.tr("在「家庭」中显示\(DevicePresentation.name(device))", "Show \(DevicePresentation.name(device)) in Home"), isOn: Binding(
+                    get: { included },
+                    set: { model.setInHomeKit(device, $0) }
+                ))
+                .labelsHidden().toggleStyle(.switch).controlSize(.small).disabled(!supported)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            if expanded.wrappedValue, !services.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(services) { service in
+                        Divider().padding(.leading, 46).padding(.trailing, 12)
+                        SettingsHomeKitServiceRow(service: service, deviceSymbol: DevicePresentation.symbol(model.devices.snapshots[device.did]),
+                                                  enabled: included, isOn: Binding(
+                            get: { model.isInHomeKit(device, service: service) },
+                            set: { model.setInHomeKit(device, service: service, $0) }
+                        ))
+                    }
+                }
+                .padding(.bottom, 4)
+                .transition(.opacity)
+            }
+        }
+    }
+
+    private func summary(_ services: [CapabilityHomeKitService]) -> some View {
         HStack(spacing: 10) {
             SettingsSymbol(DevicePresentation.symbol(model.devices.snapshots[device.did]))
             VStack(alignment: .leading, spacing: 3) {
@@ -339,18 +397,81 @@ private struct SettingsHomeKitDeviceRow: View {
                     Text(model.devices.snapshots[device.did] == nil ? L10n.tr("还没读到设备规格", "Device specifications are not available yet.") : L10n.tr("「家庭」没有对应的配件类型", "No matching accessory type in Home."))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                } else if let room = device.roomName, !room.isEmpty {
-                    Text(room).font(.system(size: 11)).foregroundStyle(.secondary)
+                } else {
+                    let shown = services.filter { model.isInHomeKit(device, service: $0) }.count
+                    let count = shown == services.count
+                        ? L10n.tr("\(services.count) 项", services.count == 1 ? "1 item" : "\(services.count) items")
+                        : L10n.tr("显示 \(shown)/\(services.count) 项", "\(shown) of \(services.count) shown")
+                    Text([device.roomName ?? "", count].filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             }
             Spacer(minLength: 4)
-            Toggle(L10n.tr("在「家庭」中显示\(DevicePresentation.name(device))", "Show \(DevicePresentation.name(device)) in Home"), isOn: Binding(
-                get: { supported && model.isInHomeKit(device) },
-                set: { model.setInHomeKit(device, $0) }
-            ))
-            .labelsHidden().toggleStyle(.switch).controlSize(.small).disabled(!supported)
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
+    }
+}
+
+private struct SettingsHomeKitServiceRow: View {
+    let service: CapabilityHomeKitService
+    let deviceSymbol: String
+    /// False while the whole device stays out of Home.
+    let enabled: Bool
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: service.isPrimary ? deviceSymbol : service.kind.symbol).font(.system(size: 13))
+                .foregroundStyle(.secondary).frame(width: 18).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(service.name).font(.system(size: 12)).foregroundStyle(enabled ? .primary : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(service.isPrimary ? L10n.tr("主控件 · \(service.kind.title)", "Main control · \(service.kind.title)") : service.kind.title)
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 4)
+            Toggle(L10n.tr("在「家庭」中显示\(service.name)", "Show \(service.name) in Home"), isOn: $isOn)
+                .labelsHidden().toggleStyle(.switch).controlSize(.mini).disabled(!enabled)
+        }
+        .padding(.leading, 46).padding(.trailing, 12).padding(.vertical, 5)
+    }
+}
+
+private extension CapabilityHomeKitService.Kind {
+    /// The accessory type Apple Home files the service under.
+    var title: String {
+        switch self {
+        case .outlet: L10n.tr("插座", "Outlet")
+        case .light: L10n.tr("灯", "Light")
+        case .fan: L10n.tr("风扇", "Fan")
+        case .airPurifier: L10n.tr("空气净化器", "Air Purifier")
+        case .climate: L10n.tr("冷暖控制", "Climate Control")
+        case .humidifier: L10n.tr("加湿/除湿器", "Humidifier/Dehumidifier")
+        case .windowCovering: L10n.tr("窗帘", "Window Covering")
+        case .switch: L10n.tr("开关", "Switch")
+        case .temperature: L10n.tr("温度传感器", "Temperature Sensor")
+        case .humidity: L10n.tr("湿度传感器", "Humidity Sensor")
+        case .airQuality: L10n.tr("空气质量传感器", "Air Quality Sensor")
+        case .filter: L10n.tr("滤芯", "Filter")
+        case .other: L10n.tr("其他", "Other")
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .outlet: "powerplug"
+        case .light: "lightbulb"
+        case .fan: "fan"
+        case .airPurifier: "air.purifier"
+        case .climate: "thermometer.medium"
+        case .humidifier: "humidifier"
+        case .windowCovering: "blinds.horizontal.closed"
+        case .switch: "switch.2"
+        case .temperature: "thermometer.medium"
+        case .humidity: "humidity"
+        case .airQuality: "aqi.medium"
+        case .filter: "line.3.horizontal.decrease.circle"
+        case .other: "square.grid.2x2"
+        }
     }
 }
 

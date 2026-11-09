@@ -48,6 +48,8 @@ public struct CapabilityHomeKitPlan: Sendable {
     public var signature: String
     /// Services omitted to keep the accessory within HomeKit's limit, excluding duplicate definitions.
     public var omittedServiceCount: Int = 0
+    /// The key of each service in `services`, in the same order, such as `sensor:p:3:4` or `control:p:2:2=1`.
+    public var serviceKeys: [String] = []
 
     /// Include mode constraints when deciding whether Home must reload the database. Keep the layout-only
     /// signature above compatible with the migration fingerprints used to verify stable built-in IIDs.
@@ -59,13 +61,34 @@ public struct CapabilityHomeKitPlan: Sendable {
     }
 }
 
+/// One service of a device's Home accessory, as the user picks what goes to Apple Home.
+public struct CapabilityHomeKitService: Identifiable, Equatable, Sendable {
+    public enum Kind: Sendable, Equatable {
+        case outlet, light, fan, airPurifier, climate, humidifier, windowCovering, `switch`
+        case temperature, humidity, airQuality, filter, other
+    }
+    /// What an exclusion names: the plan's service key.
+    public let key: String
+    /// The name Home shows: one the user gave it in Home, else the service's own, else the accessory's.
+    public let name: String
+    public let kind: Kind
+    public let isPrimary: Bool
+    public var id: String { key }
+
+    public init(key: String, name: String, kind: Kind, isPrimary: Bool) {
+        self.key = key; self.name = name; self.kind = kind; self.isPrimary = isPrimary
+    }
+}
+
 /// Category mapping over a complete schema. Only protocol exceptions and convenient numeric presets are model-specific.
 public enum CapabilityHomeKitMapper {
     /// Includes the Accessory Information service added by HAPBridge.
     public static let maxServicesPerAccessory = 100
 
+    /// - Parameter excluded: service keys the user kept out of Home. They still get their identifiers, so leaving one
+    ///   out or bringing it back never renumbers the rest of the accessory.
     public static func plan(snapshot s: DeviceSnapshot, legacyDevice: SmartDevice?, names: [String: String],
-                            identifiers: inout [String: UInt64]) -> CapabilityHomeKitPlan {
+                            identifiers: inout [String: UInt64], excluding excluded: Set<String> = []) -> CapabilityHomeKitPlan {
         var configured: [HomeKitRole: String] = [:]
         for (key, name) in names { if let role = HomeKitRole(rawValue: key) { configured[role] = name } }
         let base = legacyDevice.flatMap { HomeKitAccessoryMapper.plan(for: $0, name: $0.name, configuredNames: configured) }
@@ -235,12 +258,47 @@ public enum CapabilityHomeKitMapper {
             for item in switches { builder.option(key: item.key, title: item.title, binding: item.binding) }
         }
         identifiers = builder.ids
+        // Removed whole and only now: the switch budget and every identifier are as if nothing were excluded.
+        builder.remove(excluded)
         let info = base?.info ?? AccessoryInfo(name: s.device.name, manufacturer: "Xiaomi", model: s.device.model, serialNumber: s.id, firmwareRevision: "1.0.0")
         let signature = info.name + "|" + builder.services.map { service in
             "\(service.iid):\(service.type.rawValue):" + service.characteristics.map { "\($0.iid):\($0.type.rawValue):\($0.minValue ?? 0):\($0.maxValue ?? 0):\($0.minStep ?? 0)" }.joined(separator: ",")
         }.joined(separator: "|")
         return CapabilityHomeKitPlan(info: info, services: builder.services, bindings: builder.bindings, signature: signature,
-                                     omittedServiceCount: builder.omittedServiceKeys.count)
+                                     omittedServiceCount: builder.omittedServiceKeys.count, serviceKeys: builder.keys)
+    }
+
+    /// Every service the device can publish, excluded or not, in the plan's order: the main service first.
+    public static func services(snapshot s: DeviceSnapshot, legacyDevice: SmartDevice?, names: [String: String]) -> [CapabilityHomeKitService] {
+        var ids: [String: UInt64] = [:]
+        let p = plan(snapshot: s, legacyDevice: legacyDevice, names: names, identifiers: &ids)
+        return zip(p.serviceKeys, p.services).map { key, service in
+            // Home prefers the Configured Name; a service with neither, such as the main one, shows the accessory's.
+            let name = [HomeKitAccessoryMapper.configuredNameType, .name].lazy.compactMap { type -> String? in
+                guard let c = service.characteristics.first(where: { $0.type == type }), let binding = p.bindings[c.iid],
+                      case .string(let text)? = value(binding, snapshot: s, legacyValues: [:], names: names) else { return nil }
+                return text
+            }.first
+            return CapabilityHomeKitService(key: key, name: name ?? p.info.name, kind: kind(of: service.type), isPrimary: service.isPrimary)
+        }
+    }
+
+    static func kind(of type: HAPServiceType) -> CapabilityHomeKitService.Kind {
+        switch type.rawValue {
+        case "47": .outlet
+        case "43": .light
+        case "40", "B7": .fan
+        case "BB": .airPurifier
+        case "BC": .climate
+        case "BD": .humidifier
+        case "8C": .windowCovering
+        case "49": .switch
+        case "8A": .temperature
+        case "82": .humidity
+        case "8D": .airQuality
+        case "BA": .filter
+        default: .other
+        }
     }
 
     /// Whether the device becomes a Home accessory at all; the bridge leaves out one that maps to no service. The
@@ -848,6 +906,13 @@ public enum CapabilityHomeKitMapper {
             service(serviceKey, type: .switch)
             add(serviceKey, type: .on, format: .bool, binding: binding, writable: true)
             names(serviceKey, title: title)
+        }
+        mutating func remove(_ excluded: Set<String>) {
+            for index in keys.indices.reversed() where excluded.contains(keys[index]) {
+                for c in services[index].characteristics { bindings[c.iid] = nil }
+                keys.remove(at: index)
+                services.remove(at: index)
+            }
         }
     }
 }
