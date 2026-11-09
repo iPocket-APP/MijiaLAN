@@ -9,13 +9,13 @@ use axum::{
     routing::{get, post},
 };
 use mijialan_core::{
-    cloud,
+    Error, cloud,
     import_job::{ImportJob, Progress},
 };
 use mijialan_homekit::mapping;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     net::SocketAddrV4,
     sync::{
         Arc, Mutex,
@@ -182,7 +182,10 @@ fn routes(wizard: Arc<Wizard>) -> Router {
         .route("/api/unlock", post(unlock))
         .route("/api/state", get(status))
         .route("/api/import", post(import))
-        .route("/api/bridge", post(select_devices))
+        .route(
+            "/api/bridge",
+            post(select_devices).layer(DefaultBodyLimit::max(512 * 1024)),
+        )
         .route("/api/finish", post(finish))
         .layer(DefaultBodyLimit::max(32 * 1024))
         .layer(middleware::from_fn_with_state(wizard.clone(), guard))
@@ -279,6 +282,16 @@ struct DeviceOption {
     available: bool,
     online: bool,
     selected: bool,
+    services: Vec<ServiceOption>,
+}
+
+#[derive(Serialize)]
+struct ServiceOption {
+    key: String,
+    title: String,
+    detail: String,
+    selected: bool,
+    advanced: bool,
 }
 
 async fn status(State(wizard): State<Arc<Wizard>>) -> impl IntoResponse {
@@ -291,21 +304,32 @@ async fn status(State(wizard): State<Arc<Wizard>>) -> impl IntoResponse {
         Progress::Failed(message) => ("failed", Some(message), None),
     };
     let bridge = wizard.service.bridge.info();
-    let devices: Vec<_> = wizard
-        .service
-        .engine
+    let engine = &wizard.service.engine;
+    let config = engine.store.config();
+    let devices: Vec<_> = engine
         .states()
         .into_iter()
         .map(|state| {
-            let available = mapping::maps_to_home(&state);
+            let excluded = config.homekit_excluded_services.get(&state.device.did);
+            let services: Vec<_> = mapping::home_services(&state, &config.homekit_names)
+                .into_iter()
+                .map(|service| ServiceOption {
+                    title: service.title().into(),
+                    detail: service.detail(),
+                    selected: excluded.is_none_or(|keys| !keys.contains(&service.key)),
+                    advanced: service.advanced_for(&state.device.model),
+                    key: service.key,
+                })
+                .collect();
             let device = state.device;
             DeviceOption {
                 id: device.did,
                 name: device.name,
                 room: device.room,
-                available,
+                available: !services.is_empty(),
                 online: state.online,
-                selected: device.bridged,
+                selected: device.bridged && services.iter().any(|service| service.selected),
+                services,
             }
         })
         .collect();
@@ -344,6 +368,8 @@ async fn import(
 #[derive(Deserialize)]
 struct Selection {
     devices: BTreeSet<String>,
+    #[serde(default)]
+    services: BTreeMap<String, BTreeSet<String>>,
 }
 
 async fn select_devices(
@@ -352,14 +378,8 @@ async fn select_devices(
 ) -> Result<StatusCode, Failure> {
     wizard.require_active()?;
     require_idle(&wizard)?;
-    let engine = &wizard.service.engine;
-    if body.devices.is_empty()
+    if (body.devices.is_empty() && !wizard.service.bridge.info().paired)
         || body.devices.len() > mapping::MAX_BRIDGED_DEVICES
-        || !body.devices.iter().all(|id| {
-            engine
-                .state(id)
-                .is_some_and(|state| mapping::maps_to_home(&state))
-        })
     {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -369,13 +389,19 @@ async fn select_devices(
             ),
         ));
     }
-    engine
-        .select_bridged_devices(&body.devices)
-        .map_err(storage_failure)?;
-    wizard
-        .service
-        .start()
-        .map_err(|error| (StatusCode::CONFLICT, error.to_string()))?;
+    mapping::select_devices(&wizard.service.engine, &body.devices, &body.services).map_err(
+        |error| match error {
+            Error::Validation(message) => (StatusCode::BAD_REQUEST, message),
+            other => storage_failure(other),
+        },
+    )?;
+    let service = &wizard.service;
+    let result = if service.bridge.info().running {
+        service.bridge.refresh_accessories()
+    } else {
+        service.start()
+    };
+    result.map_err(|error| (StatusCode::CONFLICT, error.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -463,6 +489,86 @@ mod tests {
             .oneshot(request.body(Body::from(body)).unwrap())
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn wizard_saves_valid_service_choices_together_and_rejects_unknown_keys() {
+        let wizard = fixture(Instant::now() + WINDOW);
+        wizard
+            .service
+            .bridge
+            .start_at("127.0.0.1:0".parse().unwrap(), false)
+            .unwrap();
+        let router = routes(wizard.clone());
+        let unlock = send(
+            &router,
+            post("/api/unlock", ORIGIN),
+            r#"{"code":"fixture-code"}"#,
+        )
+        .await;
+        let cookie = unlock.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+        let update = || post("/api/bridge", ORIGIN).header(header::COOKIE, cookie);
+        let engine = &wizard.service.engine;
+        assert_eq!(
+            send(
+                &router,
+                update(),
+                r#"{"devices":["3"],"services":{"3":["unknown"]}}"#
+            )
+            .await
+            .status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            engine
+                .store
+                .config()
+                .devices
+                .iter()
+                .filter(|device| device.bridged)
+                .count(),
+            4
+        );
+        assert_eq!(
+            send(
+                &router,
+                update(),
+                r#"{"devices":["3"],"services":{"3":["sensor:3.4"]}}"#
+            )
+            .await
+            .status(),
+            StatusCode::NO_CONTENT
+        );
+        let response = send(
+            &router,
+            get("/api/state", HOST).header(header::COOKIE, cookie),
+            "",
+        )
+        .await;
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let state: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let purifier = state["devices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|device| device["id"] == "3")
+            .unwrap();
+        let selected: Vec<_> = purifier["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|service| service["selected"] == true)
+            .map(|service| &service["key"])
+            .collect();
+        assert_eq!(selected, [&serde_json::json!("sensor:3.4")]);
+        assert_eq!(wizard.service.bridge.info().accessories, 1);
     }
 
     #[tokio::test]

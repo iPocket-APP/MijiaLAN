@@ -5,8 +5,8 @@
 下载 x86_64 `.deb` 和 `SHA256SUMS.txt`，核对安装包对应的 SHA-256，然后安装。
 
 ```sh
-sha256sum MijiaLAN-rs-0.1.0-b1-linux-x86_64.deb
-sudo apt install ./MijiaLAN-rs-0.1.0-b1-linux-x86_64.deb
+sha256sum MijiaLAN-rs-0.2.0-b16-linux-x86_64.deb
+sudo apt install ./MijiaLAN-rs-0.2.0-b16-linux-x86_64.deb
 ```
 
 从应用菜单打开 **MijiaLAN**。托盘可用时，关闭窗口可收起到房屋图标。托盘菜单可重新打开、查看设置和退出。也可以通过应用菜单唤起正在运行的窗口。没有托盘时，使用最小化保持桥运行，关闭窗口会退出。GNOME 可通过 AppIndicator 扩展显示托盘。
@@ -19,7 +19,7 @@ GPUI 需要 Vulkan 驱动。虚拟机可尝试安装 `mesa-vulkan-drivers`，并
 
 1. 打开 **Container Manager → 项目 → 新增**，选择独立的项目目录并导入 `compose.yaml`。把 `MIJIALAN_LAN_IP` 改成群晖在设备所在局域网中的 IPv4。镜像使用固定摘要。验收候选则先在「镜像」中导入 `mijialan-bridge-amd64.tar.gz`，再使用候选包内的 Compose。
 2. 启动项目。在同一可信局域网用浏览器打开 `http://<群晖 IPv4>:17890`，从容器日志复制一次性设置码。向导 20 分钟后关闭。该端口用于局域网首次设置。
-3. 选择米家区域，使用「米家」App 扫码并确认。设备导入后勾选要加入 Apple「家庭」的设备，点「启用家庭桥」。在 iPhone「家庭 → 添加配件」扫描页面上的第二个二维码，配对后点「完成并关闭向导」。
+3. 选择米家区域，使用「米家」App 扫码并确认。勾选要加入 Apple「家庭」的设备，可展开设备挑选控件和传感器，再点「启用家庭桥」。在 iPhone「家庭 → 添加配件」扫描页面上的第二个二维码，配对后点「完成并关闭向导」。
 
 容器使用主机网络，HAP 默认监听选定地址的 TCP 51826，mDNS 通过该局域网接口发布。端口占用时可分别修改 `MIJIALAN_HAP_PORT` 和 `MIJIALAN_SETUP_PORT`。如需再次导入，设置 `MIJIALAN_SETUP` 为 `"true"` 并重建容器，完成维护后改回 `"false"`。已配对的桥在维护窗口期间继续运行。
 

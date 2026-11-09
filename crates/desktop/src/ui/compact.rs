@@ -11,7 +11,7 @@ use gpui_component::{
     input::InputEvent,
     menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
 };
-use std::{cell::Cell, collections::BTreeSet};
+use std::cell::Cell;
 
 #[derive(Default)]
 pub(super) struct PanelSession {
@@ -413,52 +413,96 @@ impl Dashboard {
                 devices = devices.child(divider(p).mx(px(12.)));
             }
             let did = device.did.clone();
-            let bridged = device.bridged;
             let state = self.engine.state(&did);
-            let supported = state.as_ref().is_some_and(maps_to_home);
-            selected += usize::from(bridged && supported);
+            let choices = homekit_choices(state.as_ref(), &config);
+            let supported = !choices.is_empty();
+            let shown = choices.iter().filter(|(_, selected)| *selected).count();
+            let included = device.bridged && shown > 0;
+            selected += usize::from(included);
+            let key = format!("home:{did}");
+            let expanded = self.session.borrow().home_expanded.contains(&key);
+            let detail = if supported {
+                let count = homekit_count(if included { shown } else { 0 }, choices.len());
+                if device.room.is_empty() {
+                    count
+                } else {
+                    format!("{} · {count}", device.room)
+                }
+            } else {
+                homekit_unavailable(state.as_ref())
+            };
+            let summary = div()
+                .id(SharedString::from(key.clone()))
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .when_some(state.as_ref(), |d, state| {
+                    d.child(self.compact_icon(symbol(state), 21., p.secondary))
+                })
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.))
+                        .child(label(device_name(device), 13., p.primary).truncate())
+                        .child(label(detail, 11., p.secondary)),
+                )
+                .when(supported, |row| {
+                    row.cursor_pointer()
+                        .child(self.compact_icon(
+                            if expanded {
+                                "chevron.down"
+                            } else {
+                                "chevron.right"
+                            },
+                            10.,
+                            p.tertiary,
+                        ))
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.toggle_home_expansion(&key, cx)),
+                        )
+                });
+            let device_id = did.clone();
+            let enabled = supported && self.busy == 0;
             devices = devices.child(
                 div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .px(px(12.))
-                    .py(px(10.))
-                    .when_some(state.as_ref(), |d, state| {
-                        d.child(self.compact_icon(symbol(state), 21., p.secondary))
-                    })
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
                             .flex()
-                            .flex_col()
-                            .gap(px(4.))
-                            .child(label(device_name(device), 13., p.primary).truncate())
-                            .child(label(
-                                if supported {
-                                    device.room.clone()
-                                } else {
-                                    homekit_unavailable(state.as_ref())
-                                },
-                                11.,
-                                p.secondary,
-                            )),
+                            .items_center()
+                            .gap(px(10.))
+                            .px(px(12.))
+                            .py(px(10.))
+                            .child(summary)
+                            .child(
+                                self.compact_toggle(
+                                    SharedString::from(format!("bridge-device:{did}")),
+                                    included,
+                                    enabled,
+                                    false,
+                                    p,
+                                )
+                                .when(enabled, |toggle| {
+                                    toggle.on_click(cx.listener(move |this, _, _, cx| {
+                                        this.compact_set_bridged(&device_id, !included, cx)
+                                    }))
+                                }),
+                            ),
                     )
-                    .child(
-                        self.compact_toggle(
-                            SharedString::from(format!("bridge-device:{did}")),
-                            bridged && supported,
-                            supported,
-                            false,
+                    .when(expanded && supported, |row| {
+                        row.child(self.compact_home_services(
+                            &did,
+                            &device.model,
+                            choices,
+                            included,
                             p,
-                        )
-                        .when(supported, |toggle| {
-                            toggle.on_click(cx.listener(move |this, _, _, cx| {
-                                this.compact_set_bridged(&did, !bridged, cx)
-                            }))
-                        }),
-                    ),
+                            cx,
+                        ))
+                    }),
             );
         }
         body=body.child(section(l(&format!("在「家庭」中显示 · {selected} 台"),&format!("Shown in Home · {selected}")),p)
@@ -467,6 +511,7 @@ impl Dashboard {
             }else{devices}))
             .child(label(l("关闭已加入的设备，会同时移除它在「家庭」中的房间、场景和自动化。已原生接入 HomeKit 的设备可关闭，避免重复。",
                 "Turning off an included device also removes its room, scenes, and automations from Home. Turn off devices already connected through native HomeKit to avoid duplicates."),11.,p.secondary))
+            .child(label(t("关闭控件会将它从「家庭」的场景和自动化中移除。全部关闭会隐藏设备。"),11.,p.secondary))
             .child(section(l("连接说明","Connection Details"),p).child(label(l("这台电脑和 iPhone 需要连接同一局域网。离家控制和自动化需要家居中枢（HomePod 或 Apple TV）。",
                 "This computer and your iPhone must be on the same local network. Remote access and automations require a home hub (HomePod or Apple TV)."),11.,p.secondary)));
         if info.paired {
@@ -2000,11 +2045,96 @@ impl Dashboard {
         content.into_any_element()
     }
     fn compact_set_bridged(&mut self, did: &str, bridged: bool, cx: &mut Context<Self>) {
-        let did = did.to_string();
-        self.run(cx, move |engine| {
-            engine.set_bridged(&did, bridged)?;
-            Ok(l("桥接选择已保存", "Bridge selection saved"))
-        });
+        self.change_home_selection(did.into(), None, bridged, cx);
+    }
+
+    fn compact_home_services(
+        &self,
+        did: &str,
+        model: &str,
+        choices: Vec<(HomeService, bool)>,
+        included: bool,
+        p: Palette,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let (advanced, main): (Vec<_>, Vec<_>) = choices
+            .into_iter()
+            .partition(|(service, _)| service.advanced_for(model));
+        let mut list = div().pl(px(43.)).pr(px(12.)).pb(px(5.));
+        for (service, selected) in main {
+            list = list.child(self.compact_home_service(did, service, selected, included, p, cx));
+        }
+        if !advanced.is_empty() {
+            let key = format!("home-advanced:{did}");
+            let open = self.session.borrow().compact.expanded.contains(&key);
+            list = list
+                .child(divider(p))
+                .child(div().py(px(5.)).child(self.compact_disclosure(
+                    &key,
+                    format!("{} ({})", t("高级项目"), advanced.len()),
+                    cx,
+                )));
+            if open {
+                for (service, selected) in advanced {
+                    list = list
+                        .child(self.compact_home_service(did, service, selected, included, p, cx));
+                }
+            }
+        }
+        list
+    }
+
+    fn compact_home_service(
+        &self,
+        did: &str,
+        service: HomeService,
+        selected: bool,
+        included: bool,
+        p: Palette,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let did = did.to_owned();
+        let enabled = included && self.busy == 0;
+        div().child(divider(p)).child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .py(px(5.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(label(
+                            service.title().to_owned(),
+                            12.,
+                            if included { p.primary } else { p.secondary },
+                        ))
+                        .child(label(service.detail(), 11., p.secondary)),
+                )
+                .child(
+                    self.compact_toggle(
+                        SharedString::from(format!("home-service:{did}:{}", service.key)),
+                        included && selected,
+                        enabled,
+                        true,
+                        p,
+                    )
+                    .when(enabled, |toggle| {
+                        toggle.on_click(cx.listener(move |this, _, _, cx| {
+                            this.change_home_selection(
+                                did.clone(),
+                                Some(service.key.clone()),
+                                !selected,
+                                cx,
+                            );
+                        }))
+                    }),
+                ),
+        )
     }
 
     fn compact_icon(&self, name: &str, size: f32, color: Hsla) -> Div {

@@ -20,7 +20,11 @@ on:
         type: string
         default: ''
       publish:
-        description: Publish a public Rust prerelease after verification (false produces preview artifacts only)
+        description: Publish a public Rust release after verification (false produces preview artifacts only)
+        type: boolean
+        default: false
+      stable:
+        description: Mark the published Rust release as stable
         type: boolean
         default: false
   push:
@@ -248,7 +252,7 @@ jobs:
         with:
           name: MijiaLAN-rs-${{ needs.source.outputs.version }}-b${{ needs.source.outputs.build_number }}-preview
           path: distribution
-      - name: Publish verified Rust prerelease
+      - name: Publish verified Rust release
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.source.outputs.source_sha }}
@@ -256,10 +260,12 @@ jobs:
           BUILD: ${{ needs.source.outputs.build_number }}
           BUILD_RUN: ${{ needs.source.outputs.run_id }}
           LINUX_RUN: ${{ inputs.linux_run_id }}
+          STABLE: ${{ inputs.stable }}
         run: |
-          linux=()
-          if [[ -n "$LINUX_RUN" ]]; then linux=(--linux-run "$LINUX_RUN"); fi
-          python3 scripts/ci/release.py publish --source "$SOURCE_SHA" --version "$VERSION" --build "$BUILD" --run "$BUILD_RUN" "${linux[@]}"
+          flags=()
+          if [[ -n "$LINUX_RUN" ]]; then flags+=(--linux-run "$LINUX_RUN"); fi
+          if [[ "$STABLE" == true ]]; then flags+=(--stable); fi
+          python3 scripts/ci/release.py publish --source "$SOURCE_SHA" --version "$VERSION" --build "$BUILD" --run "$BUILD_RUN" "${flags[@]}"
 
   refresh-updates:
     needs: [source, publish]

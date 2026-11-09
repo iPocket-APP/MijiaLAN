@@ -18,5 +18,9 @@ img { display: block; width: min(100%, 16.5rem); border-radius: .45rem; backgrou
 .pin { font-size: 1.2rem; font-variant-numeric: tabular-nums; }
 #devices label { display: flex; align-items: baseline; gap: .65rem; font-weight: 400; }
 #devices { margin-bottom: .7rem; }
+#devices .device { padding: .45rem 0; }
+#devices details { margin: .2rem 0 .35rem 1.75rem; }
+#devices summary { cursor: pointer; }
+#devices details label { margin: .25rem 0; font-size: .9rem; }
 #notice { overflow-wrap: anywhere; }
 [hidden] { display: none; }

@@ -4,7 +4,11 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod controls;
+mod selection;
 mod value;
+#[cfg(target_os = "linux")]
+pub use selection::select_devices;
+pub use selection::{HomeService, home_services, select_device, select_service};
 pub(crate) use value::validate_write;
 
 const MAX_SERVICES: usize = 100;
@@ -532,6 +536,23 @@ struct Builder<'a> {
     omitted_services: usize,
 }
 impl Builder<'_> {
+    fn exclude_services(&mut self, excluded: &BTreeSet<String>) {
+        let mut indices: Vec<_> = excluded
+            .iter()
+            .filter_map(|key| self.service_indices.get(key).copied())
+            .collect();
+        indices.sort_unstable();
+        // Filter only after assigning every IID. Existing characteristics keep their IDs.
+        for index in indices.into_iter().rev() {
+            let service = self.services.remove(index);
+            for characteristic in service["characteristics"].as_array().unwrap() {
+                let id = (self.aid, characteristic["iid"].as_u64().unwrap());
+                self.bindings.remove(&id);
+                self.names.remove(&id);
+            }
+        }
+    }
+
     fn primary(&mut self, service: usize) {
         for s in &mut self.services {
             s.as_object_mut().unwrap().remove("primary");
@@ -712,7 +733,10 @@ fn build_states(engine: &Engine, layout: &mut Layout, states: Vec<DeviceState>) 
         if database.accessories.len() > MAX_BRIDGED_DEVICES {
             break;
         }
-        let builder = plan_device(state, layout, &config.homekit_names);
+        let mut builder = plan_device(state, layout, &config.homekit_names);
+        if let Some(excluded) = config.homekit_excluded_services.get(&state.device.did) {
+            builder.exclude_services(excluded);
+        }
         if builder.services.len() == 1 {
             continue;
         }

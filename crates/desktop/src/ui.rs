@@ -8,10 +8,24 @@ use gpui_component::{
     switch::Switch,
 };
 use mijialan_core::localization::text as t;
-use mijialan_core::{DeviceState, Engine, Property, Token, cloud, discovery, engine::numeric};
-use mijialan_homekit::{HomeKit, mapping::maps_to_home};
+use mijialan_core::{
+    DeviceState, Engine, Property, Token, cloud, discovery, engine::numeric, store::Config,
+};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use mijialan_homekit::mapping::maps_to_home;
+use mijialan_homekit::{
+    HomeKit,
+    mapping::{HomeService, home_services, select_device, select_service},
+};
 use serde_json::{Value, json};
-use std::{cell::RefCell, collections::BTreeMap, net::Ipv4Addr, rc::Rc, sync::Arc, time::Duration};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+    net::Ipv4Addr,
+    rc::Rc,
+    sync::Arc,
+    time::Duration,
+};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod compact;
 
@@ -21,6 +35,28 @@ fn homekit_unavailable(state: Option<&DeviceState>) -> String {
     } else {
         "「家庭」没有对应的配件类型"
     })
+}
+
+fn homekit_choices(state: Option<&DeviceState>, config: &Config) -> Vec<(HomeService, bool)> {
+    let Some(state) = state else {
+        return Vec::new();
+    };
+    let excluded = config.homekit_excluded_services.get(&state.device.did);
+    home_services(state, &config.homekit_names)
+        .into_iter()
+        .map(|service| {
+            let selected = excluded.is_none_or(|keys| !keys.contains(&service.key));
+            (service, selected)
+        })
+        .collect()
+}
+
+fn homekit_count(shown: usize, total: usize) -> String {
+    if mijialan_core::localization::english() {
+        format!("{shown} of {total} shown")
+    } else {
+        format!("显示 {shown}/{total} 项")
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -41,6 +77,7 @@ pub struct UiSession {
     drafts: BTreeMap<String, Value>,
     scrolls: BTreeMap<String, ScrollHandle>,
     pending: Option<Page>,
+    home_expanded: BTreeSet<String>,
     login: Arc<mijialan_core::import_job::ImportJob>,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     compact: compact::PanelSession,
@@ -53,6 +90,7 @@ impl Default for UiSession {
             drafts: BTreeMap::new(),
             scrolls: BTreeMap::new(),
             pending: None,
+            home_expanded: BTreeSet::new(),
             login: Arc::new(mijialan_core::import_job::ImportJob::default()),
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             compact: compact::PanelSession::default(),
@@ -239,6 +277,37 @@ impl Dashboard {
             });
         })
         .detach();
+    }
+
+    fn toggle_home_expansion(&mut self, key: &str, cx: &mut Context<Self>) {
+        let mut session = self.session.borrow_mut();
+        if !session.home_expanded.remove(key) {
+            session.home_expanded.insert(key.into());
+        }
+        cx.notify();
+    }
+
+    fn change_home_selection(
+        &mut self,
+        did: String,
+        service: Option<String>,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy > 0 {
+            return;
+        }
+        let bridge = self.bridge.clone();
+        self.run(cx, move |engine| {
+            match service {
+                Some(key) => select_service(&engine, &did, &key, selected)?,
+                None => select_device(&engine, &did, selected)?,
+            }
+            bridge.refresh_accessories().map_err(|error| {
+                mijialan_core::Error::Storage(format!("家庭桥同步失败：{error}"))
+            })?;
+            Ok(t("桥接选择已保存"))
+        });
     }
     fn refresh(&mut self, cx: &mut Context<Self>) {
         self.run(cx, |engine| {
@@ -1148,51 +1217,91 @@ impl Dashboard {
                         ));
             }
         }
+        let config = self.engine.store.config();
         for state in self.engine.states() {
             let did = state.device.did.clone();
-            let supported = maps_to_home(&state);
-            let unavailable = (!supported).then(|| homekit_unavailable(Some(&state)));
-            let included = state.device.bridged;
+            let choices = homekit_choices(Some(&state), &config);
+            let supported = !choices.is_empty();
+            let shown = choices.iter().filter(|(_, selected)| *selected).count();
+            let included = state.device.bridged && shown > 0;
+            let key = format!("home:{did}");
+            let expanded = self.session.borrow().home_expanded.contains(&key);
+            let detail = if supported {
+                homekit_count(if included { shown } else { 0 }, choices.len())
+            } else {
+                homekit_unavailable(Some(&state))
+            };
+            let summary = div()
+                .id(SharedString::from(key.clone()))
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(state.device.name)
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(detail),
+                )
+                .when(supported, |row| {
+                    row.cursor_pointer()
+                        .child(div().text_xs().child(t(if expanded {
+                            "收起家庭控件"
+                        } else {
+                            "展开家庭控件"
+                        })))
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.toggle_home_expansion(&key, cx)),
+                        )
+                });
+            let device_id = did.clone();
             content = content.child(
                 div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .p_3()
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(
                         div()
                             .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(state.device.name)
-                            .when_some(unavailable, |column, message| {
-                                column.child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(message),
-                                )
-                            }),
+                            .items_center()
+                            .gap_2()
+                            .p_3()
+                            .child(summary)
+                            .child(
+                                Switch::new(SharedString::from(format!("bridge-device:{did}")))
+                                    .checked(included)
+                                    .disabled(self.busy > 0 || !supported)
+                                    .on_click(cx.listener(move |this, on: &bool, _, cx| {
+                                        this.change_home_selection(
+                                            device_id.clone(),
+                                            None,
+                                            *on,
+                                            cx,
+                                        );
+                                    })),
+                            ),
                     )
-                    .child(
-                        Switch::new(SharedString::from(format!("bridge-device:{did}")))
-                            .checked(included && supported)
-                            .disabled(self.busy > 0 || !supported)
-                            .on_click(cx.listener(move |this, on: &bool, _, cx| {
-                                let id = did.clone();
-                                let on = *on;
-                                this.run(cx, move |engine| {
-                                    engine.set_bridged(&id, on)?;
-                                    let _ = engine.refresh(&id);
-                                    Ok("桥接选择已保存".into())
-                                });
-                            })),
-                    ),
+                    .when(expanded, |row| {
+                        row.child(self.wide_home_services(
+                            &did,
+                            &state.device.model,
+                            choices,
+                            included,
+                            cx,
+                        ))
+                    }),
             );
         }
         content
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t(
+                        "关闭控件会将它从「家庭」的场景和自动化中移除。全部关闭会隐藏设备。",
+                    )),
+            )
             .child(
                 div()
                     .text_sm()
@@ -1204,6 +1313,89 @@ impl Dashboard {
                     })),
             )
             .into_any_element()
+    }
+
+    fn wide_home_services(
+        &self,
+        did: &str,
+        model: &str,
+        choices: Vec<(HomeService, bool)>,
+        included: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let (advanced, main): (Vec<_>, Vec<_>) = choices
+            .into_iter()
+            .partition(|(service, _)| service.advanced_for(model));
+        let mut list = div().pl_6().pr_3().pb_2();
+        for (service, selected) in main {
+            list = list.child(self.wide_home_service(did, service, selected, included, cx));
+        }
+        if !advanced.is_empty() {
+            let key = format!("home-advanced:{did}");
+            let open = self.session.borrow().home_expanded.contains(&key);
+            list = list.child(
+                div()
+                    .id(SharedString::from(key.clone()))
+                    .py_2()
+                    .cursor_pointer()
+                    .child(format!(
+                        "{} {} ({})",
+                        if open { "▾" } else { "▸" },
+                        t("高级项目"),
+                        advanced.len()
+                    ))
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.toggle_home_expansion(&key, cx)),
+                    ),
+            );
+            if open {
+                for (service, selected) in advanced {
+                    list = list.child(self.wide_home_service(did, service, selected, included, cx));
+                }
+            }
+        }
+        list
+    }
+
+    fn wide_home_service(
+        &self,
+        did: &str,
+        service: HomeService,
+        selected: bool,
+        included: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let did = did.to_owned();
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .py_1()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(service.title().to_owned())
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(service.detail()),
+                    ),
+            )
+            .child(
+                Switch::new(SharedString::from(format!(
+                    "home-service:{did}:{}",
+                    service.key
+                )))
+                .checked(included && selected)
+                .disabled(!included || self.busy > 0)
+                .on_click(cx.listener(move |this, on: &bool, _, cx| {
+                    this.change_home_selection(did.clone(), Some(service.key.clone()), *on, cx);
+                })),
+            )
     }
     fn settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut languages = div().flex().gap_2();

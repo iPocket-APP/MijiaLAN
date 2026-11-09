@@ -29,24 +29,87 @@ function renderDevices(list) {
   for (const device of list) {
     let row = devices.get(device.id);
     if (!row) {
+      const entry = document.createElement('div');
+      entry.className = 'device';
       const label = document.createElement('label');
       const box = document.createElement('input');
       box.type = 'checkbox';
       box.checked = device.selected;
       const title = document.createElement('span');
       label.append(box, title);
-      element('devices').append(label);
-      row = { label, box, title };
+      const details = document.createElement('details');
+      const summary = document.createElement('summary');
+      const main = document.createElement('div');
+      const advanced = document.createElement('details');
+      const advancedTitle = document.createElement('summary');
+      advanced.append(advancedTitle);
+      details.append(summary, main, advanced);
+      entry.append(label, details);
+      element('devices').append(entry);
+      row = { entry, box, title, details, summary, main, advanced, advancedTitle, choices: new Map(), edited: false };
+      const target = row;
+      box.addEventListener('change', () => {
+        if (box.checked && ![...target.choices.values()].some(choice => choice.box.checked)) {
+          for (const choice of target.choices.values()) choice.box.checked = true;
+          target.edited = true;
+        }
+        updateServiceControls(target);
+      });
     }
     row.box.disabled = !device.available;
     const detail = device.available ? (device.online ? '' : ' · 离线') : ' · 暂无可用的家庭服务';
     const title = (device.room ? device.room + ' · ' : '') + device.name + detail;
     if (row.title.textContent !== title) row.title.textContent = title;
+    renderServices(row, device.services);
     next.set(device.id, row);
   }
-  for (const [id, row] of devices) if (!next.has(id)) row.label.remove();
+  for (const [id, row] of devices) if (!next.has(id)) row.entry.remove();
   devices = next;
-  element('devices-hint').textContent = list.length ? '只会将勾选的配件加入家庭桥。' : '设备导入后会显示在这里。';
+  element('devices-hint').textContent = list.length
+    ? '展开设备可逐项选择控件和传感器。关闭某项会将它从「家庭」的场景和自动化中移除。'
+    : '设备导入后会显示在这里。';
+}
+
+function renderServices(row, services) {
+  const next = new Map();
+  for (const service of services) {
+    let choice = row.choices.get(service.key);
+    if (!choice) {
+      const label = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = service.selected;
+      const title = document.createElement('span');
+      label.append(box, title);
+      choice = { label, box, title };
+      box.addEventListener('change', () => {
+        row.edited = true;
+        if (![...row.choices.values()].some(item => item.box.checked)) row.box.checked = false;
+        updateServiceControls(row);
+      });
+    }
+    const parent = service.advanced ? row.advanced : row.main;
+    if (choice.label.parentNode !== parent) parent.append(choice.label);
+    const title = service.title + ' · ' + service.detail;
+    if (choice.title.textContent !== title) choice.title.textContent = title;
+    next.set(service.key, choice);
+  }
+  for (const [key, choice] of row.choices) if (!next.has(key)) choice.label.remove();
+  row.choices = next;
+  row.details.hidden = !services.length;
+  const advancedCount = services.filter(service => service.advanced).length;
+  row.advanced.hidden = !advancedCount;
+  row.advancedTitle.textContent = '高级项目（' + advancedCount + '）';
+  updateServiceControls(row);
+}
+
+function updateServiceControls(row) {
+  let shown = 0;
+  for (const choice of row.choices.values()) {
+    choice.box.disabled = !row.box.checked || row.box.disabled;
+    if (!choice.box.disabled && choice.box.checked) shown++;
+  }
+  row.summary.textContent = '家庭控件（显示 ' + shown + '/' + row.choices.size + ' 项）';
 }
 
 async function refresh() {
@@ -108,8 +171,12 @@ submit('unlock', async () => {
 });
 submit('import', () => request('/api/import', { region: element('region').value }));
 submit('bridge', async () => {
-  const selected = [...devices].filter(([, row]) => row.box.checked && !row.box.disabled).map(([id]) => id);
-  await request('/api/bridge', { devices: selected });
+  const available = [...devices].filter(([, row]) => !row.box.disabled);
+  const selected = available.filter(([, row]) => row.box.checked).map(([id]) => id);
+  const services = Object.fromEntries(available.filter(([, row]) => row.edited).map(([id, row]) => [
+    id, [...row.choices].filter(([, choice]) => choice.box.checked).map(([key]) => key),
+  ]));
+  await request('/api/bridge', { devices: selected, services });
   element('notice').textContent = '已保存配件选择。';
 });
 element('finish').addEventListener('click', async () => {

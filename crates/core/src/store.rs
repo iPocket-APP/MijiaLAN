@@ -4,7 +4,7 @@ use directories::ProjectDirs;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::Write,
     net::Ipv4Addr,
@@ -49,6 +49,8 @@ pub struct Config {
     pub appearance: String,
     #[serde(default)]
     pub homekit_names: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub homekit_excluded_services: BTreeMap<String, BTreeSet<String>>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -59,6 +61,7 @@ impl Default for Config {
             language: String::new(),
             appearance: String::new(),
             homekit_names: BTreeMap::new(),
+            homekit_excluded_services: BTreeMap::new(),
         }
     }
 }

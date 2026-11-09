@@ -126,6 +126,7 @@ def collect(args):
 
 def publish(args):
     tag = f'rs-v{args.version}-b{args.build}'
+    edition = '正式版' if args.stable else '体验版'
     releases = api('releases?per_page=100')
     previous = next((r for r in releases if r['tag_name'] == tag), None)
     if previous and (not previous['draft'] or previous['target_commitish'] != args.source):
@@ -153,7 +154,7 @@ def publish(args):
         match = re.fullmatch(r'rs-v[0-9]+\.[0-9]+\.[0-9]+-b([1-9][0-9]*)', item['tag_name'])
         if match and not item['draft'] and int(match[1]) >= int(args.build):
             raise ValueError('Rust update builds must increase monotonically across all versions')
-    body = f'''MijiaLAN Rust 体验版 {args.version}（构建 {args.build}）。\n\n源码：`{args.source}`，CI 构建：[Build run {args.run}](https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{args.run})。发布复用该次已验证的 Release 程序，无需重新编译。\n\n- macOS Apple Silicon / Intel：分别提供 DMG / ZIP，内置 Sparkle 自动更新。Developer ID 签名、Hardened Runtime，App 和 DMG 均完成 Apple 公证及票据验证。\n- Windows x64：推荐 MSI 安装包，内置 WinSparkle 自动更新；便携 ZIP 保留为手动更新方式。未做 Authenticode 签名；需要 [Microsoft Visual C++ v14 x64 运行库](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/)。\n- 校验值见 `SHA256SUMS.txt`。现有 Rust 配置及桥身份继续沿用，Swift 版与 Rust 版数据独立。\n\n构建经过格式、Clippy、Release 测试和包内 CLI 验证；具体支持范围及实机边界见[项目说明](https://github.com/{os.environ['GITHUB_REPOSITORY']}/tree/{args.source})。\n'''
+    body = f'''MijiaLAN Rust {args.version} {edition}（构建 {args.build}）。\n\n源码：`{args.source}`，CI 构建：[Build run {args.run}](https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{args.run})。发布复用该次已验证的 Release 程序，无需重新编译。\n\n- macOS Apple Silicon / Intel：分别提供 DMG / ZIP，内置 Sparkle 自动更新。Developer ID 签名、Hardened Runtime，App 和 DMG 均完成 Apple 公证及票据验证。\n- Windows x64：推荐 MSI 安装包，内置 WinSparkle 自动更新；便携 ZIP 保留为手动更新方式。未做 Authenticode 签名；需要 [Microsoft Visual C++ v14 x64 运行库](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/)。\n- 校验值见 `SHA256SUMS.txt`。现有 Rust 配置及桥身份继续沿用，Swift 版与 Rust 版数据独立。\n\n构建经过格式、Clippy、Release 测试和包内 CLI 验证；具体支持范围及实机边界见[项目说明](https://github.com/{os.environ['GITHUB_REPOSITORY']}/tree/{args.source})。\n'''
     notes = Path(f'docs/releases/rs-v{args.version}.md')
     if notes.is_file():
         body += '\n' + notes.read_text().strip() + '\n'
@@ -169,7 +170,8 @@ def publish(args):
 
 [Linux / NAS 构建与测试包](https://github.com/{repo}/actions/runs/{args.linux_run}) · [安装说明](https://github.com/{repo}/blob/{args.source}/docs/linux.md)
 """
-    release = previous or api('releases', 'POST', dict(tag_name=tag, target_commitish=args.source, name=f'MijiaLAN {args.version}-rs.{args.build} · Rust 体验版', body=body, draft=True, prerelease=True, make_latest='false'))
+    title = f'MijiaLAN Rust {args.version} · {edition} (b{args.build})'
+    release = previous or api('releases', 'POST', dict(tag_name=tag, target_commitish=args.source, name=title, body=body, draft=True, prerelease=not args.stable, make_latest='false'))
     existing = {a['name']: a['digest'] for a in release['assets']}
     for p in files:
         if p.name in existing:
@@ -180,7 +182,7 @@ def publish(args):
     uploaded = api(f'releases/{release["id"]}')
     if {a['name']: a['digest'] for a in uploaded['assets']} != expected:
         raise ValueError('Release upload checksum mismatch; draft retained for inspection')
-    result = api(f'releases/{release["id"]}', 'PATCH', dict(body=body, draft=False, prerelease=True, make_latest='false'))
+    result = api(f'releases/{release["id"]}', 'PATCH', dict(name=title, body=body, draft=False, prerelease=not args.stable, make_latest='false'))
     print(result['html_url'])
 
 
@@ -225,5 +227,6 @@ if __name__ == '__main__':
         else:
             r.add_argument('--run', required=True)
             r.add_argument('--linux-run', type=int)
+            r.add_argument('--stable', action='store_true')
     args = p.parse_args()
     {'resolve': resolve, 'collect': collect, 'publish': publish, 'refresh-site': refresh_site}[args.command](args)

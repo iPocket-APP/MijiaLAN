@@ -326,6 +326,14 @@ impl HomeKit {
         *self.error.lock().unwrap() = None;
         Ok(())
     }
+    /// Apply a saved selection to a running bridge without closing paired connections.
+    pub fn refresh_accessories(&self) -> Result<()> {
+        if let Some(shared) = self.running.lock().unwrap().as_ref() {
+            shared.refresh()?;
+        }
+        Ok(())
+    }
+
     pub fn stop(&self) {
         if let Some(shared) = self.running.lock().unwrap().take() {
             shared.stop.store(true, Ordering::Relaxed);

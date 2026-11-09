@@ -32,6 +32,12 @@ pub fn text(value: impl AsRef<str>) -> String {
         "设备" => "Devices",
         "还没读到设备规格" => "Device specifications are not available yet.",
         "「家庭」没有对应的配件类型" => "No matching accessory type in Home.",
+        "展开家庭控件" => "Show Home controls",
+        "收起家庭控件" => "Collapse Home controls",
+        "高级项目" => "Advanced Controls",
+        "关闭控件会将它从「家庭」的场景和自动化中移除。全部关闭会隐藏设备。" => {
+            "Turning off a control removes it from scenes and automations in Home. Turning all controls off hides the device."
+        }
         "设置…" => "Settings…",
         "检查更新…" => "Check for Updates…",
         "查看更新…" => "View Update…",

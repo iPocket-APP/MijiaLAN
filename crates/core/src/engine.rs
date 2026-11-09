@@ -1,5 +1,6 @@
 use crate::{
-    Device, Error, MiioClient, Property, Result, Specification, Store, Token, legacy::Profile, spec,
+    Device, Error, MiioClient, Property, Result, Specification, Store, Token, legacy::Profile,
+    spec, store::Config,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -203,25 +204,20 @@ impl Engine {
         engine
     }
     pub fn set_bridged(&self, did: &str, bridged: bool) -> Result<()> {
-        self.store.update(|config| {
+        self.update_bridge_selection(|config| {
             if let Some(device) = config.devices.iter_mut().find(|d| d.did == did) {
                 device.bridged = bridged;
             }
-        })?;
-        if let Some(state) = self.states.write().unwrap().get_mut(did) {
-            state.device.bridged = bridged;
-        }
-        Ok(())
+        })
     }
-    #[cfg(target_os = "linux")]
-    pub fn select_bridged_devices(&self, selected: &BTreeSet<String>) -> Result<()> {
-        self.store.update(|config| {
-            for device in &mut config.devices {
-                device.bridged = selected.contains(&device.did);
+    /// Persist device and service choices together, then update the device snapshots.
+    pub fn update_bridge_selection(&self, change: impl FnOnce(&mut Config)) -> Result<()> {
+        self.store.update(change)?;
+        let mut states = self.states.write().unwrap();
+        for device in self.store.config().devices {
+            if let Some(state) = states.get_mut(&device.did) {
+                state.device.bridged = device.bridged;
             }
-        })?;
-        for state in self.states.write().unwrap().values_mut() {
-            state.device.bridged = selected.contains(&state.device.did);
         }
         Ok(())
     }

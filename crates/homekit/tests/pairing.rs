@@ -798,6 +798,125 @@ fn verify(
     }
 }
 #[test]
+fn paired_controller_keeps_service_ids_and_names_when_changing_home_selection() {
+    use mijialan_homekit::mapping::{home_services, select_device, select_service};
+
+    let engine = Arc::new(Engine::demo());
+    let did = "3";
+    let pm25 = "sensor:3.4";
+    engine
+        .store
+        .update(|config| {
+            config
+                .homekit_names
+                .insert(format!("{did}:{pm25}"), "Particle sensor".into());
+        })
+        .unwrap();
+    let options = home_services(
+        &engine.state(did).unwrap(),
+        &engine.store.config().homekit_names,
+    );
+    assert!(options.len() > 1);
+    assert_eq!(
+        options
+            .iter()
+            .find(|service| service.key == pm25)
+            .unwrap()
+            .title(),
+        "Particle sensor"
+    );
+    assert!(select_service(&engine, did, "not-a-service", false).is_err());
+
+    let bridge = HomeKit::new(engine.clone());
+    bridge
+        .start_at((Ipv4Addr::LOCALHOST, 0).into(), false)
+        .unwrap();
+    let info = bridge.info();
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, info.port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let controller = ControllerKeypair::from_seed("service-selection".into(), [84; 32]);
+    let accessory = pair_controller(&mut stream, &info.code, &controller);
+    let mut session = verify(&mut stream, &controller, &accessory);
+    let read_database = |stream: &mut TcpStream, session: &mut Session| -> Value {
+        let (status, body) = encrypted_request(stream, session, "GET", "/accessories", &[]);
+        assert_eq!(status, 200);
+        serde_json::from_slice(&body).unwrap()
+    };
+    let before = read_database(&mut stream, &mut session);
+    let purifier = &before["accessories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|device| {
+            device["services"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|service| service["type"] == "8D")
+        })
+        .unwrap();
+    let services = purifier["services"].as_array().unwrap();
+    let sensor = services
+        .iter()
+        .find(|service| service["type"] == "8D")
+        .unwrap();
+    let sensor_iid = sensor["characteristics"][0]["iid"].as_u64().unwrap();
+    let aid = purifier["aid"].as_u64().unwrap();
+
+    select_service(&engine, did, pm25, false).unwrap();
+    bridge.refresh_accessories().unwrap();
+    let after = read_database(&mut stream, &mut session);
+    let mut expected = before.clone();
+    let updated = expected["accessories"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|device| device["aid"] == aid)
+        .unwrap();
+    updated["services"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|service| service["type"] != "8D");
+    assert_eq!(after, expected);
+    let (status, body) = encrypted_request(
+        &mut stream,
+        &mut session,
+        "GET",
+        &format!("/characteristics?id={aid}.{sensor_iid}"),
+        &[],
+    );
+    assert_eq!(status, 207);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["characteristics"][0]["status"],
+        -70409
+    );
+
+    select_device(&engine, did, false).unwrap();
+    select_device(&engine, did, true).unwrap();
+    bridge.refresh_accessories().unwrap();
+    assert_eq!(read_database(&mut stream, &mut session), expected);
+    for service in options.iter().filter(|service| service.key != pm25) {
+        select_service(&engine, did, &service.key, false).unwrap();
+    }
+    assert!(!engine.state(did).unwrap().device.bridged);
+    bridge.refresh_accessories().unwrap();
+    assert!(
+        !read_database(&mut stream, &mut session)["accessories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|device| device["aid"] == aid)
+    );
+
+    select_device(&engine, did, true).unwrap();
+    bridge.refresh_accessories().unwrap();
+    assert_eq!(read_database(&mut stream, &mut session), before);
+    assert!(bridge.info().paired);
+}
+
+#[test]
 fn real_tcp_pairing_multi_frame_database_writes_events_and_admin_permissions() {
     let engine = Arc::new(Engine::demo());
     let bridge = HomeKit::new(engine.clone());
