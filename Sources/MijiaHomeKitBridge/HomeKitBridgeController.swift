@@ -42,6 +42,10 @@ public final class HomeKitBridgeController {
         public let omittedServiceCount: Int
     }
     public private(set) var serviceLimitWarnings: [ServiceLimitWarning] = []
+    /// Services the user kept out of Apple Home, by device ID and service key. The rest of the accessory stays as it was.
+    public private(set) var excludedServices: [String: Set<String>]
+    /// Moves whenever Home renames a service, so a list of names can tell it is out of date.
+    public private(set) var serviceNamesRevision = 0
 
     public var isEnabled: Bool {
         didSet {
@@ -67,6 +71,7 @@ public final class HomeKitBridgeController {
     static let keepAwakeKey = "homekit_bridge_keep_awake"
     static let layoutKey = "homekit_bridge_layout_v1"
     static let serviceNamesKey = "homekit_bridge_service_names_v1"
+    static let excludedServicesKey = "homekit_bridge_excluded_services_v1"
     public static let bridgeName = "MijiaLAN Bridge"
 
     /// Accessory IDs and the configuration number Apple Home caches; kept apart from the secrets because they change
@@ -167,6 +172,7 @@ public final class HomeKitBridgeController {
         self.capabilityIIDs = defaults.data(forKey: Self.capabilityIIDsKey)
             .flatMap { try? JSONDecoder().decode([String: [String: UInt64]].self, from: $0) } ?? [:]
         self.serviceNames = defaults.dictionary(forKey: Self.serviceNamesKey) as? [String: [String: String]] ?? [:]
+        self.excludedServices = (defaults.dictionary(forKey: Self.excludedServicesKey) as? [String: [String]] ?? [:]).mapValues(Set.init)
         self.savedLayout = defaults.data(forKey: Self.layoutKey) == nil ? nil : layout
         self.savedCapabilityIIDs = defaults.data(forKey: Self.capabilityIIDsKey) == nil ? nil : capabilityIIDs
     }
@@ -176,6 +182,21 @@ public final class HomeKitBridgeController {
         self.capabilities = capabilities
         observeStore()
         if isEnabled { enqueue { await $0.startIfReady() } }
+    }
+
+    /// Keeps these services of a device out of Apple Home from the next sync on; an empty set publishes them all. Home
+    /// forgets a removed service's scenes and automations, but the services that stay keep their IDs.
+    public func setExcludedServices(_ keys: Set<String>, for did: String) {
+        guard (excludedServices[did] ?? []) != keys else { return }
+        excludedServices[did] = keys.isEmpty ? nil : keys
+        defaults.set(excludedServices.mapValues { $0.sorted() }, forKey: Self.excludedServicesKey)
+        capabilityStructureDirty = true
+        if service != nil { scheduleSync() }
+    }
+
+    /// What the device can publish to Apple Home, service by service, under the names Home shows; see `setExcludedServices`.
+    public func homeServices(for snapshot: DeviceSnapshot, legacyDevice: SmartDevice?) -> [CapabilityHomeKitService] {
+        CapabilityHomeKitMapper.services(snapshot: snapshot, legacyDevice: legacyDevice, names: serviceNames[snapshot.id] ?? [:])
     }
 
     /// Forgets every paired controller and the bridge identity; Apple Home then sees a new, unpaired bridge.
@@ -500,7 +521,7 @@ public final class HomeKitBridgeController {
             let did = snapshot.id
             var ids = capabilityIIDs[did] ?? [:]
             let plan = CapabilityHomeKitMapper.plan(snapshot: snapshot, legacyDevice: legacyDevices[did],
-                names: serviceNames[did] ?? [:], identifiers: &ids)
+                names: serviceNames[did] ?? [:], identifiers: &ids, excluding: excludedServices[did] ?? [])
             syncStatistics.planBuilds += 1
             if plan.omittedServiceCount > 0 {
                 limitWarnings.append(ServiceLimitWarning(id: did, deviceName: snapshot.device.name,
@@ -613,6 +634,7 @@ public final class HomeKitBridgeController {
                 guard !name.isEmpty, name.utf8.count <= 64 else { throw HAPError.invalidValue }
                 serviceNames[did, default: [:]][key] = name
                 defaults.set(serviceNames, forKey: Self.serviceNamesKey)
+                serviceNamesRevision += 1
                 capabilityStructureDirty = true
                 scheduleSync()
             case .legacy(let role) where role.isConfiguredName: try await handleWrite(deviceId: did, role: role, value: value)
@@ -742,6 +764,7 @@ public final class HomeKitBridgeController {
             guard !name.isEmpty, name.utf8.count <= 64 else { throw HAPError.invalidValue }
             serviceNames[deviceId, default: [:]][role.rawValue] = name
             defaults.set(serviceNames, forKey: Self.serviceNamesKey)
+            serviceNamesRevision += 1
             capabilityStructureDirty = true
             return
         }

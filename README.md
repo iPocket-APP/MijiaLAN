@@ -150,6 +150,7 @@ MIJIALAN_UI_PREVIEW=1 "$(swift build --show-bin-path)/MijiaLANApp"
 | `MIJIALAN_SNAPSHOT=<path>` | 渲染面板截图；可用 `MIJIALAN_SNAPSHOT_DELAY` 指定等待秒数 |
 | `MIJIALAN_UI_THEME=dark/light` | 配合截图选择外观 |
 | `MIJIALAN_UI_PAGE=<did>/settings` | 选择截图初始页面，默认首页 |
+| `MIJIALAN_UI_EXPAND=<did>,…` | 在「管理家庭设备」中展开这些设备的功能列表 |
 | `MIJIALAN_SNAPSHOT_WINDOW=<seconds>` | 打开原生交互预览窗口 |
 
 ### 更新 hass-xiaomi-miot 映射表

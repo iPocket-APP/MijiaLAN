@@ -150,6 +150,7 @@ MIJIALAN_UI_PREVIEW=1 "$(swift build --show-bin-path)/MijiaLANApp"
 | `MIJIALAN_SNAPSHOT=<path>` | Render a panel screenshot; use `MIJIALAN_SNAPSHOT_DELAY` to set the delay in seconds |
 | `MIJIALAN_UI_THEME=dark/light` | Choose screenshot appearance |
 | `MIJIALAN_UI_PAGE=<did>/settings` | Choose the initial screenshot page; defaults to Home |
+| `MIJIALAN_UI_EXPAND=<did>,…` | Expand these devices' service lists in Manage Home Devices |
 | `MIJIALAN_SNAPSHOT_WINDOW=<seconds>` | Open an interactive native preview window |
 
 ### Updating the hass-xiaomi-miot tables

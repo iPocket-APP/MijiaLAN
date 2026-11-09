@@ -5,7 +5,8 @@ import MijiaCore
 
 /// Development aid: `MIJIALAN_SNAPSHOT=<file.png>` renders the panel after `MIJIALAN_SNAPSHOT_DELAY` seconds
 /// (default 6), writes it as PNG and, unless `MIJIALAN_SNAPSHOT_EXIT=0`, quits. `MIJIALAN_SNAPSHOT_HIDE=<did>` first
-/// keeps that device out of Apple Home through the panel's own path. `MIJIALAN_SNAPSHOT_WINDOW=<seconds>` also shows
+/// keeps that device out of Apple Home through the panel's own path, and `MIJIALAN_UI_EXPAND=<did>,…` expands those
+/// devices' rows in Manage Home Devices. `MIJIALAN_SNAPSHOT_WINDOW=<seconds>` also shows
 /// the expanded panel in a real window for that long and prints its window number, for `screencapture -l`:
 /// `ImageRenderer` draws no AppKit controls.
 @MainActor
@@ -34,6 +35,10 @@ enum DevSnapshot {
             default: .device($0)
             }
         } ?? .home
+        let session = PanelSession(route: route)
+        for did in (environment["MIJIALAN_UI_EXPAND"] ?? "").split(separator: ",") {
+            session.expansion(deviceID: String(did), section: SettingsHomeKitManagement.expansionSection).wrappedValue = true
+        }
         if let theme = environment["MIJIALAN_UI_THEME"] {
             UserDefaults.standard.set(theme, forKey: "control_center_appearance")
         }
@@ -44,7 +49,7 @@ enum DevSnapshot {
                 model.setInHomeKit(device, false)
                 try? await Task.sleep(for: .seconds(1))
             }
-            let renderer = ImageRenderer(content: PanelView(model: model, updater: updater, scrolls: false, initialRoute: route))
+            let renderer = ImageRenderer(content: PanelView(model: model, updater: updater, scrolls: false, session: session))
             renderer.scale = 2
             if let image = renderer.cgImage {
                 let rep = NSBitmapImageRep(cgImage: image)
@@ -65,8 +70,8 @@ enum DevSnapshot {
             if let seconds = Double(environment["MIJIALAN_SNAPSHOT_WINDOW"] ?? "") {
                 let visible = NSWindow(contentRect: NSRect(x: 80, y: 80, width: PanelView.width, height: PanelView.maxHeight),
                                        styleMask: [.titled, .closable], backing: .buffered, defer: false)
-                let shown = NSHostingView(rootView: PanelView(model: model, updater: updater, initialRoute: route,
-                    reduceMotionOverride: environment["MIJIALAN_UI_REDUCE_MOTION"].map { $0 == "1" })
+                let shown = NSHostingView(rootView: PanelView(model: model, updater: updater,
+                    reduceMotionOverride: environment["MIJIALAN_UI_REDUCE_MOTION"].map { $0 == "1" }, session: session)
                     .environment(\.appearsActive, true)
                     .background(PanelWindowSizing()))
                 visible.title = L10n.tr("MijiaLAN · 原生预览", "MijiaLAN · Native Preview")
