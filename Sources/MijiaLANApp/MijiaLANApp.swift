@@ -7,7 +7,7 @@ import SwiftUI
 @MainActor
 struct MijiaLANApp: App {
     @NSApplicationDelegateAdaptor(MijiaLANApplicationDelegate.self) private var delegate
-    @State private var model: AppModel
+    @StateObject private var model: AppModel
 
     init() {
         LANLocalization.configure()
@@ -15,7 +15,7 @@ struct MijiaLANApp: App {
         LoggingSystem.bootstrap(UnifiedLogHandler.init)
         UnifiedLogHandler.configureMiioTrace()
         let model = AppModel()
-        _model = State(initialValue: model)
+        _model = StateObject(wrappedValue: model)
         delegate.model = model
         DevSnapshot.scheduleIfRequested(model: model, updater: delegate.updater)
     }

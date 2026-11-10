@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import Observation
+import Combine
 @testable import MijiaCore
 
 @MainActor
@@ -23,16 +23,12 @@ struct UndoScopeTests {
         return (store, provider, suite)
     }
 
-    private func waitForDevices(_ store: HomeStore, matching condition: ([SmartDevice]) -> Bool) async {
-        while !condition(store.devices) {
-            await withCheckedContinuation { continuation in
-                withObservationTracking {
-                    _ = store.devices
-                } onChange: {
-                    continuation.resume()
-                }
-            }
+    private func waitForDevices(_ store: HomeStore, matching condition: @escaping ([SmartDevice]) -> Bool) async {
+        var observation: AnyCancellable?
+        await withCheckedContinuation { continuation in
+            observation = store.$devices.first(where: condition).sink { _ in continuation.resume() }
         }
+        observation?.cancel()
     }
 
     @Test("Banner undo preserves later changes to other devices")

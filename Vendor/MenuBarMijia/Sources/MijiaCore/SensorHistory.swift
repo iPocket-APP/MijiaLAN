@@ -1,5 +1,5 @@
 import Foundation
-import Observation
+import Combine
 
 /// Time window displayed by the expandable sensor trend chart.
 public enum SensorHistoryWindow: String, CaseIterable, Codable, Equatable, Sendable, Identifiable {
@@ -254,9 +254,8 @@ private struct SensorHistoryStored: Codable, Equatable, Sendable {
 /// Local snapshots feed `record(devices:now:)` continuously while the app runs; opening a sensor's
 /// chart drawer also triggers an on-demand cloud history fetch (`mergeCloudSamples`), filling in
 /// hours or days reported by the home's Bluetooth/Zigbee gateway while the Mac was asleep.
-@Observable
 @MainActor
-public final class SensorHistory {
+public final class SensorHistory: ObservableObject {
     public static let retentionHours = 48
     public static let retentionDays = 14
     public static let storageKey = "sensor_history_v1"
@@ -269,9 +268,9 @@ public final class SensorHistory {
     private var loadingKeys: Set<String> = []
     /// Active source connection namespace (e.g. HA server URL, Xiaomi Cloud account, or `"demo"`).
     /// Keeps identical device/entity IDs across different servers or accounts isolated.
-    public private(set) var connectionScope: String
+    @Published public private(set) var connectionScope: String
     /// Revision counter bumped on every mutation so SwiftUI views observing `SensorHistory` re-render.
-    public private(set) var revision: Int = 0
+    @Published public private(set) var revision: Int = 0
 
     public init(
         defaults: UserDefaults = .standard,

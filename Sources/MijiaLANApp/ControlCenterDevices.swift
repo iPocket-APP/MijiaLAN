@@ -3,14 +3,16 @@ import MijiaLAN
 import SwiftUI
 
 struct ControlCenterDevices: View {
-    let model: AppModel
-    @Bindable var session: PanelSession
+    @ObservedObject var model: AppModel
+    @ObservedObject var session: PanelSession
+    @EnvironmentObject private var devices: DeviceController
     let openDevice: (String) -> Void
     let openSettings: () -> Void
 
     var body: some View {
-        let online = model.config.devices.filter { model.health[$0.did]?.state == .online }
-        let offline = model.config.devices.filter { model.health[$0.did]?.state != .online }
+        let snapshots = devices.snapshots
+        let online = model.config.devices.filter { snapshots[$0.did]?.isOnline == true }
+        let offline = model.config.devices.filter { snapshots[$0.did]?.isOnline != true }
         VStack(alignment: .leading, spacing: 12) {
             if model.config.devices.isEmpty {
                 VStack(spacing: 12) {
@@ -33,13 +35,13 @@ struct ControlCenterDevices: View {
             } else {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2), spacing: 8) {
                     ForEach(online) { device in
-                        OnlineDeviceTile(model: model, device: device) { openDevice(device.did) }
+                        OnlineDeviceTile(model: model, device: device, snapshot: snapshots[device.did]) { openDevice(device.did) }
                     }
                 }
             }
             if !offline.isEmpty {
                 HStack(spacing: 4) {
-                    Text(offline.allSatisfy { model.health[$0.did]?.state == .unknown } ? L10n.tr("正在检测", "Checking") : L10n.tr("离线设备", "Offline Devices")).fontWeight(.medium)
+                    Text(offline.allSatisfy { snapshots[$0.did]?.health.state == .unknown } ? L10n.tr("正在检测", "Checking") : L10n.tr("离线设备", "Offline Devices")).fontWeight(.medium)
                     Text("\(offline.count)").foregroundStyle(.tertiary)
                     Spacer()
                     Button(model.retryingDeviceIDs.isEmpty ? L10n.tr("全部重试", "Retry All") : L10n.tr("正在重试…", "Retrying…")) {
@@ -51,7 +53,8 @@ struct ControlCenterDevices: View {
                 .font(.system(size: 11)).foregroundStyle(.secondary).padding(.horizontal, 4).padding(.top, 2)
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
                     ForEach(offline) { device in
-                        OfflineDeviceTile(model: model, device: device, selected: session.selectedOffline == device.did) {
+                        OfflineDeviceTile(model: model, device: device, snapshot: snapshots[device.did],
+                                          retrying: model.retryingDeviceIDs.contains(device.did), selected: session.selectedOffline == device.did) {
                             session.selectedOffline = session.selectedOffline == device.did ? nil : device.did
                         }
                     }
@@ -68,12 +71,12 @@ struct ControlCenterDevices: View {
 private struct OnlineDeviceTile: View {
     let model: AppModel
     let device: LocalDevice
+    let snapshot: DeviceSnapshot?
     let open: () -> Void
     @Environment(\.colorScheme) private var scheme
     @State private var working = false
     @State private var error: String?
 
-    private var snapshot: DeviceSnapshot? { model.devices.snapshots[device.did] }
     private var isOn: Bool { snapshot?.primaryPower.flatMap { snapshot?.value($0.id)?.boolValue } == true }
     private var canToggle: Bool {
         guard let s = snapshot, let power = s.primaryPower else { return false }
@@ -128,16 +131,18 @@ private struct OnlineDeviceTile: View {
 private struct OfflineDeviceTile: View {
     let model: AppModel
     let device: LocalDevice
+    let snapshot: DeviceSnapshot?
+    let retrying: Bool
     let selected: Bool
     let action: () -> Void
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        let issue = ConnectionIssue(health: model.health[device.did] ?? LANDeviceHealth())
+        let issue = ConnectionIssue(health: snapshot?.health ?? LANDeviceHealth())
         Button(action: action) {
             VStack(alignment: .leading, spacing: 7) {
-                if model.retryingDeviceIDs.contains(device.did) { ProgressView().controlSize(.mini).frame(width: 18, height: 18) }
-                else { Image(systemName: DevicePresentation.symbol(model.devices.snapshots[device.did])).font(.system(size: 16)).foregroundStyle(.secondary).frame(width: 18, height: 18) }
+                if retrying { ProgressView().controlSize(.mini).frame(width: 18, height: 18) }
+                else { Image(systemName: DevicePresentation.symbol(snapshot)).font(.system(size: 16)).foregroundStyle(.secondary).frame(width: 18, height: 18) }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(DevicePresentation.tileName(device)).font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary).lineLimit(1)
@@ -161,13 +166,14 @@ private struct OfflineDeviceTile: View {
 }
 
 struct OfflineDeviceCard: View {
-    let model: AppModel
+    @ObservedObject var model: AppModel
+    @EnvironmentObject private var devices: DeviceController
     let device: LocalDevice
     var open: (() -> Void)?
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        let health = model.health[device.did] ?? LANDeviceHealth()
+        let health = devices.snapshots[device.did]?.health ?? LANDeviceHealth()
         let issue = ConnectionIssue(health: health)
         VStack(alignment: .leading, spacing: 9) {
             HStack {
@@ -180,7 +186,7 @@ struct OfflineDeviceCard: View {
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 5) {
                 GridRow { Text(L10n.tr("房间", "Room")); Text(device.roomName ?? L10n.tr("未分配", "Unassigned")) }
                 GridRow { Text("IP"); Text(device.host).monospaced().textSelection(.enabled) }
-                if let retry = model.devices.retryStates[device.did] {
+                if let retry = devices.retryStates[device.did] {
                     GridRow {
                         Text(L10n.tr("下次自动重试", "Next Automatic Retry"))
                         if retry.isProbing {
@@ -215,7 +221,7 @@ struct OfflineDeviceCard: View {
 }
 
 struct DeviceContextMenu: View {
-    let model: AppModel
+    @ObservedObject var model: AppModel
     let device: LocalDevice
     var body: some View {
         let included = model.isInHomeKit(device)

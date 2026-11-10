@@ -2,7 +2,7 @@ import Foundation
 import HAPCore
 import MijiaCore
 @testable import MijiaLAN
-import Synchronization
+import os
 import Testing
 @testable import MijiaHomeKitBridge
 
@@ -481,4 +481,4 @@ struct WireHomeKitIntegrationTests {
     }
 }
 
-private final class VaultStorage: Sendable { let data = Mutex<Data?>(nil) }
+private final class VaultStorage: Sendable { let data = OSAllocatedUnfairLock<Data?>(initialState: nil) }

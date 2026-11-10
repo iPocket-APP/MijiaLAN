@@ -2,16 +2,15 @@ import Foundation
 import MijiaCore
 import MijiaHomeKitBridge
 import MijiaLAN
-import Observation
+import Combine
 import os
 
 /// Owns the app's single Keychain item, the device config, the LAN API and the `HomeStore` + HomeKit bridge on top.
 ///
 /// The Xiaomi account is used only inside `startCloudImport`: the session lives in that task's locals, is used for
 /// one device-list read, and is gone when the task ends. Nothing else ever talks to the cloud.
-@Observable
 @MainActor
-final class AppModel {
+final class AppModel: ObservableObject {
     nonisolated static let keychainService = "com.mijialan.MijiaLAN"
     nonisolated static let configAccount = "home_config_v1"
     nonisolated static let bridgeAccount = "homekit_bridge_v1"
@@ -26,24 +25,23 @@ final class AppModel {
         case failed(String)
     }
 
-    private(set) var config: LocalHomeConfig
+    @Published private(set) var config: LocalHomeConfig
     /// The Keychain item exists but could not be read (prompt declined); nothing is saved until it can be.
-    private(set) var vaultUnavailable: Bool
-    var health: [String: LANDeviceHealth] { devices.snapshots.mapValues(\.health) }
+    @Published private(set) var vaultUnavailable: Bool
     /// Climate devices' power draw in watts, which MijiaCore does not carry.
     var powerWatts: [String: Double] { devices.snapshots.compactMapValues { s in
         s.capabilities.first { $0.name == "electric-power" }.flatMap { s.value($0.id)?.doubleValue }
     } }
     let devices: DeviceController
-    var importState: ImportState = .idle
-    private(set) var lastImportSummary: String?
-    var importRegion: String = "cn"
-    private(set) var manualAddError: String?
-    private(set) var isAddingManually = false
-    private(set) var isRediscovering = false
-    private(set) var lastRediscoveryNote: String?
-    private(set) var lastRediscoveryAt: Date?
-    private(set) var retryingDeviceIDs: Set<String> = []
+    @Published var importState: ImportState = .idle
+    @Published private(set) var lastImportSummary: String?
+    @Published var importRegion: String = "cn"
+    @Published private(set) var manualAddError: String?
+    @Published private(set) var isAddingManually = false
+    @Published private(set) var isRediscovering = false
+    @Published private(set) var lastRediscoveryNote: String?
+    @Published private(set) var lastRediscoveryAt: Date?
+    @Published private(set) var retryingDeviceIDs: Set<String> = []
 
     enum DiagnosticsExport: Equatable {
         case idle
@@ -51,20 +49,21 @@ final class AppModel {
         case exported(URL)
         case failed(String)
     }
-    private(set) var diagnosticsExport: DiagnosticsExport = .idle
+    @Published private(set) var diagnosticsExport: DiagnosticsExport = .idle
 
     let store: HomeStore
     let bridge: HomeKitBridgeController
-    @ObservationIgnored private let vault: SecretVault
-    @ObservationIgnored private let configBox: ConfigBox
-    @ObservationIgnored private let api: LANMiotAPI
-    @ObservationIgnored private var importTask: Task<Void, Never>?
-    @ObservationIgnored private var rediscoveryTask: Task<Void, Never>?
-    @ObservationIgnored private var bridgeAttached = false
-    @ObservationIgnored private var homeKitSupport: (revision: UInt64, devices: [String: Bool]) = (0, [:])
-    @ObservationIgnored private var homeKitServiceLists: (revision: UInt64, names: Int, devices: [String: [CapabilityHomeKitService]]) = (0, 0, [:])
-    @ObservationIgnored private let usesPreviewDevices: Bool
-    @ObservationIgnored private let logger = Logger(subsystem: "com.mijialan.MijiaLAN", category: "App")
+    private let vault: SecretVault
+    private let configBox: ConfigBox
+    private let api: LANMiotAPI
+    private var importTask: Task<Void, Never>?
+    private var rediscoveryTask: Task<Void, Never>?
+    private var bridgeAttached = false
+    private var homeKitSelectionObservation: AnyCancellable?
+    private var homeKitSupport: (revision: UInt64, devices: [String: Bool]) = (0, [:])
+    private var homeKitServiceLists: (revision: UInt64, names: Int, devices: [String: [CapabilityHomeKitService]]) = (0, 0, [:])
+    private let usesPreviewDevices: Bool
+    private let logger = Logger(subsystem: "com.mijialan.MijiaLAN", category: "App")
 
     /// `MIJIALAN_EPHEMERAL=1` (development): secrets in memory and separate defaults, so a test run never touches
     /// the Keychain item or the real pairing. `MIJIALAN_SEED_CONFIG=<file>` then supplies the device config as JSON.
@@ -114,14 +113,20 @@ final class AppModel {
             save: { vault.set($0, for: AppModel.bridgeAccount) }
         ), defaults: bridgeDefaults)
 
+        // The Home selection helpers also depend on state owned by these three objects.
+        homeKitSelectionObservation = Publishers.CombineLatest4(
+            devices.$structureRevision, store.$hiddenDeviceIds.removeDuplicates(),
+            bridge.$excludedServices, bridge.$serviceNamesRevision
+        )
+        .dropFirst()
+        .sink { [weak self] _ in self?.objectWillChange.send() }
+
         if preview || (ephemeral && environment["MIJIALAN_SNAPSHOT"] != nil) { bridge.isEnabled = false }
         attachBridgeIfNeeded()
         if !preview { startRediscoveryLoop() }
     }
 
     // MARK: Devices
-
-    var onlineCount: Int { config.devices.filter { health[$0.did]?.state == .online }.count }
 
     func smartDevice(for device: LocalDevice) -> SmartDevice? {
         store.devices.first { $0.id == device.did }

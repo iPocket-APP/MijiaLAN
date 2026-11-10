@@ -7,10 +7,10 @@ import MijiaLAN
 import SwiftUI
 
 struct PanelView: View {
-    @Bindable var model: AppModel
+    @ObservedObject var model: AppModel
     let updater: AppUpdater?
     var scrolls = true
-    @State private var session: PanelSession
+    @StateObject private var session: PanelSession
     @State private var panelHeight: CGFloat?
     @State private var generation = 0
     @State private var movesForward = true
@@ -30,7 +30,7 @@ struct PanelView: View {
         self.model = model; self.updater = updater; self.scrolls = scrolls
         self.reduceMotionOverride = reduceMotionOverride
         let state = session ?? PanelSession(route: initialRoute)
-        _session = State(initialValue: state)
+        _session = StateObject(wrappedValue: state)
         _panelHeight = State(initialValue: state.layouts[state.route]?.totalHeight)
     }
 
@@ -49,16 +49,18 @@ struct PanelView: View {
         .fixedSize(horizontal: false, vertical: true)
         .background(ControlCenterPalette(scheme: scheme).panel)
         .clipShape(.rect(cornerRadius: 18))
-        .containerBackground(ControlCenterPalette(scheme: scheme).panel, for: .window)
+        .panelWindowBackground(ControlCenterPalette(scheme: scheme).panel)
         .tint(.blue)
-        .environment(\.panelSession, session)
+        .environmentObject(session)
+        .environmentObject(model.devices)
         .preferredColorScheme(appearance == "dark" ? .dark : appearance == "light" ? .light : nil)
         .onAppear { if scrolls { model.store.setPanelVisible(panelPresented) } }
         .onDisappear { if scrolls { model.store.setPanelVisible(false) } }
-        .onChange(of: panelPresented) { if scrolls { model.store.setPanelVisible(panelPresented) } }
-        .onChange(of: model.config.devices.map(\.did)) {
-            let known = Set(model.config.devices.map(\.did))
-            session.prune(deviceIDs: known)
+        .onValueChange(of: panelPresented) { presented in
+            if scrolls { model.store.setPanelVisible(presented) }
+        }
+        .onValueChange(of: model.config.devices.map(\.did)) { ids in
+            session.prune(deviceIDs: Set(ids))
         }
     }
 
@@ -86,7 +88,7 @@ struct PanelView: View {
         PanelTransitionDiagnostics.record("heightTarget", ["route": screen.diagnosticName,
             "generation": generation, "height": height, "animated": animate])
         if animate {
-            withAnimation(PanelMotion.animation, completionCriteria: .logicallyComplete) {
+            PanelMotion.animate(reducedMotion: false) {
                 panelHeight = height
             } completion: { PanelTransitionDiagnostics.flushSoon() }
         } else {
@@ -106,8 +108,7 @@ struct PanelView: View {
             "forward": movesForward, "reducedMotion": reduceMotion, "height": panelHeight ?? 0])
         // The cached destination size avoids a temporary default-height page
         // on return. An uncached page measures itself before choosing a height.
-        withAnimation(reduceMotion ? nil : PanelMotion.animation,
-                      completionCriteria: .logicallyComplete) {
+        PanelMotion.animate(reducedMotion: reduceMotion) {
             session.route = destination
             if let known = session.layouts[destination] { panelHeight = known.totalHeight }
         } completion: {
@@ -122,7 +123,7 @@ struct PanelView: View {
 /// Each route owns its scroll view and measures its actual content independently.
 /// This keeps outgoing geometry, scroll offsets and controls out of the new page.
 private struct PanelPage: View {
-    @Bindable var model: AppModel
+    @ObservedObject var model: AppModel
     let updater: AppUpdater?
     let session: PanelSession
     let route: ControlCenterRoute
@@ -134,6 +135,7 @@ private struct PanelPage: View {
     @State private var headerHeight: CGFloat?
     @State private var footerHeight: CGFloat?
     @Environment(\.panelPresented) private var panelPresented
+    @EnvironmentObject private var devices: DeviceController
     private var headerSideWidth: CGFloat { L10n.isEnglish ? 80 : 62 }
 
     init(model: AppModel, updater: AppUpdater?, session: PanelSession, route: ControlCenterRoute, scrolls: Bool, appearance: Binding<String>,
@@ -172,7 +174,7 @@ private struct PanelPage: View {
         }
         .frame(width: PanelView.width)
         .fixedSize(horizontal: false, vertical: true)
-        .onChange(of: layout, initial: true) { _, value in
+        .onValueChange(of: layout, initial: true) { value in
             if let value { measured(route, value) }
         }
     }
@@ -180,12 +182,13 @@ private struct PanelPage: View {
     @ViewBuilder private var header: some View {
         switch route {
         case .home:
+            let onlineCount = model.config.devices.filter { devices.snapshots[$0.did]?.isOnline == true }.count
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(L10n.tr("米家局域网桥", "MijiaLAN")).font(.system(size: 15, weight: .semibold))
                     HStack(spacing: 6) {
-                        Circle().fill(model.onlineCount > 0 ? Color.green : .secondary).frame(width: 7, height: 7)
-                        Text(model.isRediscovering ? L10n.tr("正在扫描局域网…", "Scanning the LAN…") : L10n.tr("\(model.onlineCount) 台在线 · 共 \(model.config.devices.count) 台", "\(model.onlineCount) online · \(model.config.devices.count) total"))
+                        Circle().fill(onlineCount > 0 ? Color.green : .secondary).frame(width: 7, height: 7)
+                        Text(model.isRediscovering ? L10n.tr("正在扫描局域网…", "Scanning the LAN…") : L10n.tr("\(onlineCount) 台在线 · 共 \(model.config.devices.count) 台", "\(onlineCount) online · \(model.config.devices.count) total"))
                             .font(.system(size: 12)).foregroundStyle(.secondary)
                     }
                 }
@@ -199,7 +202,7 @@ private struct PanelPage: View {
             .padding(.leading, 16).padding(.trailing, 12).padding(.top, 14).padding(.bottom, 12)
         case .device(let did):
             detailHeader(title: model.config.devices.first(where: { $0.did == did }).map(DevicePresentation.name) ?? L10n.tr("设备", "Devices")) {
-                if let snapshot = model.devices.snapshots[did] { ControlCenterPower(controller: model.devices, snapshot: snapshot) }
+                if let snapshot = devices.snapshots[did] { ControlCenterPower(controller: devices, snapshot: snapshot) }
             }
         case .settings:
             detailHeader(title: L10n.tr("设置", "Settings")) { EmptyView() }
@@ -258,14 +261,10 @@ private struct PanelPage: View {
 
     private var footer: some View {
         HStack {
-            if let updater, let version = updater.availableVersion {
-                Button { updater.checkForUpdates() } label: {
-                    Label(L10n.tr("更新至 \(version)", "Update to \(version)"), systemImage: "arrow.down.circle.fill")
-                        .font(.system(size: 11))
-                }
-                .buttonStyle(.plain).foregroundStyle(.blue)
+            if let updater {
+                PanelUpdateStatus(updater: updater)
             } else {
-                Label(L10n.tr("控制只走局域网", "LAN Control Only"), systemImage: "lock").font(.system(size: 11))
+                PanelUpdateStatus.lanControl
             }
             Spacer()
             TimelineView(PanelTimelineSchedule(interval: 30, isActive: panelPresented)) { context in
@@ -277,6 +276,26 @@ private struct PanelPage: View {
         .overlay(alignment: .top) { Rectangle().fill(Color.primary.opacity(0.08)).frame(height: 0.5) }
     }
 
+}
+
+private struct PanelUpdateStatus: View {
+    @ObservedObject var updater: AppUpdater
+
+    var body: some View {
+        if let version = updater.availableVersion {
+            Button { updater.checkForUpdates() } label: {
+                Label(L10n.tr("更新至 \(version)", "Update to \(version)"), systemImage: "arrow.down.circle.fill")
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.plain).foregroundStyle(.blue)
+        } else {
+            Self.lanControl
+        }
+    }
+
+    static var lanControl: some View {
+        Label(L10n.tr("控制只走局域网", "LAN Control Only"), systemImage: "lock").font(.system(size: 11))
+    }
 }
 
 /// Retains TimelineView's content identity while removing all future display ticks when the panel is hidden.

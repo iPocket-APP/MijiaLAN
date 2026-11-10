@@ -1,6 +1,6 @@
 import AppKit
 import MijiaCore
-import Observation
+import Combine
 import SwiftUI
 
 @MainActor
@@ -16,6 +16,7 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate, NSMenuItemValida
     private var globalMonitor: Any?
     private var pendingShow: Task<Void, Never>?
     private var settledIconFrame: NSRect?
+    private var iconObservation: AnyCancellable?
 
     init(model: AppModel, updater: AppUpdater) {
         self.model = model
@@ -53,7 +54,11 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate, NSMenuItemValida
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem.button?.setAccessibilityLabel(L10n.tr("米家局域网桥", "MijiaLAN"))
         statusItem.button?.toolTip = "MijiaLAN"
-        updateIcon()
+        iconObservation = model.$config.map { Set($0.devices.map(\.did)) }.removeDuplicates()
+            .combineLatest(updater.$availableVersion.removeDuplicates())
+            .sink { [weak self] deviceIDs, version in
+                self?.updateIcon(deviceIDs: deviceIDs, availableVersion: version)
+            }
         presentation.visibilityChanged = { [weak self] visible in
             guard let self else { return }
             statusItem.button?.highlight(visible)
@@ -238,6 +243,7 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate, NSMenuItemValida
     }
 
     @objc private func applicationWillTerminate() {
+        iconObservation?.cancel()
         pendingShow?.cancel()
         presentation.stop()
         contentLifetime.stop()
@@ -247,18 +253,13 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate, NSMenuItemValida
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
-    private func updateIcon() {
-        session.prune(deviceIDs: Set(model.config.devices.map(\.did)))
-        withObservationTracking {
-            let version = updater.availableVersion
-            let symbol = version == nil ? (model.config.devices.isEmpty ? "house" : "homekit") : "arrow.down.circle"
-            let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-            image?.isTemplate = true
-            statusItem.button?.image = image
-            statusItem.button?.toolTip = version.map { L10n.tr("MijiaLAN · 可更新至 \($0)", "MijiaLAN · Update to \($0)") } ?? "MijiaLAN"
-        } onChange: { [weak self] in
-            Task { @MainActor in self?.updateIcon() }
-        }
+    private func updateIcon(deviceIDs: Set<String>, availableVersion: String?) {
+        session.prune(deviceIDs: deviceIDs)
+        let symbol = availableVersion == nil ? (deviceIDs.isEmpty ? "house" : "homekit") : "arrow.down.circle"
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        image?.isTemplate = true
+        statusItem.button?.image = image
+        statusItem.button?.toolTip = availableVersion.map { L10n.tr("MijiaLAN · 可更新至 \($0)", "MijiaLAN · Update to \($0)") } ?? "MijiaLAN"
     }
 
     private func installEventMonitors() {

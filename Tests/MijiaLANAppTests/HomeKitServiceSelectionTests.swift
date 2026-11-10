@@ -1,5 +1,6 @@
 // The simulated device catalog and transport are available in Debug builds.
 #if DEBUG
+import Combine
 import Foundation
 import MijiaHomeKitBridge
 import MijiaLAN
@@ -24,7 +25,11 @@ struct HomeKitServiceSelectionTests {
         #expect(model.isInHomeKit(device))
 
         let sensor = try #require(services.first { $0.kind == .airQuality })
+        var selectionChanges = 0
+        let observation = model.objectWillChange.sink { selectionChanges += 1 }
+        defer { observation.cancel() }
         model.setInHomeKit(device, service: sensor, false)
+        #expect(selectionChanges == 1)
         #expect(!model.isInHomeKit(device, service: sensor))
         #expect(model.bridge.excludedServices[device.did] == [sensor.key])
         model.setInHomeKit(device, service: sensor, true)

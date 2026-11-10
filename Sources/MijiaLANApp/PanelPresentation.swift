@@ -1,22 +1,22 @@
 import AppKit
-import Observation
+import Combine
 import SwiftUI
 
 /// Owns ordering as well as animation: the window stays onscreen until its exit
 /// finishes. A newer show/hide request invalidates an older completion.
-@MainActor @Observable
-final class PanelPresentation {
+@MainActor
+final class PanelPresentation: ObservableObject {
     enum Phase: String { case closed, opening, open, closing }
 
     private(set) var phase: Phase = .closed
-    private(set) var isPresented = false
-    private(set) var progress: CGFloat = 0
-    private(set) var usesReducedMotion = false
-    @ObservationIgnored let window: NSWindow
-    @ObservationIgnored var visibilityChanged: ((Bool) -> Void)?
-    @ObservationIgnored var didClose: (() -> Void)?
-    @ObservationIgnored private var generation = 0
-    @ObservationIgnored private let reduceMotion: () -> Bool
+    @Published private(set) var isPresented = false
+    @Published private(set) var progress: CGFloat = 0
+    @Published private(set) var usesReducedMotion = false
+    let window: NSWindow
+    var visibilityChanged: ((Bool) -> Void)?
+    var didClose: (() -> Void)?
+    private var generation = 0
+    private let reduceMotion: () -> Bool
 
     init(window: NSWindow, reduceMotion: @escaping () -> Bool = {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -106,7 +106,7 @@ final class PanelPresentation {
 }
 
 struct PresentedPanel<Content: View>: View {
-    let presentation: PanelPresentation
+    @ObservedObject var presentation: PanelPresentation
     @ViewBuilder var content: () -> Content
 
     var body: some View {

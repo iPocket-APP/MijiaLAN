@@ -1,5 +1,5 @@
 import Foundation
-import Observation
+import Combine
 import Testing
 @testable import MijiaCore
 
@@ -56,14 +56,15 @@ struct SnapshotObservationTests {
         if useAlias { store.applyDeviceAliases(["study": "阅读灯"]) }
 
         let changes = Counter()
-        withObservationTracking {
-            _ = store.rooms
-            _ = store.homes
-            _ = store.devices
-            _ = store.scenes
-            _ = store.environmentReadings
-            _ = store.hasReceivedInitialSnapshot
-        } onChange: { changes.increment() }
+        let observation = Publishers.MergeMany([
+            store.$rooms.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            store.$homes.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            store.$devices.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            store.$scenes.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            store.$environmentReadings.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            store.$hasReceivedInitialSnapshot.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+        ]).sink { changes.increment() }
+        defer { observation.cancel() }
         for _ in 0..<100 { provider.continuation.yield(.snapshotUpdated(snapshot)) }
         try await drain(provider, store: store, marker: "duplicates")
         #expect(changes.value == 0)
@@ -95,7 +96,8 @@ struct SnapshotObservationTests {
         let store = HomeStore(provider: provider, defaultsSuiteName: suite)
         try await drain(provider, store: store, marker: "same")
         let changes = Counter()
-        withObservationTracking { _ = store.connectionStatus } onChange: { changes.increment() }
+        let observation = store.$connectionStatus.dropFirst().sink { _ in changes.increment() }
+        defer { observation.cancel() }
         provider.continuation.yield(.statusChanged(.disconnected("same")))
         provider.continuation.yield(.snapshotUpdated(SynthesizedHome()))
         for _ in 0..<100 where !store.hasReceivedInitialSnapshot {

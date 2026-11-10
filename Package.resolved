@@ -1,15 +1,6 @@
 {
-  "originHash" : "2548586e745d351d4982f4f0cb4136dfd43f1fa5df2c2bb30d0ee190077c3141",
+  "originHash" : "f5df2116041aae69db06ae5ceaccca8c5ce28e0084e83e670b4213bdc2090da0",
   "pins" : [
-    {
-      "identity" : "mdns-swift",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/acumen-dev/mdns-swift.git",
-      "state" : {
-        "revision" : "ef8c8d387a15b762816f88264667d3278042fa78",
-        "version" : "1.2.0"
-      }
-    },
     {
       "identity" : "sparkle",
       "kind" : "remoteSourceControl",

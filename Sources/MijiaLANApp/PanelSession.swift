@@ -1,4 +1,4 @@
-import Observation
+import Combine
 import SwiftUI
 
 enum ControlCenterRoute: Hashable {
@@ -33,16 +33,16 @@ enum ControlCenterRoute: Hashable {
 
 /// Only small presentation values survive an idle panel. Never store a view,
 /// hosting controller, command writer or closure capturing a view here.
-@MainActor @Observable
-final class PanelSession {
-    var route: ControlCenterRoute
-    var selectedOffline: String?
+@MainActor
+final class PanelSession: ObservableObject {
+    @Published var route: ControlCenterRoute
+    @Published var selectedOffline: String?
     let manual = PanelManualDraft()
-    private var expanded: [String: Set<String>] = [:]
-    @ObservationIgnored var layouts: [ControlCenterRoute: PanelPageLayout] = [:]
+    @Published private var expanded: [String: Set<String>] = [:]
+    var layouts: [ControlCenterRoute: PanelPageLayout] = [:]
     // Scroll updates must not invalidate the page or its layout while scrolling.
-    @ObservationIgnored var scrollOffsets: [ControlCenterRoute: CGFloat] = [:]
-    @ObservationIgnored private var numberDrafts: [String: [String: PanelNumberDraft]] = [:]
+    var scrollOffsets: [ControlCenterRoute: CGFloat] = [:]
+    private var numberDrafts: [String: [String: PanelNumberDraft]] = [:]
 
     init(route: ControlCenterRoute = .home) { self.route = route }
 
@@ -68,26 +68,27 @@ final class PanelSession {
         layouts = layouts.filter { valid($0.key) }
         scrollOffsets = scrollOffsets.filter { valid($0.key) }
         numberDrafts = numberDrafts.filter { deviceIDs.contains($0.key) }
-        expanded = expanded.filter { deviceIDs.contains($0.key) }
+        let retainedExpansions = expanded.filter { deviceIDs.contains($0.key) }
+        if retainedExpansions != expanded { expanded = retainedExpansions }
         if let selectedOffline, !deviceIDs.contains(selectedOffline) { self.selectedOffline = nil }
         if !valid(route) { route = .home }
     }
 }
 
-@MainActor @Observable
-final class PanelManualDraft {
-    var host = ""
-    var token = ""
-    var name = ""
-    var submitted = false
-    var confirmation: String?
+@MainActor
+final class PanelManualDraft: ObservableObject {
+    @Published var host = ""
+    @Published var token = ""
+    @Published var name = ""
+    @Published var submitted = false
+    @Published var confirmation: String?
 }
 
-@MainActor @Observable
-final class PanelNumberDraft {
-    var text = ""
-    var isEditing = false
-    var validationError: String?
+@MainActor
+final class PanelNumberDraft: ObservableObject {
+    @Published var text = ""
+    @Published var isEditing = false
+    @Published var validationError: String?
 }
 
 struct PanelPageLayout: Equatable {
@@ -100,31 +101,19 @@ struct PanelPageLayout: Equatable {
     var totalHeight: CGFloat { headerHeight + viewportHeight + footerHeight }
 }
 
-private struct PanelSessionKey: EnvironmentKey {
-    static let defaultValue: PanelSession? = nil
-}
-
-extension EnvironmentValues {
-    var panelSession: PanelSession? {
-        get { self[PanelSessionKey.self] }
-        set { self[PanelSessionKey.self] = newValue }
-    }
-}
-
 struct PanelDisclosure<Content: View>: View {
     let title: String
     let deviceID: String
     let section: String
     @ViewBuilder var content: () -> Content
-    @State private var localExpanded = false
-    @Environment(\.panelSession) private var session
+    @EnvironmentObject private var session: PanelSession
 
     init(_ title: String, deviceID: String, section: String, @ViewBuilder content: @escaping () -> Content) {
         self.title = title; self.deviceID = deviceID; self.section = section; self.content = content
     }
 
     var body: some View {
-        DisclosureGroup(title, isExpanded: session?.expansion(deviceID: deviceID, section: section) ?? $localExpanded,
+        DisclosureGroup(title, isExpanded: session.expansion(deviceID: deviceID, section: section),
                         content: content)
     }
 }

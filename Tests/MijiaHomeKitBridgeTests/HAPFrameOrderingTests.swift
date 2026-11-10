@@ -1,7 +1,7 @@
 import Crypto
 import Foundation
 import HAPTransport
-import Synchronization
+import os
 import Testing
 
 struct HAPFrameOrderingTests {
@@ -12,7 +12,7 @@ struct HAPFrameOrderingTests {
         let receiver = HAPSession()
         await sender.establishSession(readKey: key, writeKey: key)
         await receiver.establishSession(readKey: key, writeKey: key)
-        let wire = Mutex<[Data]>([])
+        let wire = OSAllocatedUnfairLock<[Data]>(initialState: [])
         try await withThrowingTaskGroup(of: Void.self) { group in
             for i in 0..<128 {
                 group.addTask {

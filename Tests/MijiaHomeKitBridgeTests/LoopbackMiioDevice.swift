@@ -1,10 +1,10 @@
 import Foundation
 import MijiaCore
-import Synchronization
+import os
 @testable import MijiaLAN
 
 /// A real UDP miIO peer, bound only to 127.0.0.1:0. The blocking descriptor is confined to its
-/// dispatch queue; Mutex protects the small state shared with async test code. No device API is mocked.
+/// dispatch queue; a lock protects the small state shared with async test code. No device API is mocked.
 final class LoopbackMiioDevice: Sendable {
     static let token = "00112233445566778899aabbccddeeff"
     static let model = "zhimi.airpurifier.rma1"
@@ -24,7 +24,7 @@ final class LoopbackMiioDevice: Sendable {
         var settling: [String: (passing: JSONValue, reads: Int)] = [:]
         var error: String?
     }
-    private final class Storage: Sendable { let state = Mutex(State()) }
+    private final class Storage: Sendable { let state = OSAllocatedUnfairLock(initialState: State()) }
     private let storage = Storage()
     private let queue = DispatchQueue(label: "test.mijialan.miio-device")
     let port: UInt16
@@ -61,7 +61,7 @@ final class LoopbackMiioDevice: Sendable {
                         let request = try JSONDecoder().decode(JSONValue.self, from: bytes.prefix { $0 != 0 })
                         let method = request["method"]?.stringValue ?? ""
                         let params = request["params"]?.arrayValue ?? []
-                        func key(_ p: JSONValue) -> String { "\(p["siid"]?.intValue ?? 0).\(p["piid"]?.intValue ?? 0)" }
+                        @Sendable func key(_ p: JSONValue) -> String { "\(p["siid"]?.intValue ?? 0).\(p["piid"]?.intValue ?? 0)" }
                         let (phase, written, stale) = storage.state.withLock { state in
                             state.encryptedRequests += 1
                             if method.hasPrefix("set_") || method == "action" { state.writes += 1 }

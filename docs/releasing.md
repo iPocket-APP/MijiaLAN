@@ -114,7 +114,7 @@ the same. Versions before 0.1.6 require one manual installation to gain the upda
 
 ## Local packaging
 
-`scripts/package_release.sh` builds a universal macOS 15+ app, signs it with
+`scripts/package_release.sh` builds a universal macOS 13+ app, signs it with
 Developer ID and Hardened Runtime, notarizes and staples the app and DMG,
 checks Gatekeeper acceptance, and produces a DMG, ZIP and SHA-256 checksums.
 It runs Release tests before packaging and does not publish anything to GitHub.
@@ -202,7 +202,7 @@ the compiler's icon metadata into `Info.plist` before signing the bundle.
 `scripts/swift_runtime.py embed` uses Apple's `swift-stdlib-tool` to copy required
 Swift back-deployment libraries into `Contents/Frameworks`, adds the app-relative
 runtime search path, removes development-toolchain search paths, and signs the
-embedded libraries before the app is signed. This is required for macOS 15 even
+embedded libraries before the app is signed. The older deployment target can require these libraries even
 when the same executable launches successfully on a newer development machine.
 The release script also audits existing staging apps before notarization; the
 audit rejects unresolved non-system dependencies, incompatible architectures,

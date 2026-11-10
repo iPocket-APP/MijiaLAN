@@ -1,5 +1,5 @@
 import Foundation
-import Observation
+import Combine
 
 /// One local day of totals for #62; `isObserved` is `false` when no plug counter was read that day,
 /// so the UI can show “—” instead of claiming zero consumption. `kwh == 0` with `isObserved == true`
@@ -76,9 +76,8 @@ private struct EnergyHistoryStored: Codable, Equatable, Sendable {
 /// Everything lives in one `UserDefaults` payload, `clear()` removes all recorded samples *and* the
 /// baselines (so the next reading starts over instead of producing a jump), and the cleared state is
 /// persisted immediately, so relaunching cannot resurrect old data.
-@Observable
 @MainActor
-public final class EnergyHistory {
+public final class EnergyHistory: ObservableObject {
     /// Daily buckets kept on disk. Seven are displayed; a month is retained so ranking has context
     /// and the payload stays small (one `Double` per device per day).
     public static let retentionDays = 31
@@ -87,10 +86,10 @@ public final class EnergyHistory {
     private let defaults: UserDefaults
     private let calendar: Calendar
 
-    private var stored: EnergyHistoryStored
+    @Published private var stored: EnergyHistoryStored
 
     /// Price per kWh entered by the user; `nil` means “not set”, which hides every cost figure.
-    public private(set) var pricePerKwh: Double?
+    @Published public private(set) var pricePerKwh: Double?
 
     public init(defaults: UserDefaults = .standard, calendar: Calendar = .current) {
         self.defaults = defaults
