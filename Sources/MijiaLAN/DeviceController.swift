@@ -16,7 +16,7 @@ public enum CapabilityCommand: Equatable, Sendable {
         default: nil
         }
     }
-    var hasAction: Bool {
+    public var hasAction: Bool {
         switch self { case .invoke: true; case .batch(let commands): commands.contains(where: \.hasAction); default: false }
     }
 }

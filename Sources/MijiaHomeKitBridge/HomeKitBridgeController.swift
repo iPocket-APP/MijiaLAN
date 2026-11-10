@@ -139,12 +139,18 @@ public final class HomeKitBridgeController: ObservableObject {
     /// Devices with writes from Home still waiting for the device, by count. Their readings are published once the
     /// writes finish: a light read mid-fade would otherwise tell Home a level it did not ask for.
     private var settlingWrites: [String: Int] = [:]
+    /// Writes from Home on their way to the device, chained per device so they reach it in Home's order. `id` is the
+    /// newest write's; that write clears the chain when it finishes.
+    private var deviceWrites: [String: (id: UUID, task: Task<Void, Never>)] = [:]
+    /// The newest write per device and characteristic. One still queued behind a newer one is skipped: the device
+    /// needs only a slider's last position.
+    private var newestWrites: [String: [UInt64: UUID]] = [:]
     private var savedLayout: Layout?
     private var savedCapabilityIIDs: [String: [String: UInt64]]?
     private var capabilityIIDs: [String: [String: UInt64]] = [:]
     static let capabilityIIDsKey = "homekit_capability_iids_v1"
-    /// Per miIO attempt for writes from Apple Home, which shows "Updating" until it has the device's answer.
-    /// Wi-Fi power save delays answers by up to about 2 s, the same allowance as the reachability probe.
+    /// Per miIO attempt for writes from Apple Home. Wi-Fi power save delays answers by up to about 2 s, the same
+    /// allowance as the reachability probe.
     static let writeAttemptTimeout: Duration = .milliseconds(2500)
     private var secrets: HomeKitBridgeSecrets?
     var bridge: HAPBridge?
@@ -219,10 +225,12 @@ public final class HomeKitBridgeController: ObservableObject {
         while true {
             let pendingLifecycle = lifecycle
             let pendingSync = syncTask
-            if pendingLifecycle == nil && pendingSync == nil { return }
+            let pendingWrites = deviceWrites.values.map(\.task)
+            if pendingLifecycle == nil && pendingSync == nil && pendingWrites.isEmpty { return }
             await pendingLifecycle?.value
             await pendingSync?.value
-            if lifecycle == pendingLifecycle && syncTask == pendingSync { return }
+            for write in pendingWrites { await write.value }
+            if lifecycle == pendingLifecycle && syncTask == pendingSync && deviceWrites.isEmpty { return }
         }
     }
 
@@ -638,17 +646,21 @@ public final class HomeKitBridgeController: ObservableObject {
             case .legacy(let role) where role.isConfiguredName: try await handleWrite(deviceId: did, role: role, value: value)
             default:
                 let commands = try CapabilityHomeKitMapper.commands(binding, value: value, snapshot: snapshot)
-                // Not coalesced: a controller sends its next write only after this one's response, so waiting for
-                // a later value only delays every write, such as each step of a brightness slider.
-                if !commands.isEmpty {
-                    settlingWrites[did, default: 0] += 1
-                    defer {
-                        settlingWrites[did, default: 1] -= 1
-                        if settlingWrites[did] == 0 { settlingWrites[did] = nil }
-                    }
-                    try await MiioClient.$attemptTimeout.withValue(Self.writeAttemptTimeout) {
-                        try await capabilities.execute(did: did, .batch(commands))
-                    }
+                if commands.isEmpty { break }
+                guard commands.contains(where: \.hasAction) else {
+                    guard snapshot.isOnline else { throw HAPError.unavailable }
+                    await applyInBackground(did: did, iid: iid, binding: binding, value: value)
+                    return
+                }
+                // An action reports its own outcome, so Home waits for it, after the writes still on their way.
+                await deviceWrites[did]?.task.value
+                settlingWrites[did, default: 0] += 1
+                defer {
+                    settlingWrites[did, default: 1] -= 1
+                    if settlingWrites[did] == 0 { settlingWrites[did] = nil }
+                }
+                try await MiioClient.$attemptTimeout.withValue(Self.writeAttemptTimeout) {
+                    try await capabilities.execute(did: did, .batch(commands))
                 }
             }
         } catch {
@@ -670,6 +682,49 @@ public final class HomeKitBridgeController: ObservableObject {
                 await bridge.updateCharacteristic(aid: entry.aid, iid: iid, value: current, forceNotify: true)
             }
         }
+    }
+
+    /// Home gets its answer before the device has applied the write. Home's slider sends its next position without
+    /// waiting, and a write answered after that stays "Updating" in Home: [Brightness 2, On] answered 270 ms later,
+    /// after the finger had lifted at 31, left the lamp's tile spinning until Home was reopened. So Home is answered
+    /// at once, the device applies the writes in order, and a reading that differs once it settles is published.
+    private func applyInBackground(did: String, iid: UInt64, binding: CapabilityHAPBinding, value: HAPCharacteristicValue) async {
+        let id = UUID()
+        newestWrites[did, default: [:]][iid] = id
+        settlingWrites[did, default: 0] += 1
+        let previous = deviceWrites[did]?.task
+        deviceWrites[did] = (id, Task { @MainActor [weak self] in
+            await previous?.value
+            await self?.apply(did: did, iid: iid, binding: binding, value: value, id: id)
+        })
+        // Cached as what Home now shows, so a different reading is published as a change. Zero brightness turns a
+        // lamp off and keeps its level, which must not be sent back over Home's finished gesture.
+        guard let bridge, let entry = capabilityPlans[did],
+              entry.characteristics[iid]?.type != .brightness || value != .int32(0),
+              let shown = entry.characteristics[iid]?.normalizedRead(value) else { return }
+        await bridge.updateCharacteristic(aid: entry.aid, iid: iid, value: shown)
+        publishedCapabilityValues[did, default: [:]][iid] = PublishedValue(value: shown, status: HAPStatus.success.rawValue)
+    }
+
+    private func apply(did: String, iid: UInt64, binding: CapabilityHAPBinding, value: HAPCharacteristicValue, id: UUID) async {
+        if newestWrites[did]?[iid] == id, let capabilities, let snapshot = capabilities.snapshots[did] {
+            do {
+                // Mapped again: an earlier write can change what this one needs, such as turning power on.
+                let commands = try CapabilityHomeKitMapper.commands(binding, value: value, snapshot: snapshot)
+                try await MiioClient.$attemptTimeout.withValue(Self.writeAttemptTimeout) {
+                    try await capabilities.execute(did: did, .batch(commands))
+                }
+            } catch {
+                logger.error("A write from Apple Home failed: \(String(describing: error), privacy: .public)")
+            }
+        }
+        if newestWrites[did]?[iid] == id { newestWrites[did]?[iid] = nil }
+        if newestWrites[did]?.isEmpty == true { newestWrites[did] = nil }
+        if deviceWrites[did]?.id == id { deviceWrites[did] = nil }
+        settlingWrites[did, default: 1] -= 1
+        guard settlingWrites[did] == 0 else { return }
+        settlingWrites[did] = nil
+        if let bridge { await pushCapabilityValues(bridge: bridge) }
     }
 
     /// Devices the user kept out of Apple Home are hidden in the store and get no accessory.
