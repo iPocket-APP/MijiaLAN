@@ -28,7 +28,7 @@ private struct CapabilityControlRow: View {
     @State private var error: String?
     @State private var working = false
 
-    @Environment(\.panelSession) private var session
+    @EnvironmentObject private var session: PanelSession
 
     private var value: JSONValue? { snapshot.controlValue(capability) }
     var body: some View {
@@ -67,7 +67,7 @@ private struct CapabilityControlRow: View {
             .labelsHidden().frame(maxWidth: 180)
         case .number:
             CapabilityNumberInput(capability: capability, value: value, working: working,
-                                  persistedDraft: session?.numberDraft(deviceID: snapshot.id, capabilityID: capability.id)) {
+                                  persistedDraft: session.numberDraft(deviceID: snapshot.id, capabilityID: capability.id)) {
                 send(.set(capability.id, .number($0)))
             }
         case .button:
@@ -94,13 +94,13 @@ struct CapabilityNumberInput: View {
     let value: JSONValue?
     var working = false
     let apply: (Double) -> Void
-    @State private var edit: PanelNumberDraft
+    @StateObject private var edit: PanelNumberDraft
     @FocusState private var isFocused: Bool
 
     init(capability: DeviceCapability, value: JSONValue?, working: Bool = false,
          persistedDraft: PanelNumberDraft? = nil, apply: @escaping (Double) -> Void) {
         self.capability = capability; self.value = value; self.working = working; self.apply = apply
-        _edit = State(initialValue: persistedDraft ?? PanelNumberDraft())
+        _edit = StateObject(wrappedValue: persistedDraft ?? PanelNumberDraft())
     }
 
     private var currentText: String { value?.doubleValue.map(numberText) ?? "" }
@@ -146,13 +146,13 @@ struct CapabilityNumberInput: View {
             }
         }
         .controlSize(.small)
-        .onChange(of: value, initial: true) {
+        .onValueChange(of: value, initial: true) { value in
             if !edit.isEditing || Double(edit.text) == value?.doubleValue {
                 edit.text = currentText
                 edit.isEditing = false
             }
         }
-        .onChange(of: working) {
+        .onValueChange(of: working) { working in
             if !working { edit.text = currentText; edit.isEditing = false }
         }
     }

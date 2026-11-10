@@ -1,31 +1,30 @@
 import AppKit
-import Observation
+import Combine
 import OSLog
 import Sparkle
 
 /// One updater for the application lifetime, independent of the transient menu-bar panel.
 @MainActor
-@Observable
-final class AppUpdater: NSObject, @preconcurrency SPUStandardUserDriverDelegate {
-    private(set) var canCheckForUpdates = false
-    private(set) var availableVersion: String?
-    private(set) var startupError: String?
-    var automaticallyChecksForUpdates = false {
+final class AppUpdater: NSObject, ObservableObject, @preconcurrency SPUStandardUserDriverDelegate {
+    @Published private(set) var canCheckForUpdates = false
+    @Published private(set) var availableVersion: String?
+    @Published private(set) var startupError: String?
+    @Published var automaticallyChecksForUpdates = false {
         didSet {
             guard !synchronizing else { return }
             controller?.updater.automaticallyChecksForUpdates = automaticallyChecksForUpdates
         }
     }
-    var automaticallyDownloadsUpdates = false {
+    @Published var automaticallyDownloadsUpdates = false {
         didSet {
             guard !synchronizing else { return }
             controller?.updater.automaticallyDownloadsUpdates = automaticallyDownloadsUpdates
         }
     }
 
-    @ObservationIgnored private var controller: SPUStandardUpdaterController?
-    @ObservationIgnored private var observations: [NSKeyValueObservation] = []
-    @ObservationIgnored private var synchronizing = false
+    private var controller: SPUStandardUpdaterController?
+    private var observations: [NSKeyValueObservation] = []
+    private var synchronizing = false
 
     func start(environment: [String: String] = ProcessInfo.processInfo.environment) {
         // UI previews, package smoke checks and tests must never contact the live feed or save updater preferences.
@@ -57,7 +56,7 @@ final class AppUpdater: NSObject, @preconcurrency SPUStandardUserDriverDelegate 
 
     func checkForUpdates() {
         guard canCheckForUpdates else { return }
-        NSApp.activate()
+        NSApp.activateForUserAction()
         controller?.checkForUpdates(nil)
     }
 

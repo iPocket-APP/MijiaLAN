@@ -1,6 +1,6 @@
 import Foundation
 import MijiaCore
-import Observation
+import Combine
 
 public enum CapabilityCommand: Equatable, Sendable {
     case set(String, JSONValue)
@@ -22,47 +22,43 @@ public enum CapabilityCommand: Equatable, Sendable {
 }
 
 /// One owner for actual readings, pending cooking parameters and awaited commands from both interfaces.
-@Observable @MainActor
-public final class DeviceController {
-    /// Storage always carries the freshest timestamps. Observation is committed once per batch below.
-    @ObservationIgnored private var snapshotStorage: [String: DeviceSnapshot] = [:]
-    public private(set) var snapshots: [String: DeviceSnapshot] {
-        get { access(keyPath: \.snapshots); return snapshotStorage }
-        set { snapshotStorage = newValue }
-    }
-    public private(set) var structureRevision: UInt64 = 0
-    public private(set) var valuesRevision: UInt64 = 0
-    public private(set) var retryStates: [String: ProbeRetryState] = [:]
-    @ObservationIgnored private let api: LANMiotAPI
-    @ObservationIgnored private let config: @Sendable () -> LocalHomeConfig
-    @ObservationIgnored private var pollTask: Task<Void, Never>?
-    @ObservationIgnored private var publicationTask: Task<Void, Never>?
-    @ObservationIgnored private var context = PollingContext()
-    @ObservationIgnored private var healthTask: Task<Void, Never>?
-    @ObservationIgnored private var startedProbing = false
-    @ObservationIgnored private var lastConfiguration: LocalHomeConfig?
-    @ObservationIgnored private var configurationLanguage: AppLanguage?
-    @ObservationIgnored private var structureDirty = false
-    @ObservationIgnored private var publishedSnapshots: [String: DeviceSnapshot] = [:]
-    @ObservationIgnored private var cachedHome = SynthesizedHome()
-    @ObservationIgnored private var readTasks: [String: (id: UUID, task: Task<Void, Never>)] = [:]
+@MainActor
+public final class DeviceController: ObservableObject {
+    /// Storage always carries the freshest timestamps. View updates are published at the end of a batch.
+    public private(set) var snapshots: [String: DeviceSnapshot] = [:]
+    @Published public private(set) var structureRevision: UInt64 = 0
+    @Published public private(set) var valuesRevision: UInt64 = 0
+    @Published public private(set) var retryStates: [String: ProbeRetryState] = [:]
+    private let api: LANMiotAPI
+    private let config: @Sendable () -> LocalHomeConfig
+    private var pollTask: Task<Void, Never>?
+    private var publicationTask: Task<Void, Never>?
+    private var context = PollingContext()
+    private var healthTask: Task<Void, Never>?
+    private var startedProbing = false
+    private var lastConfiguration: LocalHomeConfig?
+    private var configurationLanguage: AppLanguage?
+    private var structureDirty = false
+    private var publishedSnapshots: [String: DeviceSnapshot] = [:]
+    private var cachedHome = SynthesizedHome()
+    private var readTasks: [String: (id: UUID, task: Task<Void, Never>)] = [:]
     private struct SchemaKey: Hashable {
         var model: String
         var specification: String?
         var language: AppLanguage
     }
-    @ObservationIgnored private var schemaTemplates: [SchemaKey: DeviceSnapshot] = [:]
-    @ObservationIgnored private var lastSlow: [String: Date] = [:]
-    @ObservationIgnored private var refreshing = false
-    @ObservationIgnored private var queues: [String: Task<Void, Error>] = [:]
-    @ObservationIgnored private var queueIDs: [String: UUID] = [:]
-    @ObservationIgnored private var actionsPending: Set<String> = []
-    @ObservationIgnored private var continuations: [UUID: AsyncStream<HomeProviderEvent>.Continuation] = [:]
+    private var schemaTemplates: [SchemaKey: DeviceSnapshot] = [:]
+    private var lastSlow: [String: Date] = [:]
+    private var refreshing = false
+    private var queues: [String: Task<Void, Error>] = [:]
+    private var queueIDs: [String: UUID] = [:]
+    private var actionsPending: Set<String> = []
+    private var continuations: [UUID: AsyncStream<HomeProviderEvent>.Continuation] = [:]
     private struct Pending {
         var command: CapabilityCommand
         var replies: [CheckedContinuation<Void, Error>]
     }
-    @ObservationIgnored private var coalesced: [String: Pending] = [:]
+    private var coalesced: [String: Pending] = [:]
 
     public init(api: LANMiotAPI, config: @escaping @Sendable () -> LocalHomeConfig) {
         self.api = api; self.config = config
@@ -85,7 +81,7 @@ public final class DeviceController {
         let devices = next.devices
         let known = Set(devices.map(\.did))
         for (did, read) in readTasks where !devices.contains(where: { device in
-            snapshotStorage[did].map { ProbeScheduler.sameEndpoint($0.device, device) } == true
+            snapshots[did].map { ProbeScheduler.sameEndpoint($0.device, device) } == true
         }) {
             read.task.cancel(); readTasks[did] = nil
         }
@@ -126,7 +122,7 @@ public final class DeviceController {
     }
 
     private func preserveReadings(in next: inout DeviceSnapshot) {
-        guard let old = snapshotStorage[next.id], ProbeScheduler.sameEndpoint(old.device, next.device),
+        guard let old = snapshots[next.id], ProbeScheduler.sameEndpoint(old.device, next.device),
               old.schema.type == next.schema.type else { return }
         next.readings = old.readings.filter { next.capabilitiesByID[$0.key] != nil }
         next.prepared = old.prepared.filter { next.capabilitiesByID[$0.key] != nil }
@@ -154,7 +150,7 @@ public final class DeviceController {
     public func setPollingContext(_ context: PollingContext) {
         let becomingVisible = context.panelVisible && !self.context.panelVisible
         self.context = context
-        if becomingVisible { withMutation(keyPath: \.snapshots) {} }
+        if becomingVisible { objectWillChange.send() }
     }
     public func shutdown() {
         pollTask?.cancel(); pollTask = nil
@@ -227,16 +223,16 @@ public final class DeviceController {
             for await update in await api.healthEvents() {
                 guard !Task.isCancelled, let self else { return }
                 var recovered: [String] = []
-                for did in self.snapshotStorage.keys {
-                    if update.health[did]?.state == .online && self.snapshotStorage[did]?.isOnline != true { recovered.append(did) }
-                    self.snapshotStorage[did]?.health = update.health[did] ?? LANDeviceHealth()
+                for did in self.snapshots.keys {
+                    if update.health[did]?.state == .online && self.snapshots[did]?.isOnline != true { recovered.append(did) }
+                    self.snapshots[did]?.health = update.health[did] ?? LANDeviceHealth()
                 }
                 if self.retryStates != update.retries { self.retryStates = update.retries }
                 if !self.refreshing || !recovered.isEmpty { self.publish() }
                 // Never hold the health stream up behind a slow device's property request.
                 for did in recovered {
                     Task { [weak self] in
-                        guard let self, let snapshot = self.snapshotStorage[did] else { return }
+                        guard let self, let snapshot = self.snapshots[did] else { return }
                         await self.refresh(did: did, capabilities: snapshot.capabilities.filter(\.readable), joinExisting: true)
                         self.lastSlow[did] = Date()
                         self.publish()
@@ -251,7 +247,7 @@ public final class DeviceController {
             await prior.task.value
             if joinExisting { return }
         }
-        guard !Task.isCancelled, let device = snapshotStorage[did]?.device else { return }
+        guard !Task.isCancelled, let device = snapshots[did]?.device else { return }
         let id = UUID()
         let task = Task { await self.readAndCommit(did: did, device: device, capabilities: capabilities) }
         readTasks[did] = (id, task)
@@ -520,10 +516,10 @@ public final class DeviceController {
         return home
     }
     private func publish() {
-        let valuesChanged = snapshotStorage.count != publishedSnapshots.count || snapshotStorage.contains {
+        let valuesChanged = snapshots.count != publishedSnapshots.count || snapshots.contains {
             !$0.value.hasSameValues(as: publishedSnapshots[$0.key])
         }
-        let uiChanged = snapshotStorage.contains {
+        let uiChanged = snapshots.contains {
             $0.value.lastCommand != publishedSnapshots[$0.key]?.lastCommand ||
             $0.value.commandReceipt != publishedSnapshots[$0.key]?.commandReceipt
         }
@@ -535,11 +531,10 @@ public final class DeviceController {
             for c in continuations.values { c.yield(.snapshotUpdated(cachedHome)) }
             if structureChanged { structureRevision &+= 1 }
             valuesRevision &+= 1
+        } else if uiChanged || context.panelVisible {
+            objectWillChange.send()
         }
-        if structureChanged || valuesChanged || uiChanged || context.panelVisible {
-            withMutation(keyPath: \.snapshots) {}
-        }
-        publishedSnapshots = snapshotStorage
+        publishedSnapshots = snapshots
     }
 }
 

@@ -9,6 +9,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="${1:-release}"
+MINIMUM_MACOS=13.0
 VERSION="${MIJIALAN_VERSION:-$(python3 "$ROOT/scripts/release_metadata.py" version)}"
 BUILD_NUMBER="${MIJIALAN_BUILD_NUMBER:-$(python3 "$ROOT/scripts/release_metadata.py" build-number)}"
 SIGN_IDENTITY="${MIJIALAN_SIGN_IDENTITY:--}"
@@ -20,6 +21,7 @@ APP="${MIJIALAN_APP_OUTPUT:-$ROOT/build/MijiaLAN.app}"
 [[ "$APP" == /*.app ]] || { echo "App output must be an absolute .app path" >&2; exit 1; }
 
 cd "$ROOT"
+export MACOSX_DEPLOYMENT_TARGET="$MINIMUM_MACOS"
 BUILD_ARGS=(-c "$CONFIG" --force-resolved-versions --product MijiaLANApp)
 if [[ "${MIJIALAN_UNIVERSAL:-0}" == 1 ]]; then
     BUILD_ARGS+=(--arch arm64 --arch x86_64)
@@ -34,10 +36,10 @@ cp "$BIN_DIR/MijiaLANApp" "$APP/Contents/MacOS/MijiaLAN"
 cp -R "$BIN_DIR/MenuBarMijia_MijiaCore.bundle" "$APP/Contents/Resources/"
 cp -R "$BIN_DIR/MijiaLAN_MijiaLAN.bundle" "$APP/Contents/Resources/"
 cp -R "$ROOT/Resources/en.lproj" "$ROOT/Resources/zh-Hans.lproj" "$APP/Contents/Resources/"
-# Icon Composer supplies the layered system icon and an ICNS fallback for macOS 15.
+# Icon Composer supplies the layered system icon and an ICNS fallback for older macOS.
 xcrun actool "$ROOT/Resources/AppIcon.icon" \
     --compile "$APP/Contents/Resources" --app-icon AppIcon \
-    --platform macosx --target-device mac --minimum-deployment-target 15.0 \
+    --platform macosx --target-device mac --minimum-deployment-target "$MINIMUM_MACOS" \
     --output-format human-readable-text \
     --output-partial-info-plist "$APP/Contents/Resources/AppIcon-info.plist"
 # Ship the original notices, including notices for bundled third party C code.
@@ -55,7 +57,7 @@ while IFS= read -r -d '' NOTICE; do
     DESTINATION="$APP/Contents/Resources/Licenses/$RELATIVE"
     mkdir -p "$(dirname "$DESTINATION")"
     cp "$NOTICE" "$DESTINATION"
-done < <(find "$ROOT/.build/checkouts" "$ROOT/Vendor/MenuBarMijia" "$ROOT/Vendor/hap-swift" "$ROOT/Vendor/hass-xiaomi-miot" "$ROOT/Vendor/homebridge-miot" -type f \
+done < <(find "$ROOT/.build/checkouts" "$ROOT/Vendor/MenuBarMijia" "$ROOT/Vendor/hap-swift" "$ROOT/Vendor/mdns-swift" "$ROOT/Vendor/hass-xiaomi-miot" "$ROOT/Vendor/homebridge-miot" -type f \
     \( -iname 'LICENSE*' -o -iname 'NOTICE*' -o -iname 'COPYING*' -o -iname 'PATENTS*' \
     -o -name 'CNIOSHA1.h' -o -name 'cpp_magic.h' \) \
     -not -path '*/.git/*' -print0)
@@ -86,7 +88,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleVersion</key>
     <string>$BUILD_NUMBER</string>
     <key>LSMinimumSystemVersion</key>
-    <string>15.0</string>
+    <string>$MINIMUM_MACOS</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSLocalNetworkUsageDescription</key>

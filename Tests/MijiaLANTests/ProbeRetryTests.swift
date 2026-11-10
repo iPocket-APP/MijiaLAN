@@ -1,6 +1,6 @@
 import Foundation
-import Observation
-import Synchronization
+import Combine
+import os
 import Testing
 import MijiaCore
 @testable import MijiaLAN
@@ -251,8 +251,9 @@ struct ProbeSchedulingIntegrationTests {
         for _ in 0..<10 { await Task.yield() }
         let old = try #require(controller.snapshots["1"]?.readings["p:2:1"]?.updatedAt)
         let structure = controller.structureRevision, values = controller.valuesRevision
-        let notices = Mutex(0)
-        withObservationTracking { _ = controller.snapshots } onChange: { notices.withLock { $0 += 1 } }
+        let notices = OSAllocatedUnfairLock(initialState: 0)
+        let observation = controller.objectWillChange.sink { notices.withLock { $0 += 1 } }
+        defer { observation.cancel() }
         try await Task.sleep(for: .milliseconds(2))
         await controller.refreshNow()
         #expect(controller.structureRevision == structure && controller.valuesRevision == values)
@@ -319,7 +320,7 @@ struct ProbeSchedulingIntegrationTests {
         let fixture = ProbeFixture()
         let controller = DeviceController(api: fixture.api, config: { fixture.config.value })
         await controller.refreshNow()
-        let received = Mutex(0)
+        let received = OSAllocatedUnfairLock(initialState: 0)
         let stream = controller.events()
         let consumer = Task {
             for await event in stream {
@@ -358,16 +359,16 @@ private struct ProbeFixture: Sendable {
 }
 
 private final class ProbeConfig: Sendable {
-    private let storage: Mutex<LocalHomeConfig>
-    init(_ value: LocalHomeConfig) { storage = Mutex(value) }
+    private let storage: OSAllocatedUnfairLock<LocalHomeConfig>
+    init(_ value: LocalHomeConfig) { storage = OSAllocatedUnfairLock(initialState: value) }
     var value: LocalHomeConfig { storage.withLock { $0 } }
-    func update(_ change: (inout LocalHomeConfig) -> Void) { storage.withLock { change(&$0) } }
+    func update(_ change: @Sendable (inout LocalHomeConfig) -> Void) { storage.withLock(change) }
 }
 
 private final class ManualProbeClock: Sendable {
     private struct Sleeper { var deadline: Date; var reply: CheckedContinuation<Void, any Error> }
     private struct State { var now = Date(timeIntervalSince1970: 0); var sleepers: [UUID: Sleeper] = [:] }
-    private let state = Mutex(State())
+    private let state = OSAllocatedUnfairLock(initialState: State())
     var now: Date { state.withLock { $0.now } }
     var pendingSleeps: Int { state.withLock { $0.sleepers.count } }
     var clock: ProbeClock { ProbeClock(now: { self.now }, sleep: { try await self.sleep($0) }) }

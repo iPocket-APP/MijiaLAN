@@ -78,7 +78,7 @@ enum DevSnapshot {
                 visible.isReleasedWhenClosed = false
                 visible.contentView = shown
                 visible.makeKeyAndOrderFront(nil)
-                NSApp.activate()
+                NSApp.activateForUserAction()
                 try? await Task.sleep(for: .milliseconds(300))
                 print("WINDOW \(visible.windowNumber)")
                 if let path = environment["MIJIALAN_NATIVE_SNAPSHOT"],

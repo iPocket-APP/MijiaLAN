@@ -1,5 +1,5 @@
 import Foundation
-import Observation
+import Combine
 import os
 import HAPApple
 import HAPCore
@@ -18,9 +18,8 @@ import MijiaLAN
 /// Removing an accessory from the bridge makes Apple Home forget its room, scenes and automations. The bridge
 /// therefore stays offline until the home has delivered its first device list, and only removes a device while the
 /// backend is connected and the device is really gone (or hidden).
-@Observable
 @MainActor
-public final class HomeKitBridgeController {
+public final class HomeKitBridgeController: ObservableObject {
     public enum Status: Equatable, Sendable {
         case stopped
         /// Enabled, waiting for the backend's first device list.
@@ -30,24 +29,24 @@ public final class HomeKitBridgeController {
         case failed(String)
     }
 
-    public private(set) var status: Status = .stopped
-    public private(set) var setupCode: String?
+    @Published public private(set) var status: Status = .stopped
+    @Published public private(set) var setupCode: String?
     /// `X-HM://…`, the payload behind the pairing QR code.
-    public private(set) var setupURI: String?
-    public private(set) var isPaired = false
-    public private(set) var exposedDeviceCount = 0
+    @Published public private(set) var setupURI: String?
+    @Published public private(set) var isPaired = false
+    @Published public private(set) var exposedDeviceCount = 0
     public struct ServiceLimitWarning: Identifiable, Equatable, Sendable {
         public let id: String
         public let deviceName: String
         public let omittedServiceCount: Int
     }
-    public private(set) var serviceLimitWarnings: [ServiceLimitWarning] = []
+    @Published public private(set) var serviceLimitWarnings: [ServiceLimitWarning] = []
     /// Services the user kept out of Apple Home, by device ID and service key. The rest of the accessory stays as it was.
-    public private(set) var excludedServices: [String: Set<String>]
+    @Published public private(set) var excludedServices: [String: Set<String>]
     /// Moves whenever Home renames a service, so a list of names can tell it is out of date.
-    public private(set) var serviceNamesRevision = 0
+    @Published public private(set) var serviceNamesRevision = 0
 
-    public var isEnabled: Bool {
+    @Published public var isEnabled: Bool {
         didSet {
             guard isEnabled != oldValue else { return }
             defaults.set(isEnabled, forKey: Self.enabledKey)
@@ -60,7 +59,7 @@ public final class HomeKitBridgeController {
     }
 
     /// Holds an idle-sleep assertion while the bridge runs; a sleeping Mac shows as "No Response" in Apple Home.
-    public var keepsMacAwake: Bool {
+    @Published public var keepsMacAwake: Bool {
         didSet {
             defaults.set(keepsMacAwake, forKey: Self.keepAwakeKey)
             updateSleepAssertion()
@@ -120,7 +119,7 @@ public final class HomeKitBridgeController {
         var layoutWrites = 0
         var identifierWrites = 0
     }
-    @ObservationIgnored private(set) var syncStatistics = SyncStatistics()
+    private(set) var syncStatistics = SyncStatistics()
 
     private let vault: HomeKitBridgeVault
     private let defaults: UserDefaults
@@ -128,36 +127,37 @@ public final class HomeKitBridgeController {
     private let loopbackOnly: Bool
     private let logger = os.Logger(subsystem: "com.mijialan.MijiaLAN", category: "HomeKitBridge")
 
-    @ObservationIgnored private weak var store: HomeStore?
-    @ObservationIgnored private var capabilities: DeviceController?
-    @ObservationIgnored private var capabilityPlans: [String: CapabilityAccessory] = [:]
-    @ObservationIgnored private var publishedCapabilityValues: [String: [UInt64: PublishedValue]] = [:]
-    @ObservationIgnored private var capabilityStructureRevision: UInt64?
-    @ObservationIgnored private var capabilityHiddenIDs: Set<String>?
-    @ObservationIgnored private var capabilityStructureDirty = true
-    @ObservationIgnored private var capabilityPushTask: Task<Void, Never>?
+    private weak var store: HomeStore?
+    private var storeObservation: AnyCancellable?
+    private var capabilities: DeviceController?
+    private var capabilityPlans: [String: CapabilityAccessory] = [:]
+    private var publishedCapabilityValues: [String: [UInt64: PublishedValue]] = [:]
+    private var capabilityStructureRevision: UInt64?
+    private var capabilityHiddenIDs: Set<String>?
+    private var capabilityStructureDirty = true
+    private var capabilityPushTask: Task<Void, Never>?
     /// Devices with writes from Home still waiting for the device, by count. Their readings are published once the
     /// writes finish: a light read mid-fade would otherwise tell Home a level it did not ask for.
-    @ObservationIgnored private var settlingWrites: [String: Int] = [:]
-    @ObservationIgnored private var savedLayout: Layout?
-    @ObservationIgnored private var savedCapabilityIIDs: [String: [String: UInt64]]?
-    @ObservationIgnored private var capabilityIIDs: [String: [String: UInt64]] = [:]
+    private var settlingWrites: [String: Int] = [:]
+    private var savedLayout: Layout?
+    private var savedCapabilityIIDs: [String: [String: UInt64]]?
+    private var capabilityIIDs: [String: [String: UInt64]] = [:]
     static let capabilityIIDsKey = "homekit_capability_iids_v1"
     /// Per miIO attempt for writes from Apple Home, which shows "Updating" until it has the device's answer.
     /// Wi-Fi power save delays answers by up to about 2 s, the same allowance as the reachability probe.
     static let writeAttemptTimeout: Duration = .milliseconds(2500)
-    @ObservationIgnored private var secrets: HomeKitBridgeSecrets?
-    @ObservationIgnored var bridge: HAPBridge?
-    @ObservationIgnored private var service: AppleHAPService?
-    @ObservationIgnored private var layout: Layout
-    @ObservationIgnored private var serviceNames: [String: [String: String]]
-    @ObservationIgnored private var exposed: [String: ExposedAccessory] = [:]
+    private var secrets: HomeKitBridgeSecrets?
+    var bridge: HAPBridge?
+    private var service: AppleHAPService?
+    private var layout: Layout
+    private var serviceNames: [String: [String: String]]
+    private var exposed: [String: ExposedAccessory] = [:]
     /// Devices whose every characteristic is re-sent on the next sync (after a write from Apple Home).
-    @ObservationIgnored private var forceRefresh: Set<String> = []
-    @ObservationIgnored private var lifecycle: Task<Void, Never>?
-    @ObservationIgnored private var syncTask: Task<Void, Never>?
-    @ObservationIgnored private var needsAnotherSync = false
-    @ObservationIgnored private var sleepActivity: NSObjectProtocol?
+    private var forceRefresh: Set<String> = []
+    private var lifecycle: Task<Void, Never>?
+    private var syncTask: Task<Void, Never>?
+    private var needsAnotherSync = false
+    private var sleepActivity: NSObjectProtocol?
 
     /// - Parameter port: a fixed TCP port (tests); nil reuses the last port, or lets the system pick one.
     public init(vault: HomeKitBridgeVault, defaults: UserDefaults = .standard, port: UInt16? = nil, loopbackOnly: Bool = false) {
@@ -396,23 +396,21 @@ public final class HomeKitBridgeController {
 
     private func observeStore() {
         guard let store else { return }
-        withObservationTracking {
-            if let capabilities {
-                _ = capabilities.structureRevision
-                _ = capabilities.valuesRevision
-            } else {
-                _ = store.devices
-            }
-            _ = store.hiddenDeviceIds
-            _ = store.hasReceivedInitialSnapshot
-            _ = store.connectionStatus
-        } onChange: { [weak self] in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.storeChanged()
-                self.observeStore()
-            }
+        let deviceChanges: AnyPublisher<Void, Never>
+        if let capabilities {
+            // DeviceController advances valuesRevision for structural changes as well.
+            deviceChanges = capabilities.$valuesRevision.map { _ in () }.eraseToAnyPublisher()
+        } else {
+            deviceChanges = store.$devices.map { _ in () }.eraseToAnyPublisher()
         }
+        storeObservation = Publishers.CombineLatest4(
+            deviceChanges, store.$hiddenDeviceIds.removeDuplicates(),
+            store.$hasReceivedInitialSnapshot.removeDuplicates(), store.$connectionStatus.removeDuplicates()
+        )
+        .dropFirst()
+        // Register pending work before the publisher returns. The main-actor tasks
+        // read the store after @Published has saved the new values.
+        .sink { [weak self] _ in self?.storeChanged() }
     }
 
     private func storeChanged() {

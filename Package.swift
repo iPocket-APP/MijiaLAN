@@ -4,8 +4,7 @@ import PackageDescription
 let package = Package(
     name: "MijiaLAN",
     platforms: [
-        // hap-swift needs macOS 15.
-        .macOS(.v15)
+        .macOS(.v13)
     ],
     products: [
         .library(name: "MijiaLAN", targets: ["MijiaLAN"]),

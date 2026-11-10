@@ -48,16 +48,16 @@ class FeedValidationTests(unittest.TestCase):
             archive, feed = root / "MijiaLAN-0.1.6-universal.zip", root / "appcast.xml"
             archive.write_bytes(b"test-update")
             prefix = "https://github.com/iPocket-APP/MijiaLAN/releases/download/v0.1.6/"
-            info = {"CFBundleVersion": "7", "CFBundleShortVersionString": "0.1.6", "LSMinimumSystemVersion": "15.0"}
+            info = {"CFBundleVersion": "7", "CFBundleShortVersionString": "0.1.6", "LSMinimumSystemVersion": "13.0"}
             signature = base64.b64encode(bytes(64)).decode()
             template = '<rss xmlns:sparkle="' + sparkle_updates.SPARKLE + '"><channel><item>' \
                        '<sparkle:version>{build}</sparkle:version><sparkle:shortVersionString>0.1.6</sparkle:shortVersionString>' \
-                       '<sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>' \
+                       '<sparkle:minimumSystemVersion>{minimum}</sparkle:minimumSystemVersion>' \
                        '<enclosure url="{url}" length="11" sparkle:edSignature="{signature}"/></item></channel></rss>'
-            good = {"build": "7", "url": prefix + archive.name, "signature": signature}
+            good = {"build": "7", "minimum": "13.0", "url": prefix + archive.name, "signature": signature}
             feed.write_text(template.format(**good))
             sparkle_updates.validate_feed(feed, archive, info, prefix)
-            for change in [{"build": "6"}, {"url": "http://example.com/update.zip"}, {"signature": ""}]:
+            for change in [{"build": "6"}, {"minimum": "15.0"}, {"url": "http://example.com/update.zip"}, {"signature": ""}]:
                 feed.write_text(template.format(**{**good, **change}))
                 with self.subTest(change=change), self.assertRaises(ValueError):
                     sparkle_updates.validate_feed(feed, archive, info, prefix)

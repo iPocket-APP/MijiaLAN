@@ -1,12 +1,12 @@
 import Foundation
-import Synchronization
+import os
 
 /// Blocking filesystem access never runs on the main actor or a cooperative executor.
 /// Each export stream retains at most one in-flight file and its newest pending replacement.
 final class DiagnosticFileWriter: Sendable {
     private struct Write: Sendable { let data: Data; let url: URL }
     private struct State { var running = false; var pending: Write? }
-    private let state = Mutex(State())
+    private let state = OSAllocatedUnfairLock(initialState: State())
     private let queue = DispatchQueue(label: "MijiaLAN.diagnostic-export", qos: .utility)
     private let write: @Sendable (Data, URL) -> Void
 

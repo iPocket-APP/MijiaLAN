@@ -1,19 +1,19 @@
 import Foundation
-import Observation
+import Combine
 
 /// View-owned edit intent, separate from the controller's confirmed device readings.
 /// Sends immediately, limits the send rate, and keeps just the newest unsent value.
-@Observable @MainActor
-public final class ContinuousValueWriter {
-    public private(set) var pendingValue: Double?
-    public private(set) var error: String?
+@MainActor
+public final class ContinuousValueWriter: ObservableObject {
+    @Published public private(set) var pendingValue: Double?
+    @Published public private(set) var error: String?
     public var isSending: Bool { pendingValue != nil }
-    @ObservationIgnored private let minimumInterval: Duration
-    @ObservationIgnored private let apply: @MainActor @Sendable (Double) async throws -> Void
-    @ObservationIgnored private var queued: Double?
-    @ObservationIgnored private var active: Double?
-    @ObservationIgnored private var worker: Task<Void, Never>?
-    @ObservationIgnored private var lastStart: ContinuousClock.Instant?
+    private let minimumInterval: Duration
+    private let apply: @MainActor @Sendable (Double) async throws -> Void
+    private var queued: Double?
+    private var active: Double?
+    private var worker: Task<Void, Never>?
+    private var lastStart: ContinuousClock.Instant?
 
     public init(minimumInterval: Duration = .milliseconds(100),
                 apply: @escaping @MainActor @Sendable (Double) async throws -> Void) {

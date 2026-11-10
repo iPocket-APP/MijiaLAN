@@ -1,6 +1,6 @@
 import Foundation
 import MijiaCore
-import Synchronization
+import os
 
 /// One miIO device on the LAN. Calls are serialized per device (the actor), which is also what the firmware expects.
 ///
@@ -35,7 +35,7 @@ public actor MiioClient {
     /// A shorter per-attempt wait for calls someone is waiting on, such as a write from Apple Home, which shows
     /// "Updating" until it is answered: a lost packet is then retried sooner. Never lengthens the client's wait.
     @TaskLocal public static var attemptTimeout: Duration?
-    private static let traceSink = Mutex<(@Sendable (String) -> Void)?>(nil)
+    private static let traceSink = OSAllocatedUnfairLock<(@Sendable (String) -> Void)?>(initialState: nil)
 
     /// Installs an opt-in sink for LAN call timings and payloads. Nil disables tracing.
     public nonisolated static func setTrace(_ sink: (@Sendable (String) -> Void)?) {

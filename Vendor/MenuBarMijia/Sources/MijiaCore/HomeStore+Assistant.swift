@@ -1,5 +1,4 @@
 import Foundation
-import Observation
 
 // Assistant side of HomeStore: command bar, model/local intent resolution,
 // spoken delays, voice undo and applying intents to devices.

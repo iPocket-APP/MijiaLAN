@@ -5,7 +5,7 @@ import PackageDescription
 // MenuBarMijia c6a9db1c84fa30125ed4b642b6745487dec94e89; see README.md.
 let package = Package(
     name: "MenuBarMijia",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v13)],
     products: [
         .library(name: "MijiaCore", targets: ["MijiaCore"])
     ],

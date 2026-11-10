@@ -13,6 +13,7 @@ import tempfile
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 from release_metadata import ROOT, metadata
@@ -119,8 +120,11 @@ def verify_public_feed(feed, openssl="openssl"):
         archive = root / name
         with urllib.request.urlopen(prefix + name, timeout=120) as response, archive.open("wb") as output:
             shutil.copyfileobj(response, output)
-        info = {"CFBundleVersion": str(release["build_number"]), "CFBundleShortVersionString": release["version"],
-                "LSMinimumSystemVersion": "15.0"}
+        with zipfile.ZipFile(archive) as bundle:
+            info = plistlib.loads(bundle.read("MijiaLAN.app/Contents/Info.plist"))
+        if (info["CFBundleVersion"] != str(release["build_number"])
+                or info["CFBundleShortVersionString"] != release["version"]):
+            raise ValueError("The public package does not match the expected release")
         validate_feed(feed, archive, info, prefix)
         enclosure = ET.parse(feed).find("./channel/item/enclosure")
         public_key, signature = root / "public.der", root / "archive.sig"

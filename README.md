@@ -32,7 +32,7 @@ MijiaLAN 用 miIO / MIoT 协议直接和局域网里的设备通信。凭据只�
 
 **系统要求**
 
-- macOS 15 或更高版本；Apple Silicon 或 Intel Mac，发行包同时包含两种架构。
+- macOS 13 或更高版本；Apple Silicon 或 Intel Mac，发行包同时包含两种架构。
 - Mac 与设备的网络互通；HomeKit 发现还需要 Bonjour / mDNS 可达。
 - 扫码导入和获取尚未缓存的设备规格需要联网。
 

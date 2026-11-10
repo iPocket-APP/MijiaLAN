@@ -50,7 +50,7 @@ def main():
         info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
         assert info['CFBundleShortVersionString'] == data['version']
         assert info['CFBundleVersion'] == str(data['build_number'])
-        assert info['LSMinimumSystemVersion'] == '15.0'
+        assert info['LSMinimumSystemVersion'] == '13.0'
         run('lipo', str(app / 'Contents/MacOS/MijiaLAN'), '-verify_arch', platform.machine())
         run('codesign', '--verify', '--deep', '--strict', str(app))
         run(sys.executable, str(ROOT / 'scripts/swift_runtime.py'), 'verify', str(app),

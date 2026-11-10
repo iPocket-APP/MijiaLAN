@@ -1,5 +1,5 @@
 import Foundation
-import Observation
+import Combine
 
 public struct ToastNotice: Equatable, Sendable {
     public let id: UUID
@@ -40,120 +40,119 @@ public struct UndoBanner: Equatable, Sendable {
     }
 }
 
-@Observable
 @MainActor
-public final class HomeStore {
+public final class HomeStore: ObservableObject {
     public static let shared = HomeStore()
 
-    public internal(set) var connectionStatus: ConnectionStatus = .connecting
-    public internal(set) var rooms: [RoomArea] = []
+    @Published public internal(set) var connectionStatus: ConnectionStatus = .connecting
+    @Published public internal(set) var rooms: [RoomArea] = []
     /// Mi Home 家庭 list from the cloud backend; empty elsewhere.
-    public internal(set) var homes: [HomeOption] = []
-    public internal(set) var selectedMiHomeId: String? = UserDefaults.standard.string(forKey: MiCloudProvider.selectedHomeKey)
-    public internal(set) var devices: [SmartDevice] = []
-    public internal(set) var environmentReadings: [EnvironmentReading] = []
-    public internal(set) var scenes: [HomeScene] = []
-    public internal(set) var hasReceivedInitialSnapshot = false
+    @Published public internal(set) var homes: [HomeOption] = []
+    @Published public internal(set) var selectedMiHomeId: String? = UserDefaults.standard.string(forKey: MiCloudProvider.selectedHomeKey)
+    @Published public internal(set) var devices: [SmartDevice] = []
+    @Published public internal(set) var environmentReadings: [EnvironmentReading] = []
+    @Published public internal(set) var scenes: [HomeScene] = []
+    @Published public internal(set) var hasReceivedInitialSnapshot = false
 
-    public var selectedRoomId: String? = nil // nil = 全部 / 常用
-    public var expandedDeviceId: String? = nil
-    public var focusedDeviceId: String? = nil
-    public var isOptionKeyPressed: Bool = false
-    public var isShowingSettings: Bool = false
+    @Published public var selectedRoomId: String? = nil // nil = 全部 / 常用
+    @Published public var expandedDeviceId: String? = nil
+    @Published public var focusedDeviceId: String? = nil
+    @Published public var isOptionKeyPressed: Bool = false
+    @Published public var isShowingSettings: Bool = false
 
     let userDefaults: UserDefaults
 
-    public var hideOfflineDevices: Bool {
+    @Published public var hideOfflineDevices: Bool {
         didSet { userDefaults.set(hideOfflineDevices, forKey: "hide_offline_devices") }
     }
 
-    public var showQuickActionsBar: Bool {
+    @Published public var showQuickActionsBar: Bool {
         didSet { userDefaults.set(showQuickActionsBar, forKey: "show_quick_actions_bar") }
     }
 
-    public var enableGlobalHotkey: Bool {
+    @Published public var enableGlobalHotkey: Bool {
         didSet {
             userDefaults.set(enableGlobalHotkey, forKey: "enable_global_hotkey")
             onGlobalHotkeyPreferenceChanged?(enableGlobalHotkey)
         }
     }
 
-    public var isCompactGridMode: Bool {
+    @Published public var isCompactGridMode: Bool {
         didSet { userDefaults.set(isCompactGridMode, forKey: "compact_grid_mode") }
     }
 
-    public var favoriteDeviceIds: Set<String> {
+    @Published public var favoriteDeviceIds: Set<String> {
         didSet {
             userDefaults.set(Array(favoriteDeviceIds), forKey: "favorite_device_ids")
         }
     }
 
-    public var favoriteOrder: [String] {
+    @Published public var favoriteOrder: [String] {
         didSet {
             userDefaults.set(favoriteOrder, forKey: "favorite_order")
         }
     }
 
-    public var hiddenDeviceIds: Set<String> {
+    @Published public var hiddenDeviceIds: Set<String> {
         didSet {
             userDefaults.set(Array(hiddenDeviceIds), forKey: "hidden_device_ids")
         }
     }
 
     /// Per-device choice for 全关; a missing entry means the default from `joinsAllOffByDefault` (#23).
-    public var allOffOverrides: [String: Bool] {
+    @Published public var allOffOverrides: [String: Bool] {
         didSet { userDefaults.set(allOffOverrides, forKey: "all_off_overrides") }
     }
 
-    public var menuBarDisplayMode: MenuBarDisplayMode {
+    @Published public var menuBarDisplayMode: MenuBarDisplayMode {
         didSet { userDefaults.set(menuBarDisplayMode.rawValue, forKey: "menubar_display_mode") }
     }
 
-    public var menuBarTargetId: String {
+    @Published public var menuBarTargetId: String {
         didSet { userDefaults.set(menuBarTargetId, forKey: "menubar_target_id") }
     }
 
-    public var enableSafetyAlerts: Bool {
+    @Published public var enableSafetyAlerts: Bool {
         didSet { userDefaults.set(enableSafetyAlerts, forKey: "enable_safety_alerts") }
     }
 
-    public var homeName: String {
+    @Published public var homeName: String {
         didSet { userDefaults.set(homeName, forKey: "home_name") }
     }
 
-    public var appLanguagePreference: AppLanguagePreference = .system {
+    @Published public var appLanguagePreference: AppLanguagePreference = .system {
         didSet {
             userDefaults.set(appLanguagePreference.rawValue, forKey: "app_language")
             syncEffectiveLanguage()
         }
     }
 
-    public private(set) var effectiveLanguage: AppLanguage = .zhHans
+    @Published public private(set) var effectiveLanguage: AppLanguage = .zhHans
 
-    public var miCloudRegion: MiCloudRegion = .cn {
+    @Published public var miCloudRegion: MiCloudRegion = .cn {
         didSet {
             userDefaults.set(miCloudRegion.rawValue, forKey: "mi_cloud_region")
         }
     }
 
     /// When off, nothing new is learned and no habit summary is sent to the AI model.
-    public var isHabitLearningEnabled: Bool = true {
+    @Published public var isHabitLearningEnabled: Bool = true {
         didSet { userDefaults.set(isHabitLearningEnabled, forKey: "assistant_habit_learning_enabled") }
     }
 
     /// Ask macOS to keep speech recognition on this Mac (no audio sent to Apple) when the language supports it.
     /// Defaults on for privacy; an explicitly saved `false` still wins (#50).
-    public var prefersOnDeviceSpeech: Bool = true {
+    @Published public var prefersOnDeviceSpeech: Bool = true {
         didSet { userDefaults.set(prefersOnDeviceSpeech, forKey: "assistant_on_device_speech") }
     }
 
     /// Persisted flag set once the user finishes or dismisses the first-launch onboarding guide.
-    public var hasCompletedOnboarding: Bool = false {
+    @Published public var hasCompletedOnboarding: Bool = false {
         didSet { userDefaults.set(hasCompletedOnboarding, forKey: "has_completed_onboarding") }
     }
 
     /// Transient flag allowing the user to reopen the onboarding guide from Settings at any time.
-    public var isShowingOnboarding: Bool = false
+    @Published public var isShowingOnboarding: Bool = false
 
     public var shouldShowOnboarding: Bool {
         if isShowingOnboarding { return true }
@@ -181,26 +180,26 @@ public final class HomeStore {
         }
     }
 
-    public internal(set) var homeBackend: HomeBackend {
+    @Published public internal(set) var homeBackend: HomeBackend {
         didSet {
             userDefaults.set(homeBackend.rawValue, forKey: "home_backend")
             syncSensorHistoryScope()
         }
     }
 
-    public internal(set) var miSessionMaskedUserId: String?
+    @Published public internal(set) var miSessionMaskedUserId: String?
     var miSessionScopeIdentifier: String? {
         didSet { syncSensorHistoryScope() }
     }
 
-    public private(set) var toastNotice: ToastNotice?
-    public internal(set) var undoBanner: UndoBanner?
+    @Published public private(set) var toastNotice: ToastNotice?
+    @Published public internal(set) var undoBanner: UndoBanner?
     public var onSafetyAlert: ((SafetyAlert) -> Void)?
     public var onGlobalHotkeyPreferenceChanged: ((Bool) -> Void)?
 
     public static let automaticUpdateCheckInterval: TimeInterval = 6 * 3600
-    public internal(set) var updateState: AppUpdateState = .idle
-    public var automaticallyChecksForUpdates: Bool = true {
+    @Published public internal(set) var updateState: AppUpdateState = .idle
+    @Published public var automaticallyChecksForUpdates: Bool = true {
         didSet {
             userDefaults.set(automaticallyChecksForUpdates, forKey: "automatically_checks_for_updates")
             if automaticallyChecksForUpdates && !oldValue {
@@ -211,7 +210,7 @@ public final class HomeStore {
         }
     }
     public var onTerminateForUpdate: (() -> Void)?
-    public var updater: AppUpdater
+    @Published public var updater: AppUpdater
     /// Local energy history fed by provider snapshots (#62).
     public let energyHistory: EnergyHistory
     /// Local + cloud merged history for temperature and humidity sensors.
@@ -219,15 +218,15 @@ public final class HomeStore {
     var updateTask: Task<Void, Never>?
     var activeUpdateAttemptID: UUID?
 
-    public var lgConfig: LGWebOSConfig {
+    @Published public var lgConfig: LGWebOSConfig {
         didSet { lgConfig.save(to: userDefaults) }
     }
 
-    public internal(set) var discoveredHAInstances: [HADiscoveredInstance] = []
+    @Published public internal(set) var discoveredHAInstances: [HADiscoveredInstance] = []
     /// Another Home Assistant address found after disconnects; only used if the user taps 切换 (#18).
-    public internal(set) var pendingHAAddressSuggestion: HADiscoveredInstance?
+    @Published public internal(set) var pendingHAAddressSuggestion: HADiscoveredInstance?
     var dismissedHAAddressURLs: Set<String> = []
-    public internal(set) var isDiscoveringHA: Bool = false
+    @Published public internal(set) var isDiscoveringHA: Bool = false
 
     var provider: any HomeProvider
     var controlContextID = UUID()
@@ -236,7 +235,7 @@ public final class HomeStore {
     var latestLGDevice: SmartDevice?
     var eventTask: Task<Void, Never>?
     /// Panel open, Mac awake, Low Power Mode; the provider paces polling with it (#26).
-    public internal(set) var pollingContext = PollingContext()
+    @Published public internal(set) var pollingContext = PollingContext()
     var pollingContextSync: Task<Void, Never>?
     var debounceTasks: [String: Task<Void, Never>] = [:]
     var undoTimerTask: Task<Void, Never>?
@@ -415,32 +414,32 @@ public final class HomeStore {
 
     // MARK: - Assistant Commands & Personalized Jev Context
 
-    public var isShowingAssistantBar: Bool = false
+    @Published public var isShowingAssistantBar: Bool = false
     /// Bumped to ask an already-visible command bar to take keyboard focus.
-    public internal(set) var assistantFocusRequest: Int = 0
+    @Published public internal(set) var assistantFocusRequest: Int = 0
     /// Bumped to ask the command bar to start or toggle live speech recognition.
-    public internal(set) var assistantVoiceRequest: Int = 0
-    public internal(set) var assistantState: AssistantState = .idle
+    @Published public internal(set) var assistantVoiceRequest: Int = 0
+    @Published public internal(set) var assistantState: AssistantState = .idle
     /// Receipt for the latest command, cleared as soon as the reply resets (#93).
-    public internal(set) var lastAssistantReceipt: AssistantExecutionReceipt?
+    @Published public internal(set) var lastAssistantReceipt: AssistantExecutionReceipt?
     /// A command or suggestion request waiting for the user to allow sending it to a cloud AI service (#20).
-    public internal(set) var pendingCloudConsent: PendingCloudConsent?
-    public internal(set) var assistantSuggestions: [AssistantSuggestion] = []
-    public internal(set) var isProactiveRecommending: Bool = false
+    @Published public internal(set) var pendingCloudConsent: PendingCloudConsent?
+    @Published public internal(set) var assistantSuggestions: [AssistantSuggestion] = []
+    @Published public internal(set) var isProactiveRecommending: Bool = false
     var assistantResetTask: Task<Void, Never>?
     /// Test seam replacing the network resolver built from `assistantConfig`.
     var assistantResolverOverride: ModelIntentResolver?
     /// Test seam replacing only the HTTP transport while still resolving `assistantConfig` from `userDefaults`.
     var assistantTransportOverride: ModelIntentResolver.Transport?
     /// Commands waiting on a spoken delay ("10 分钟后关灯"), soonest first. Persisted across launches.
-    public internal(set) var scheduledCommands: [ScheduledCommand] = []
+    @Published public internal(set) var scheduledCommands: [ScheduledCommand] = []
     /// Timers that came due while the app was closed or the Mac slept. Never auto-executed without user confirmation.
-    public internal(set) var missedScheduledCommands: [ScheduledCommand] = []
+    @Published public internal(set) var missedScheduledCommands: [ScheduledCommand] = []
     public var onMissedScheduledCommand: ((ScheduledCommand) -> Void)?
     var notifiedMissedTimerIds: Set<UUID> = []
     var scheduledTasks: [UUID: Task<Void, Never>] = [:]
     /// The most recent assistant action, kept so "撤销" can restore it after the 5 s banner is gone.
-    var lastAssistantUndo: (
+    @Published var lastAssistantUndo: (
         reply: String,
         restore: [DeviceCommand],
         previous: [SmartDevice],

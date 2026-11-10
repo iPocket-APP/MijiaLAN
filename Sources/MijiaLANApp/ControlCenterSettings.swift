@@ -6,8 +6,8 @@ import ServiceManagement
 import SwiftUI
 
 struct ControlCenterSettings: View {
-    @Bindable var model: AppModel
-    @Bindable var bridge: HomeKitBridgeController
+    @ObservedObject var model: AppModel
+    @ObservedObject var bridge: HomeKitBridgeController
     let updater: AppUpdater?
     @Binding var appearance: String
     let navigate: (ControlCenterRoute) -> Void
@@ -142,7 +142,7 @@ private struct LaunchAtLoginSettings: View {
                     .fixedSize(horizontal: false, vertical: true).padding(.leading, 3)
             }
         }
-        .onChange(of: panelPresented, initial: true) { _, presented in
+        .onValueChange(of: panelPresented, initial: true) { presented in
             guard presented, !isEphemeral else { return }
             status = SMAppService.mainApp.status
             errorMessage = nil
@@ -190,7 +190,7 @@ private struct LaunchAtLoginSettings: View {
 }
 
 private struct SoftwareUpdateSettings: View {
-    @Bindable var updater: AppUpdater
+    @ObservedObject var updater: AppUpdater
 
     var body: some View {
         SettingsSection(L10n.tr("软件更新", "Software Updates")) {
@@ -235,8 +235,8 @@ private struct SoftwareUpdateSettings: View {
 struct SettingsHomeKitManagement: View {
     /// The panel session's key for a device row that lists its services.
     static let expansionSection = "homekit"
-    let model: AppModel
-    @Bindable var bridge: HomeKitBridgeController
+    @ObservedObject var model: AppModel
+    @ObservedObject var bridge: HomeKitBridgeController
     @State private var confirmingReset = false
 
     var body: some View {
@@ -330,15 +330,14 @@ private struct HomeKitServiceLimitNotice: View {
 
 /// A device's switch, and under it, once expanded, each service it publishes with a switch of its own.
 private struct SettingsHomeKitDeviceRow: View {
-    let model: AppModel
+    @ObservedObject var model: AppModel
     let device: LocalDevice
-    @Environment(\.panelSession) private var session
+    @EnvironmentObject private var session: PanelSession
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var localExpanded = false
 
     private var supported: Bool { model.homeKitSupports(device) }
     private var expanded: Binding<Bool> {
-        session?.expansion(deviceID: device.did, section: SettingsHomeKitManagement.expansionSection) ?? $localExpanded
+        session.expansion(deviceID: device.did, section: SettingsHomeKitManagement.expansionSection)
     }
 
     var body: some View {
@@ -505,7 +504,8 @@ private extension CapabilityHomeKitService.Kind {
 }
 
 struct SettingsDeviceManagement: View {
-    let model: AppModel
+    @ObservedObject var model: AppModel
+    @EnvironmentObject private var devices: DeviceController
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -528,9 +528,9 @@ struct SettingsDeviceManagement: View {
                                         .font(.system(size: 11)).foregroundStyle(.secondary).textSelection(.enabled)
                                 }
                                 Spacer(minLength: 4)
-                                Circle().fill(model.health[device.did]?.state == .online ? Color.green : Color.secondary)
+                                Circle().fill(devices.snapshots[device.did]?.isOnline == true ? Color.green : Color.secondary)
                                     .frame(width: 6, height: 6)
-                                    .accessibilityLabel(model.health[device.did]?.state == .online ? L10n.tr("在线", "Online") : L10n.tr("未连接", "Disconnected"))
+                                    .accessibilityLabel(devices.snapshots[device.did]?.isOnline == true ? L10n.tr("在线", "Online") : L10n.tr("未连接", "Disconnected"))
                             }
                             .padding(.horizontal, 12).padding(.vertical, 10)
                         }
@@ -571,7 +571,7 @@ struct SettingsDeviceManagement: View {
 }
 
 struct SettingsImportFlow: View {
-    let model: AppModel
+    @ObservedObject var model: AppModel
     let navigate: (ControlCenterRoute) -> Void
     @Environment(\.panelPresented) private var panelPresented
 
@@ -633,8 +633,8 @@ struct SettingsImportFlow: View {
 }
 
 struct SettingsManualDevice: View {
-    let model: AppModel
-    @Bindable var draft: PanelManualDraft
+    @ObservedObject var model: AppModel
+    @ObservedObject var draft: PanelManualDraft
 
     private var canAdd: Bool {
         !model.isAddingManually && !draft.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
@@ -675,7 +675,7 @@ struct SettingsManualDevice: View {
         .onAppear {
             if draft.submitted, !model.isAddingManually, model.manualAddError == nil { draft.confirmation = model.lastImportSummary }
         }
-        .onChange(of: model.isAddingManually) { _, working in
+        .onValueChange(of: model.isAddingManually) { working in
             if draft.submitted, !working, model.manualAddError == nil { draft.confirmation = model.lastImportSummary }
         }
     }
@@ -799,7 +799,7 @@ private struct SettingsToggleRow: View {
 
 /// Saves the file a problem report needs in one click, so nobody has to run the app from Terminal.
 private struct DiagnosticsExportRow: View {
-    @Bindable var model: AppModel
+    @ObservedObject var model: AppModel
 
     var body: some View {
         HStack(spacing: 10) {
