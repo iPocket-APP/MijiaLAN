@@ -1,6 +1,16 @@
+import AppKit
 import MijiaCore
 import MijiaLAN
 import SwiftUI
+
+enum ControlCenterSymbol {
+    static let fan = available("fan", fallback: "fanblades")
+    static let keychainUnavailable = available("key.slash", fallback: "lock.trianglebadge.exclamationmark")
+
+    private static func available(_ preferred: String, fallback: String) -> String {
+        NSImage(systemSymbolName: preferred, accessibilityDescription: nil) == nil ? fallback : preferred
+    }
+}
 
 /// Presentation only: shortening a title never renames a device or its Home accessory.
 enum DevicePresentation {
@@ -34,7 +44,7 @@ enum DevicePresentation {
         switch snapshot?.schema.category {
         case "light": "lamp.desk"
         case "air-conditioner": "air.conditioner.horizontal"
-        case "fan": "fan"
+        case "fan": ControlCenterSymbol.fan
         case "air-purifier": "air.purifier"
         case "outlet", "switch": "powerplug"
         case "cooker": "cooktop"

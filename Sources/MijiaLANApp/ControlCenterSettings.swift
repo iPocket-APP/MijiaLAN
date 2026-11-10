@@ -488,7 +488,7 @@ private extension CapabilityHomeKitService.Kind {
         switch self {
         case .outlet: "powerplug"
         case .light: "lightbulb"
-        case .fan: "fan"
+        case .fan: ControlCenterSymbol.fan
         case .airPurifier: "air.purifier"
         case .climate: "thermometer.medium"
         case .humidifier: "humidifier"

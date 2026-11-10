@@ -237,7 +237,7 @@ private struct PanelPage: View {
         case .home:
             VStack(spacing: 0) {
                 if model.vaultUnavailable {
-                    Label(L10n.tr("钥匙串暂时无法访问，请重新打开 App 并允许访问。", "Keychain access is unavailable. Reopen the app and allow access."), systemImage: "key.slash")
+                    Label(L10n.tr("钥匙串暂时无法访问，请重新打开 App 并允许访问。", "Keychain access is unavailable. Reopen the app and allow access."), systemImage: ControlCenterSymbol.keychainUnavailable)
                         .font(.caption).foregroundStyle(.orange).padding(12)
                 }
                 ControlCenterDevices(model: model, session: session, openDevice: { navigate(.device($0)) }, openSettings: { navigate(.settings) })
