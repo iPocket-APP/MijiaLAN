@@ -408,8 +408,8 @@ public final class HomeKitBridgeController: ObservableObject {
             store.$hasReceivedInitialSnapshot.removeDuplicates(), store.$connectionStatus.removeDuplicates()
         )
         .dropFirst()
-        // Wait until @Published has stored the new values and coalesce a batch of changes.
-        .debounce(for: .zero, scheduler: DispatchQueue.main)
+        // Register pending work before the publisher returns. The main-actor tasks
+        // read the store after @Published has saved the new values.
         .sink { [weak self] _ in self?.storeChanged() }
     }
 
