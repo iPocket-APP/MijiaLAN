@@ -1,6 +1,7 @@
 import MijiaCore
 import MijiaLAN
 import SwiftUI
+import MijiaSupport
 
 struct DeviceInformation: View {
     let snapshot: DeviceSnapshot
@@ -114,7 +115,7 @@ struct DeviceCommandFeedback: View {
             let remaining = 5 - Date.now.timeIntervalSince(confirmedAt)
             guard remaining > 0 else { return }
             showsConfirmation = true
-            do { try await Task.sleep(for: .seconds(remaining)) }
+            do { try await MonotonicClock.sleep(for: .seconds(remaining)) }
             catch { return }
             showsConfirmation = false
         }

@@ -1,4 +1,5 @@
 import AppKit
+import MijiaSupport
 import SwiftUI
 import MijiaLAN
 import MijiaCore
@@ -15,7 +16,7 @@ enum DevSnapshot {
     static func scheduleIfRequested(model: AppModel, updater: AppUpdater? = nil, environment: [String: String] = ProcessInfo.processInfo.environment) {
         if let path = environment["MIJIALAN_DIAGNOSTICS_OUTPUT"] {
             Task { @MainActor in
-                try? await Task.sleep(for: .seconds(12))
+                try? await MonotonicClock.sleep(for: .seconds(12))
                 await model.devices.refreshNow()
                 if let data = DiagnosticReport.json(model: model) {
                     diagnosticWriter.submit(data, to: URL(fileURLWithPath: path))
@@ -43,17 +44,15 @@ enum DevSnapshot {
             UserDefaults.standard.set(theme, forKey: "control_center_appearance")
         }
         Task { @MainActor in
-            try? await Task.sleep(for: .seconds(delay))
+            try? await MonotonicClock.sleep(for: .seconds(delay))
             if let did = environment["MIJIALAN_SNAPSHOT_HIDE"], let device = model.config.devices.first(where: { $0.did == did }) {
                 print("BEFORE exposed=\(model.bridge.exposedDeviceCount)")
                 model.setInHomeKit(device, false)
-                try? await Task.sleep(for: .seconds(1))
+                try? await MonotonicClock.sleep(for: .seconds(1))
             }
-            let renderer = ImageRenderer(content: PanelView(model: model, updater: updater, scrolls: false, session: session))
-            renderer.scale = 2
-            if let image = renderer.cgImage {
-                let rep = NSBitmapImageRep(cgImage: image)
-                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            let content = PanelView(model: model, updater: updater, scrolls: false, session: session)
+            if let bitmap = render(content) {
+                try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
             }
             // The menu-bar window takes the scrolling panel's fitting size; it must not collapse.
             let hosting = NSHostingView(rootView: PanelView(model: model, updater: updater).background(PanelWindowSizing()))
@@ -62,7 +61,7 @@ enum DevSnapshot {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: PanelView.width, height: PanelView.maxHeight), styleMask: [.borderless], backing: .buffered, defer: false)
             window.contentView = hosting
             hosting.layoutSubtreeIfNeeded()
-            try? await Task.sleep(for: .milliseconds(300))
+            try? await MonotonicClock.sleep(for: .milliseconds(300))
             hosting.layoutSubtreeIfNeeded()
             print("PANEL fitting=\(Int(hosting.fittingSize.width))x\(Int(hosting.fittingSize.height))")
             print("HOST content=\(Int(hosting.bounds.width))x\(Int(hosting.bounds.height))")
@@ -79,7 +78,7 @@ enum DevSnapshot {
                 visible.contentView = shown
                 visible.makeKeyAndOrderFront(nil)
                 NSApp.activateForUserAction()
-                try? await Task.sleep(for: .milliseconds(300))
+                try? await MonotonicClock.sleep(for: .milliseconds(300))
                 print("WINDOW \(visible.windowNumber)")
                 if let path = environment["MIJIALAN_NATIVE_SNAPSHOT"],
                    let bitmap = shown.bitmapImageRepForCachingDisplay(in: shown.bounds) {
@@ -87,9 +86,26 @@ enum DevSnapshot {
                     try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
                 }
                 fflush(stdout)
-                try? await Task.sleep(for: .seconds(seconds))
+                try? await MonotonicClock.sleep(for: .seconds(seconds))
             }
             if exits { exit(0) }
         }
+    }
+
+    private static func render(_ content: PanelView) -> NSBitmapImageRep? {
+        if #available(macOS 13, *) {
+            let renderer = ImageRenderer(content: content)
+            renderer.scale = 2
+            return renderer.cgImage.map { NSBitmapImageRep(cgImage: $0) }
+        }
+
+        let host = NSHostingView(rootView: content)
+        let bounds = NSRect(origin: .zero, size: host.fittingSize)
+        let window = NSWindow(contentRect: bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        return bitmap
     }
 }

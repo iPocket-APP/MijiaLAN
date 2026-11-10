@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import MijiaSupport
 import Testing
 @testable import MijiaCore
 
@@ -359,7 +360,7 @@ struct UpdateCheckerTests {
             let driver = UpdateSystemDriver(
                 downloadFile: { _, destination, onProgress in
                     if probe.shouldBlockDownloadForCancel {
-                        try await Task.sleep(for: .seconds(10))
+                        try await MonotonicClock.sleep(for: .seconds(10))
                     }
                     try archiveBytes.write(to: destination)
                     onProgress(DownloadProgress(receivedBytes: Int64(archiveBytes.count), totalBytes: Int64(archiveBytes.count)))
@@ -442,7 +443,7 @@ struct UpdateCheckerTests {
 
         probe.shouldBlockDownloadForCancel = true
         let installTask = Task { await store.startUpdateInstallation() }
-        try await Task.sleep(for: .milliseconds(40))
+        try await MonotonicClock.sleep(for: .milliseconds(40))
         store.cancelUpdateInstallation()
         await installTask.value
         #expect(store.updateState.associatedRelease?.version == "1.4.0")

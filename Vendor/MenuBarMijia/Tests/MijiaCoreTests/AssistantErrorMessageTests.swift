@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Testing
 @testable import MijiaCore
 
@@ -21,7 +22,7 @@ struct AssistantErrorMessageTests {
         let mock = MockHomeProvider(snapshot: SynthesizedHome(devices: [AssistantScheduleTests.ceiling], scenes: []))
         let store = HomeStore(provider: mock, defaultsSuiteName: "test.err.\(UUID().uuidString)")
         for _ in 0..<50 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
         store.assistantResolverOverride = ModelIntentResolver(
             config: AssistantConfig(baseURL: "https://example.invalid/v1", model: "m", apiKey: "k"),

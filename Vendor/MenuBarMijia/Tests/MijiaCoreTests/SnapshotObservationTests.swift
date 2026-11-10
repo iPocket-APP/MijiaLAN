@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Combine
 import Testing
 @testable import MijiaCore
@@ -28,7 +29,7 @@ struct SnapshotObservationTests {
         let status = ConnectionStatus.disconnected(marker)
         provider.continuation.yield(.statusChanged(status))
         for _ in 0..<100 where store.connectionStatus != status {
-            try await Task.sleep(for: .milliseconds(5))
+            try await MonotonicClock.sleep(for: .milliseconds(5))
         }
         try #require(store.connectionStatus == status, "Snapshot stream did not reach the fence")
     }
@@ -101,13 +102,13 @@ struct SnapshotObservationTests {
         provider.continuation.yield(.statusChanged(.disconnected("same")))
         provider.continuation.yield(.snapshotUpdated(SynthesizedHome()))
         for _ in 0..<100 where !store.hasReceivedInitialSnapshot {
-            try await Task.sleep(for: .milliseconds(5))
+            try await MonotonicClock.sleep(for: .milliseconds(5))
         }
         try #require(store.hasReceivedInitialSnapshot)
         #expect(changes.value == 0)
         provider.continuation.yield(.statusChanged(.connected))
         for _ in 0..<100 where store.connectionStatus != .connected {
-            try await Task.sleep(for: .milliseconds(5))
+            try await MonotonicClock.sleep(for: .milliseconds(5))
         }
         #expect(store.connectionStatus == .connected)
         #expect(changes.value == 1)

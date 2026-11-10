@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import MijiaSupport
 import HAPCore
 import Network
 @testable import HAPCrypto
@@ -64,7 +65,7 @@ actor WireHAPController {
     func peerClosesAfterInvalidFrame() async throws -> Bool {
         guard readKey != nil else { throw Failure.invalidPairing }
         try await send(Data([1, 0] + [UInt8](repeating: 0, count: 17)))
-        let start = ContinuousClock.now
+        let start = MonotonicClock.now
         do {
             _ = try await readRaw()
             return false
@@ -160,7 +161,7 @@ actor WireHAPController {
     private func timeout() -> Task<Void, Never> {
         let connection = connection
         return Task {
-            do { try await Task.sleep(for: .seconds(5)); connection.cancel() } catch {}
+            do { try await MonotonicClock.sleep(for: .seconds(5)); connection.cancel() } catch {}
         }
     }
 

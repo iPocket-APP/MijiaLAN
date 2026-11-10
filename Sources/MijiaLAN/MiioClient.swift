@@ -1,6 +1,6 @@
 import Foundation
+import MijiaSupport
 import MijiaCore
-import os
 
 /// One miIO device on the LAN. Calls are serialized per device (the actor), which is also what the firmware expects.
 ///
@@ -11,11 +11,11 @@ public actor MiioClient {
     public nonisolated let port: UInt16
     private let token: Data
     private let transport: any MiioTransport
-    private let timeout: Duration
+    private let timeout: TimeSpan
     private let retries: Int
 
     private var deviceID: UInt32?
-    private var clock: (stamp: UInt32, at: ContinuousClock.Instant)?
+    private var clock: (stamp: UInt32, at: MonotonicClock.Instant)?
     private var nextRequestID = Int.random(in: 1...9_000)
     private var calling = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -29,13 +29,13 @@ public actor MiioClient {
     }
 
     /// Re-hello after this much silence; some firmware resets its clock when it reconnects to Wi-Fi.
-    static let clockMaxAge: Duration = .seconds(120)
+    static let clockMaxAge: TimeSpan = .seconds(120)
     /// "User ack timeout": a request ID the device already used, or (pre-MIoT firmware) a method it does not know.
     static let userAckTimeoutCode = -9999
     /// A shorter per-attempt wait for calls someone is waiting on, such as a write from Apple Home, which shows
     /// "Updating" until it is answered: a lost packet is then retried sooner. Never lengthens the client's wait.
-    @TaskLocal public static var attemptTimeout: Duration?
-    private static let traceSink = OSAllocatedUnfairLock<(@Sendable (String) -> Void)?>(initialState: nil)
+    @TaskLocal public static var attemptTimeout: TimeSpan?
+    private static let traceSink = LockedState<(@Sendable (String) -> Void)?>(initialState: nil)
 
     /// Installs an opt-in sink for LAN call timings and payloads. Nil disables tracing.
     public nonisolated static func setTrace(_ sink: (@Sendable (String) -> Void)?) {
@@ -47,7 +47,7 @@ public actor MiioClient {
         token: Data,
         port: UInt16 = MiioPacket.port,
         transport: any MiioTransport = UDPMiioTransport(),
-        timeout: Duration = .seconds(2),
+        timeout: TimeSpan = .seconds(2),
         retries: Int = 2
     ) {
         self.host = host
@@ -60,7 +60,7 @@ public actor MiioClient {
 
     /// The hello reply's header: device ID and clock. Does not prove the token is right.
     @discardableResult
-    public func handshake(timeout: Duration? = nil) async throws -> MiioPacket.Header {
+    public func handshake(timeout: TimeSpan? = nil) async throws -> MiioPacket.Header {
         let reply = try await transport.exchange(MiioPacket.hello, host: host, port: port, timeout: timeout ?? self.timeout)
         let header = try MiioPacket.parseHeader(reply)
         deviceID = header.deviceID
@@ -72,11 +72,11 @@ public actor MiioClient {
     /// A device drops a packet it cannot verify instead of answering, so "hello answered, request never" is how a
     /// wrong token shows up; that case throws `MiioError.noEncryptedReply` rather than `.timeout`.
     /// `timeout` overrides the client's per-attempt wait for this call.
-    public func call(_ method: String, params: JSONValue = .array([]), timeout: Duration? = nil, retryCount: Int? = nil) async throws -> JSONValue {
+    public func call(_ method: String, params: JSONValue = .array([]), timeout: TimeSpan? = nil, retryCount: Int? = nil) async throws -> JSONValue {
         guard let trace = Self.traceSink.withLock({ $0 }) else {
             return try await attempt(method, params: params, timeout: timeout, retryCount: retryCount)
         }
-        let started = ContinuousClock.now
+        let started = MonotonicClock.now
         func record(_ outcome: String) {
             let line = "\(host) \(method) \(params.compactJSONString) -> \(outcome) after \(started.duration(to: .now))"
             let deviceToken = MiioToken.hex(token)
@@ -94,7 +94,7 @@ public actor MiioClient {
         }
     }
 
-    private func attempt(_ method: String, params: JSONValue, timeout: Duration?, retryCount: Int?) async throws -> JSONValue {
+    private func attempt(_ method: String, params: JSONValue, timeout: TimeSpan?, retryCount: Int?) async throws -> JSONValue {
         let timeout = timeout ?? Self.attemptTimeout.map { min($0, self.timeout) }
         await acquire()
         defer { release() }
@@ -125,14 +125,14 @@ public actor MiioClient {
 
     private var needsHandshake: Bool {
         guard deviceID != nil, let clock else { return true }
-        return ContinuousClock.now - clock.at > Self.clockMaxAge
+        return MonotonicClock.now - clock.at > Self.clockMaxAge
     }
 
-    private func send(_ method: String, params: JSONValue, timeout: Duration) async throws -> JSONValue {
+    private func send(_ method: String, params: JSONValue, timeout: TimeSpan) async throws -> JSONValue {
         guard let deviceID, let clock else { throw MiioError.timeout }
         let id = takeRequestID()
         let body = JSONValue.object(["id": .number(Double(id)), "method": .string(method), "params": params])
-        let elapsed = UInt32(clamping: (ContinuousClock.now - clock.at).components.seconds)
+        let elapsed = UInt32(clamping: Int64((MonotonicClock.now - clock.at).timeInterval))
         let stamp = clock.stamp &+ elapsed &+ 1
         // NUL-terminated like python-miio, the implementation most firmware has been tested against.
         let request = Data(body.compactJSONString.utf8) + [0]
@@ -193,7 +193,7 @@ extension MiioClient {
     /// Firmware rejects long property lists; 15 is what the Mi Home app sends.
     public static let propertiesPerRequest = 15
 
-    public func info(timeout: Duration? = nil) async throws -> MiioInfo {
+    public func info(timeout: TimeSpan? = nil) async throws -> MiioInfo {
         let result = try await call("miIO.info", timeout: timeout)
         guard let model = result["model"]?.stringValue, !model.isEmpty else { throw MiioError.badResponse(L10n.tr("miIO.info 没有 model", "miIO.info did not include a model.")) }
         return MiioInfo(model: model, mac: result["mac"]?.stringValue, firmware: result["fw_ver"]?.stringValue)

@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Combine
 import os
 import HAPApple
@@ -145,7 +146,7 @@ public final class HomeKitBridgeController: ObservableObject {
     static let capabilityIIDsKey = "homekit_capability_iids_v1"
     /// Per miIO attempt for writes from Apple Home, which shows "Updating" until it has the device's answer.
     /// Wi-Fi power save delays answers by up to about 2 s, the same allowance as the reachability probe.
-    static let writeAttemptTimeout: Duration = .milliseconds(2500)
+    static let writeAttemptTimeout: TimeSpan = .milliseconds(2500)
     private var secrets: HomeKitBridgeSecrets?
     var bridge: HAPBridge?
     private var service: AppleHAPService?

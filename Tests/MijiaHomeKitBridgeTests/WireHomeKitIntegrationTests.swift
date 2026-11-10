@@ -1,8 +1,8 @@
 import Foundation
+import MijiaSupport
 import HAPCore
 import MijiaCore
 @testable import MijiaLAN
-import os
 import Testing
 @testable import MijiaHomeKitBridge
 
@@ -154,7 +154,7 @@ struct WireHomeKitIntegrationTests {
             let hap = try #require(fixture.bridge.bridge)
             await hap.registerWriteHandler(aid: 2, iid: UInt64(brightness), managesValue: true) { _ in
                 await hap.updateCharacteristic(aid: 2, iid: UInt64(brightness), value: .int32(51), forceNotify: true)
-                try await Task.sleep(for: .milliseconds(75))
+                try await MonotonicClock.sleep(for: .milliseconds(75))
             }
             let write = JSONValue.object(["characteristics": .array([
                 .object(["aid": .number(2), "iid": .number(Double(brightness)), "value": .number(51)]),
@@ -328,7 +328,7 @@ struct WireHomeKitIntegrationTests {
             let polling = Task { @MainActor in
                 while !Task.isCancelled {
                     await fixture.devices.refreshNow()
-                    try? await Task.sleep(for: .milliseconds(40))
+                    try? await MonotonicClock.sleep(for: .milliseconds(40))
                 }
             }
             defer { polling.cancel() }
@@ -447,7 +447,7 @@ struct WireHomeKitIntegrationTests {
             let defaults = try #require(UserDefaults(suiteName: suite))
             defaults.set(false, forKey: HomeKitBridgeController.keepAwakeKey)
             let store = HomeStore(provider: CapabilityHomeProvider(controller: devices), defaultsSuiteName: suite)
-            for _ in 0..<100 where !store.hasReceivedInitialSnapshot { try await Task.sleep(for: .milliseconds(2)) }
+            for _ in 0..<100 where !store.hasReceivedInitialSnapshot { try await MonotonicClock.sleep(for: .milliseconds(2)) }
             let storage = VaultStorage()
             let vault = HomeKitBridgeVault(load: { storage.data.withLock { $0.map { .value($0) } ?? .missing } },
                 save: { value in storage.data.withLock { $0 = value }; return true })
@@ -481,4 +481,4 @@ struct WireHomeKitIntegrationTests {
     }
 }
 
-private final class VaultStorage: Sendable { let data = OSAllocatedUnfairLock<Data?>(initialState: nil) }
+private final class VaultStorage: Sendable { let data = LockedState<Data?>(initialState: nil) }

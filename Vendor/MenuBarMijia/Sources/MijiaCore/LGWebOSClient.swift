@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import os
 #if canImport(Security)
 import Security
@@ -634,7 +635,7 @@ public actor LGWebOSClient {
                     return
                 }
             }
-            try? await Task.sleep(for: .seconds(6))
+            try? await MonotonicClock.sleep(for: .seconds(6))
         }
     }
 

@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import MijiaSupport
 import Security
 
 public struct QRLoginTicket: Equatable, Sendable {
@@ -135,7 +136,7 @@ public struct MiAccountLogin: Sendable {
                 if http.statusCode == 200 {
                     scanned = try Self.parseScanResult(data)
                 } else {
-                    try await Task.sleep(for: .seconds(1))
+                    try await MonotonicClock.sleep(for: .seconds(1))
                 }
             } catch let error as URLError where error.code == .timedOut {
                 continue

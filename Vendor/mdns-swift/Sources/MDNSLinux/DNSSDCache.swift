@@ -2,6 +2,7 @@
 // Copyright 2026 Monagle Pty Ltd
 
 import Foundation
+import MijiaSupport
 import MDNSCore
 
 // MARK: - DNSSDCache
@@ -21,7 +22,7 @@ struct DNSSDCache: Sendable {
 
     private struct Entry<Value: Sendable>: Sendable {
         var value: Value
-        var expiry: ContinuousClock.Instant
+        var expiry: MonotonicClock.Instant
     }
 
     private struct Service: Sendable {
@@ -37,9 +38,9 @@ struct DNSSDCache: Sendable {
     private var texts: [String: Entry<[String]>] = [:]
     private struct AddressEntry: Sendable {
         var record: DNSRecord
-        var expiry: ContinuousClock.Instant
+        var expiry: MonotonicClock.Instant
         /// When this record was last heard; drives cache-flush eviction.
-        var heard: ContinuousClock.Instant
+        var heard: MonotonicClock.Instant
     }
 
     /// Host name → A and AAAA records, most recently heard first.
@@ -47,7 +48,7 @@ struct DNSSDCache: Sendable {
 
     // MARK: Ingest
 
-    mutating func ingest(_ records: [DNSRecord], now: ContinuousClock.Instant) {
+    mutating func ingest(_ records: [DNSRecord], now: MonotonicClock.Instant) {
         prune(now: now)
         for record in records {
             let owner = record.name.dnsLowercased
@@ -135,7 +136,7 @@ struct DNSSDCache: Sendable {
 
     // MARK: Private
 
-    private mutating func prune(now: ContinuousClock.Instant) {
+    private mutating func prune(now: MonotonicClock.Instant) {
         pointers = pointers.compactMapValues { targets in
             let live = targets.filter { $0.value.expiry > now }
             return live.isEmpty ? nil : live

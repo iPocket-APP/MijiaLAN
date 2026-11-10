@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import MijiaCore
 import os
 
@@ -36,8 +37,8 @@ public actor LANMiotAPI: MiCloudAPI {
     let config: @Sendable () -> LocalHomeConfig
     private let transport: any MiioTransport
     private let port: UInt16
-    private let probeTimeout: Duration
-    private let commandTimeout: Duration
+    private let probeTimeout: TimeSpan
+    private let commandTimeout: TimeSpan
     private var clients: [String: (device: LocalDevice, client: MiioClient)] = [:]
     private var health: [String: LANDeviceHealth] = [:]
     private var legacyProfiles: [String: LegacyMiioProfile] = [:]
@@ -70,16 +71,16 @@ public actor LANMiotAPI: MiCloudAPI {
         config: @escaping @Sendable () -> LocalHomeConfig,
         transport: any MiioTransport = UDPMiioTransport(),
         port: UInt16 = MiioPacket.port,
-        probeTimeout: Duration = .milliseconds(2500),
-        commandTimeout: Duration = .seconds(5)
+        probeTimeout: TimeSpan = .milliseconds(2500),
+        commandTimeout: TimeSpan = .seconds(5)
     ) {
         self.init(config: config, transport: transport, port: port, probeTimeout: probeTimeout,
                   commandTimeout: commandTimeout, clock: ProbeClock(), jitter: { Double.random(in: 0.9...1.1) })
     }
 
     init(config: @escaping @Sendable () -> LocalHomeConfig, transport: any MiioTransport,
-         port: UInt16 = MiioPacket.port, probeTimeout: Duration = .milliseconds(2500),
-         commandTimeout: Duration = .seconds(5), clock: ProbeClock, jitter: @escaping @Sendable () -> Double) {
+         port: UInt16 = MiioPacket.port, probeTimeout: TimeSpan = .milliseconds(2500),
+         commandTimeout: TimeSpan = .seconds(5), clock: ProbeClock, jitter: @escaping @Sendable () -> Double) {
         self.config = config
         self.transport = transport
         self.port = port

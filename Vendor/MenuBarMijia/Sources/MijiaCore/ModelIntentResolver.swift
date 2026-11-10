@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 
 public enum AssistantError: LocalizedError, Equatable, Sendable {
     case missingAPIKey
@@ -179,11 +180,10 @@ public struct ModelIntentResolver: Sendable {
             isOnline: true,
             kind: .light(LightSpec(entityId: "light.probe_study", isOn: false, availableEffects: ["Day", "Night"]))
         )
-        let clock = ContinuousClock()
-        let start = clock.now
+        let start = MonotonicClock.now
         _ = try await resolve("打开书房灯", devices: [probeDevice], scenes: [])
-        let elapsed = clock.now - start
-        let ms = Int(elapsed.components.seconds * 1000) + Int(elapsed.components.attoseconds / 1_000_000_000_000_000)
+        let elapsed = MonotonicClock.now - start
+        let ms = Int(elapsed.timeInterval * 1_000)
         return max(1, ms)
     }
 

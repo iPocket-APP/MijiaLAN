@@ -1,5 +1,5 @@
 import Foundation
-import os
+import MijiaSupport
 
 /// Opt-in local capture for intermittent HomeKit failures. Both queued memory and disk use are bounded.
 /// The mutex owns the queue; a single serial worker owns file operations, outside the main/cooperative executors.
@@ -10,7 +10,7 @@ final class HAPDiagnosticLog: Sendable {
         var dropped = 0
         var running = false
     }
-    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let state = LockedState(initialState: State())
     private let queue = DispatchQueue(label: "MijiaLAN.hap-diagnostic-file", qos: .utility)
     private let url: URL
     private let byteLimit: Int

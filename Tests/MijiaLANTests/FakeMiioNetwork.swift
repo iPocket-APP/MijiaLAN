@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import MijiaCore
 @testable import MijiaLAN
 
@@ -55,7 +56,7 @@ final class FakeMiioNetwork: MiioTransport, @unchecked Sendable {
 
     func device(_ host: String) -> Device? { lock.withLock { devices[host] } }
 
-    func exchange(_ packet: Data, host: String, port: UInt16, timeout: Duration) async throws -> Data {
+    func exchange(_ packet: Data, host: String, port: UInt16, timeout: TimeSpan) async throws -> Data {
         try lock.withLock {
             if devices[host]?.unreachable == true { throw MiioError.hostUnreachable }
             guard let device = devices[host], !device.offline else { throw MiioError.timeout }
@@ -63,7 +64,7 @@ final class FakeMiioNetwork: MiioTransport, @unchecked Sendable {
         }
     }
 
-    func broadcast(_ packet: Data, port: UInt16, duration: Duration, rounds: Int) async throws -> [MiioDatagram] {
+    func broadcast(_ packet: Data, port: UInt16, duration: TimeSpan, rounds: Int) async throws -> [MiioDatagram] {
         lock.withLock {
             // The sender hears its own broadcast, as on a real network.
             var replies = [MiioDatagram(host: "192.168.1.122", data: packet)]

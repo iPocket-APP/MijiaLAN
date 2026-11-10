@@ -9,6 +9,7 @@ import Glibc
 import Musl
 #endif
 import Foundation
+import MijiaSupport
 import NIOCore
 import NIOPosix
 import MDNSCore
@@ -57,15 +58,15 @@ public actor LinuxServiceDiscovery: ServiceDiscovery {
     private var cache = DNSSDCache()
     /// Follow-up questions last asked, by lowercase name and type, with the
     /// interval before the same question may be asked again (RFC 6762 §5.2).
-    private var followUpBackoff: [String: (asked: ContinuousClock.Instant, interval: Duration)] = [:]
+    private var followUpBackoff: [String: (asked: MonotonicClock.Instant, interval: TimeSpan)] = [:]
     private var channel: Channel?
     private let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
     private let logger: Logger
     private var announceTask: Task<Void, Never>?
     /// How long each resolve waits for an answer.
-    private let resolveTimeout: Duration
-    private let sleep: @Sendable (Duration) async throws -> Void
-    private let now: @Sendable () -> ContinuousClock.Instant
+    private let resolveTimeout: TimeSpan
+    private let sleep: @Sendable (TimeSpan) async throws -> Void
+    private let now: @Sendable () -> MonotonicClock.Instant
     /// Test seam: when set, outgoing messages go here and no socket is bound.
     private let injectedSender: (@Sendable (DNSMessage) async -> Void)?
 
@@ -89,7 +90,7 @@ public actor LinuxServiceDiscovery: ServiceDiscovery {
         self.init(
             logger: logger,
             resolveTimeout: .seconds(5),
-            sleep: { try await Task.sleep(for: $0) },
+            sleep: { try await MonotonicClock.sleep(for: $0) },
             now: { .now },
             injectedSender: nil
         )
@@ -99,9 +100,9 @@ public actor LinuxServiceDiscovery: ServiceDiscovery {
     /// responses are fed in through `handleIncoming(data:from:)`.
     init(
         logger: Logger = Logger(label: "mdns.linux.discovery"),
-        resolveTimeout: Duration = .seconds(5),
-        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
-        now: @escaping @Sendable () -> ContinuousClock.Instant = { .now },
+        resolveTimeout: TimeSpan = .seconds(5),
+        sleep: @escaping @Sendable (TimeSpan) async throws -> Void = { try await MonotonicClock.sleep(for: $0) },
+        now: @escaping @Sendable () -> MonotonicClock.Instant = { .now },
         sender: @escaping @Sendable (DNSMessage) async -> Void
     ) {
         self.init(logger: logger, resolveTimeout: resolveTimeout, sleep: sleep, now: now, injectedSender: sender)
@@ -109,9 +110,9 @@ public actor LinuxServiceDiscovery: ServiceDiscovery {
 
     private init(
         logger: Logger,
-        resolveTimeout: Duration,
-        sleep: @escaping @Sendable (Duration) async throws -> Void,
-        now: @escaping @Sendable () -> ContinuousClock.Instant,
+        resolveTimeout: TimeSpan,
+        sleep: @escaping @Sendable (TimeSpan) async throws -> Void,
+        now: @escaping @Sendable () -> MonotonicClock.Instant,
         injectedSender: (@Sendable (DNSMessage) async -> Void)?
     ) {
         self.logger = logger
@@ -412,7 +413,7 @@ public actor LinuxServiceDiscovery: ServiceDiscovery {
         announceTask?.cancel()
         announceTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
+                try? await MonotonicClock.sleep(for: .seconds(1))
                 guard !Task.isCancelled else { break }
                 await self?.reannounceAll()
             }
@@ -464,7 +465,7 @@ public actor LinuxServiceDiscovery: ServiceDiscovery {
     /// timeout, and an earlier browse's unanswered ask would otherwise
     /// silence it — once the interval has doubled a few times, for longer
     /// than the resolve waits.
-    private func followUps(after records: [DNSRecord], now: ContinuousClock.Instant) -> [DNSQuestion] {
+    private func followUps(after records: [DNSRecord], now: MonotonicClock.Instant) -> [DNSQuestion] {
         var questions: [DNSQuestion] = []
         func ask(_ name: String, _ type: DNSRecordType, bypassingBackoff: Bool = false) {
             let key = "\(name.dnsLowercased) \(type.rawValue)"

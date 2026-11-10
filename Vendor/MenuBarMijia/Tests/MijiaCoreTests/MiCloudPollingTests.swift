@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Testing
 @testable import MijiaCore
 
@@ -17,7 +18,7 @@ struct MiCloudPollingTests {
     private func waitFor(_ condition: @Sendable () async -> Bool) async -> Bool {
         for _ in 0..<300 {
             if await condition() { return true }
-            try? await Task.sleep(for: .milliseconds(10))
+            try? await MonotonicClock.sleep(for: .milliseconds(10))
         }
         return false
     }
@@ -48,7 +49,7 @@ struct MiCloudPollingTests {
         defer { task.cancel() }
 
         #expect(await log.wait { await !$0.snapshots.isEmpty })
-        try await Task.sleep(for: .milliseconds(200))
+        try await MonotonicClock.sleep(for: .milliseconds(200))
         #expect(await api.getPropsCalls.count == 1, "panel closed: no second poll within a minute")
 
         await provider.setPollingContext(PollingContext(panelVisible: true))
@@ -56,15 +57,15 @@ struct MiCloudPollingTests {
         #expect(await waitFor { await api.getPropsCalls.count >= 5 }, "panel open: polls on the short interval")
 
         await provider.setPollingContext(PollingContext(panelVisible: true, systemActive: false))
-        try await Task.sleep(for: .milliseconds(50))
+        try await MonotonicClock.sleep(for: .milliseconds(50))
         let whileAsleep = await api.getPropsCalls.count
-        try await Task.sleep(for: .milliseconds(300))
+        try await MonotonicClock.sleep(for: .milliseconds(300))
         #expect(await api.getPropsCalls.count == whileAsleep, "asleep or locked: zero requests")
 
         await provider.setPollingContext(PollingContext(panelVisible: false, systemActive: true))
         #expect(await waitFor { await api.getPropsCalls.count > whileAsleep }, "waking polls right away")
         let afterWake = await api.getPropsCalls.count
-        try await Task.sleep(for: .milliseconds(200))
+        try await MonotonicClock.sleep(for: .milliseconds(200))
         #expect(await api.getPropsCalls.count == afterWake, "then back to the one-minute rhythm")
         #expect(await api.deviceListCalls == 1)
         await provider.shutdown()
@@ -107,7 +108,7 @@ struct MiCloudPollingTests {
         let message = MiCloudError.http(429).errorDescription ?? ""
         #expect(message.contains("太频繁") || message.contains("rate limiting"))
         #expect(await log.wait { await $0.statuses.contains(.disconnected(message)) })
-        try await Task.sleep(for: .milliseconds(300))
+        try await MonotonicClock.sleep(for: .milliseconds(300))
         #expect(await api.deviceListCalls == 1)
         await provider.shutdown()
     }
@@ -136,7 +137,7 @@ struct MiCloudPollingTests {
         for _ in 0..<300 {
             received = await mock.pollingContexts
             if received.suffix(expected.count) == expected[...] { break }
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
         #expect(Array(received.suffix(expected.count)) == expected)
     }

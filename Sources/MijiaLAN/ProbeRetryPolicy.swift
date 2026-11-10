@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 
 /// Backoff counts authenticated probe rounds, not the UDP attempts inside a round.
 public struct ProbeRetryPolicy: Sendable {
@@ -31,7 +32,7 @@ public struct ProbeRetryState: Equatable, Sendable {
 struct ProbeClock: Sendable {
     var now: @Sendable () -> Date = { Date() }
     var sleep: @Sendable (Date) async throws -> Void = {
-        try await Task.sleep(for: .seconds(max(0, $0.timeIntervalSinceNow)), tolerance: .seconds(1))
+        try await MonotonicClock.sleep(for: .seconds(max(0, $0.timeIntervalSinceNow)), tolerance: .seconds(1))
     }
 }
 

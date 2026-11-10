@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "MijiaLAN",
     platforms: [
-        .macOS(.v13)
+        .macOS(.v12)
     ],
     products: [
         .library(name: "MijiaLAN", targets: ["MijiaLAN"]),
@@ -13,6 +13,7 @@ let package = Package(
         .executable(name: "mijia-lan", targets: ["mijia-lan"])
     ],
     dependencies: [
+        .package(path: "Packages/MijiaSupport"),
         .package(url: "https://github.com/sparkle-project/Sparkle.git", exact: "2.10.1"),
         // Locally maintained MIoT parsing, device synthesis, QR login and HomeStore.
         // Recovered from MenuBarMijia 1.1.4; see Vendor/MenuBarMijia/README.md.
@@ -26,13 +27,17 @@ let package = Package(
         // miIO LAN protocol (UDP 54321), discovery, the device registry and a `MiCloudAPI` that never leaves the LAN.
         .target(
             name: "MijiaLAN",
-            dependencies: [.product(name: "MijiaCore", package: "MenuBarMijia")],
+            dependencies: [
+                .product(name: "MijiaSupport", package: "MijiaSupport"),
+                .product(name: "MijiaCore", package: "MenuBarMijia")
+            ],
             resources: [.process("Resources")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
             name: "MijiaHomeKitBridge",
             dependencies: [
+                .product(name: "MijiaSupport", package: "MijiaSupport"),
                 "MijiaLAN",
                 .product(name: "MijiaCore", package: "MenuBarMijia"),
                 .product(name: "HAPSwift", package: "hap-swift")
@@ -42,6 +47,7 @@ let package = Package(
         .executableTarget(
             name: "MijiaLANApp",
             dependencies: [
+                .product(name: "MijiaSupport", package: "MijiaSupport"),
                 "MijiaLAN",
                 "MijiaHomeKitBridge",
                 .product(name: "Sparkle", package: "Sparkle"),
@@ -63,6 +69,7 @@ let package = Package(
         .testTarget(
             name: "MijiaLANAppTests",
             dependencies: [
+                .product(name: "MijiaSupport", package: "MijiaSupport"),
                 "MijiaLANApp",
                 "MijiaLAN",
                 "MijiaHomeKitBridge",
@@ -73,6 +80,7 @@ let package = Package(
         .testTarget(
             name: "MijiaLANTests",
             dependencies: [
+                .product(name: "MijiaSupport", package: "MijiaSupport"),
                 "MijiaLAN",
                 .product(name: "MijiaCore", package: "MenuBarMijia")
             ],
@@ -81,6 +89,7 @@ let package = Package(
         .testTarget(
             name: "MijiaHomeKitBridgeTests",
             dependencies: [
+                .product(name: "MijiaSupport", package: "MijiaSupport"),
                 "MijiaHomeKitBridge",
                 .product(name: "MijiaCore", package: "MenuBarMijia"),
                 .product(name: "HAPSwift", package: "hap-swift")

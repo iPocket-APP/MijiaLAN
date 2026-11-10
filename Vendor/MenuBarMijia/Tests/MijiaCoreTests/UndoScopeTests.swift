@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Testing
 import Combine
 @testable import MijiaCore
@@ -118,7 +119,7 @@ struct UndoScopeTests {
         store.turnAllOff()
         store.switchBackend(.demo)
         let next = try #require(store.provider as? DemoHomeProvider)
-        try await Task.sleep(for: .milliseconds(30))
+        try await MonotonicClock.sleep(for: .milliseconds(30))
         #expect((await next.executedCommands).isEmpty)
     }
 
@@ -153,7 +154,7 @@ struct UndoScopeTests {
         store.switchBackend(.demo)
         let next = try #require(store.provider as? DemoHomeProvider)
         await provider.release()
-        try await Task.sleep(for: .milliseconds(30))
+        try await MonotonicClock.sleep(for: .milliseconds(30))
         #expect((await next.executedCommands).isEmpty)
         #expect((await provider.commands).count == 3)
     }

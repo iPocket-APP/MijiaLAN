@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import MijiaSupport
 import HAPCore
 import HAPCrypto
 import HAPTransport
@@ -47,7 +48,7 @@ struct CapabilitySecurityTests {
         await bridge.updateCharacteristic(aid: 2, iid: 9, value: .bool(false), forceNotify: true)
         for _ in 0..<20 {
             if await !capture.data.isEmpty { break }
-            try await Task.sleep(for: .milliseconds(5))
+            try await MonotonicClock.sleep(for: .milliseconds(5))
         }
         #expect(await capture.data.count == 1)
         #expect(await capture.data.first.map { String(decoding: $0, as: UTF8.self).contains("false") } == true)

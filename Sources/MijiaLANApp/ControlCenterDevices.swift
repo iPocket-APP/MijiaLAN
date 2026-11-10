@@ -183,20 +183,23 @@ struct OfflineDeviceCard: View {
                     .foregroundStyle(issue.needsAttention ? Color.orange : .secondary)
             }
             Text(issue.message).fixedSize(horizontal: false, vertical: true)
-            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 5) {
-                GridRow { Text(L10n.tr("房间", "Room")); Text(device.roomName ?? L10n.tr("未分配", "Unassigned")) }
-                GridRow { Text("IP"); Text(device.host).monospaced().textSelection(.enabled) }
+            LazyVGrid(columns: [
+                GridItem(.flexible(maximum: 124), spacing: 10, alignment: .leading),
+                GridItem(.flexible(), alignment: .leading)
+            ], alignment: .leading, spacing: 5) {
+                Text(L10n.tr("房间", "Room"))
+                Text(device.roomName ?? L10n.tr("未分配", "Unassigned"))
+                Text("IP")
+                Text(device.host).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
                 if let retry = devices.retryStates[device.did] {
-                    GridRow {
-                        Text(L10n.tr("下次自动重试", "Next Automatic Retry"))
-                        if retry.isProbing {
-                            Text(L10n.tr("正在连接…", "Connecting…"))
-                        } else if let deadline = retry.nextRetryAt {
-                            Text(deadline, format: .dateTime.month().day().hour().minute().second())
-                                .monospacedDigit()
-                        } else {
-                            Text(L10n.tr("即将重试", "Retrying Shortly"))
-                        }
+                    Text(L10n.tr("下次自动重试", "Next Automatic Retry"))
+                    if retry.isProbing {
+                        Text(L10n.tr("正在连接…", "Connecting…"))
+                    } else if let deadline = retry.nextRetryAt {
+                        Text(deadline, format: .dateTime.month().day().hour().minute().second())
+                            .monospacedDigit()
+                    } else {
+                        Text(L10n.tr("即将重试", "Retrying Shortly"))
                     }
                 }
             }

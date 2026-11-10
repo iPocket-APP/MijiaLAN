@@ -9,7 +9,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="${1:-release}"
-MINIMUM_MACOS=13.0
+MINIMUM_MACOS=12.0
+BUNDLE_IDENTIFIER="com.mijialan.MijiaLAN"
 VERSION="${MIJIALAN_VERSION:-$(python3 "$ROOT/scripts/release_metadata.py" version)}"
 BUILD_NUMBER="${MIJIALAN_BUILD_NUMBER:-$(python3 "$ROOT/scripts/release_metadata.py" build-number)}"
 SIGN_IDENTITY="${MIJIALAN_SIGN_IDENTITY:--}"
@@ -76,7 +77,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key>
     <string>MijiaLAN</string>
     <key>CFBundleIdentifier</key>
-    <string>com.mijialan.MijiaLAN</string>
+    <string>$BUNDLE_IDENTIFIER</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -101,6 +102,41 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+# Monterey registers this background-only login item through Service Management.
+LOGIN_ITEM="$APP/Contents/Library/LoginItems/MijiaLANLoginItem.app"
+mkdir -p "$LOGIN_ITEM/Contents/MacOS"
+LOGIN_ARCHES=()
+for ARCH in $(lipo -archs "$APP/Contents/MacOS/MijiaLAN"); do
+    LOGIN_ARCHES+=(-arch "$ARCH")
+done
+xcrun --sdk macosx clang -Os -fobjc-arc -framework AppKit -mmacosx-version-min="$MINIMUM_MACOS" \
+    "${LOGIN_ARCHES[@]}" "$ROOT/Sources/MijiaLANLoginItem/main.m" -o "$LOGIN_ITEM/Contents/MacOS/MijiaLANLoginItem"
+cat > "$LOGIN_ITEM/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>$BUNDLE_IDENTIFIER.LoginItem</string>
+    <key>CFBundleExecutable</key>
+    <string>MijiaLANLoginItem</string>
+    <key>CFBundleName</key>
+    <string>MijiaLAN</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleVersion</key>
+    <string>$BUILD_NUMBER</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$VERSION</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>$MINIMUM_MACOS</string>
+    <key>LSBackgroundOnly</key>
+    <true/>
+</dict>
+</plist>
+PLIST
+plutil -lint "$LOGIN_ITEM/Contents/Info.plist"
 
 /usr/libexec/PlistBuddy -c "Merge '$APP/Contents/Resources/AppIcon-info.plist'" "$APP/Contents/Info.plist"
 rm "$APP/Contents/Resources/AppIcon-info.plist"

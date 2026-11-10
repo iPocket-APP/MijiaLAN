@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import MijiaCore
 import Combine
 
@@ -141,7 +142,7 @@ public final class DeviceController: ObservableObject {
                     while !Task.isCancelled {
                         await self?.refreshNow()
                         guard let seconds = self.map({ $0.context.panelVisible ? 3 : 5 }) else { return }
-                        try? await Task.sleep(for: .seconds(seconds))
+                        try? await MonotonicClock.sleep(for: .seconds(seconds))
                     }
                 }
             }
@@ -209,7 +210,7 @@ public final class DeviceController: ObservableObject {
     private func schedulePublication() {
         guard publicationTask == nil, !Task.isCancelled else { return }
         publicationTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(25))
+            try? await MonotonicClock.sleep(for: .milliseconds(25))
             guard !Task.isCancelled, let self else { return }
             self.publicationTask = nil
             self.publish()
@@ -288,7 +289,7 @@ public final class DeviceController: ObservableObject {
                 } else {
                     coalesced[key] = Pending(command: command, replies: [reply])
                     Task {
-                        try? await Task.sleep(for: .milliseconds(180))
+                        try? await MonotonicClock.sleep(for: .milliseconds(180))
                         guard let pending = coalesced.removeValue(forKey: key) else { return }
                         do {
                             try await execute(did: did, pending.command)
@@ -370,7 +371,7 @@ public final class DeviceController: ObservableObject {
             snapshots[did]?.lastCommand = L10n.tr("设备已接受指令，正在确认状态", "Command accepted. Confirming device state.")
             if cap.readable {
                 for attempt in 0..<3 {
-                    if attempt > 0 { try await Task.sleep(for: .milliseconds(250)) }
+                    if attempt > 0 { try await MonotonicClock.sleep(for: .milliseconds(250)) }
                     await refresh(did: did, capabilities: [cap])
                     if Self.matches(snapshots[did]?.value(id), value) { break }
                 }
@@ -411,7 +412,7 @@ public final class DeviceController: ObservableObject {
             var confirmed = false
             // A robot vacuum reports its new status only once it starts moving: allow it about two seconds.
             for attempt in 0..<(snapshot.schema.category == "vacuum" ? 6 : 3) {
-                if attempt > 0 { try await Task.sleep(for: .milliseconds(350)) }
+                if attempt > 0 { try await MonotonicClock.sleep(for: .milliseconds(350)) }
                 await refresh(did: did, capabilities: snapshot.capabilities.filter { $0.readable && !$0.lowFrequency })
                 if let status, let actual = snapshots[did]?.value(status.id)?.integer,
                    Self.actionConfirmed(cap.name, category: snapshot.schema.category, status: actual, before: before, in: status) {

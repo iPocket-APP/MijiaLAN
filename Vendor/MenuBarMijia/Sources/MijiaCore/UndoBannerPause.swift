@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 
 // MARK: - Undo Banner Hover Pause (#53)
 
@@ -25,7 +26,7 @@ extension HomeStore {
         // their own window (#59) and keep it here instead of dropping back to the device rule.
         let seconds = banner.duration ?? Self.undoBannerSeconds(forDeviceCount: max(1, banner.restoreCommands.count))
         undoTimerTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(seconds))
+            try? await MonotonicClock.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
             if self?.undoBanner?.id == banner.id {
                 self?.undoBanner = nil

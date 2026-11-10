@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 
 // Scenes, quick actions, 全关 and the unified undo banner (#48).
 extension HomeStore {
@@ -270,7 +271,7 @@ extension HomeStore {
         // the panel is closed (#59).
         let seconds = duration ?? Self.undoBannerSeconds(forDeviceCount: deviceCount)
         undoTimerTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(seconds))
+            try? await MonotonicClock.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
             if self?.undoBanner?.id == banner.id {
                 self?.undoBanner = nil

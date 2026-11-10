@@ -1,6 +1,7 @@
 import MijiaCore
 import Darwin
 import Foundation
+import MijiaSupport
 
 public struct MiioDatagram: Equatable, Sendable {
     public var host: String
@@ -17,9 +18,9 @@ public struct MiioDatagram: Equatable, Sendable {
 /// The UDP seam, so the client and discovery can be tested against an in-memory device.
 public protocol MiioTransport: Sendable {
     /// Sends `packet` to `host:port` and returns the first datagram that comes back from that host.
-    func exchange(_ packet: Data, host: String, port: UInt16, timeout: Duration) async throws -> Data
+    func exchange(_ packet: Data, host: String, port: UInt16, timeout: TimeSpan) async throws -> Data
     /// Sends `packet` to every IPv4 broadcast address (`rounds` times, spread over `duration`) and collects replies.
-    func broadcast(_ packet: Data, port: UInt16, duration: Duration, rounds: Int) async throws -> [MiioDatagram]
+    func broadcast(_ packet: Data, port: UInt16, duration: TimeSpan, rounds: Int) async throws -> [MiioDatagram]
 }
 
 /// BSD sockets rather than Network.framework: broadcast discovery needs `SO_BROADCAST`, and a fresh socket per
@@ -30,7 +31,7 @@ public struct UDPMiioTransport: MiioTransport {
 
     public init() {}
 
-    public func exchange(_ packet: Data, host: String, port: UInt16, timeout: Duration) async throws -> Data {
+    public func exchange(_ packet: Data, host: String, port: UInt16, timeout: TimeSpan) async throws -> Data {
         try await Self.run {
             let socket = try UDPSocket()
             try socket.send(packet, to: host, port: port)
@@ -43,7 +44,7 @@ public struct UDPMiioTransport: MiioTransport {
         }
     }
 
-    public func broadcast(_ packet: Data, port: UInt16, duration: Duration, rounds: Int) async throws -> [MiioDatagram] {
+    public func broadcast(_ packet: Data, port: UInt16, duration: TimeSpan, rounds: Int) async throws -> [MiioDatagram] {
         try await Self.run {
             let socket = try UDPSocket(broadcast: true)
             let targets = Self.broadcastAddresses()
@@ -201,11 +202,4 @@ final class UDPSocket: @unchecked Sendable {
     }
 
     private static func errnoText() -> String { String(cString: strerror(errno)) }
-}
-
-extension Duration {
-    var timeInterval: TimeInterval {
-        let parts = components
-        return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
-    }
 }

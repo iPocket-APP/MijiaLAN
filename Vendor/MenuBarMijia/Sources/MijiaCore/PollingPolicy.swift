@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 
 /// What the user is doing right now. Mi cloud polls slower or stops based on it (#26).
 public struct PollingContext: Equatable, Sendable, CustomStringConvertible {
@@ -30,8 +31,8 @@ public struct PollingContext: Equatable, Sendable, CustomStringConvertible {
 /// | Panel closed in Low Power Mode | 180 s |
 /// | Asleep, display asleep, locked | no polling; polls once right after |
 public enum PollingPolicy {
-    public static let panelOpenInterval: Duration = .seconds(6)
-    public static let panelClosedInterval: Duration = .seconds(60)
+    public static let panelOpenInterval: TimeSpan = .seconds(6)
+    public static let panelClosedInterval: TimeSpan = .seconds(60)
     /// Low Power Mode stretches the panel-closed interval by this factor. An open panel keeps 6 s:
     /// someone is looking, and it is open only briefly.
     public static let lowPowerFactor = 3
@@ -39,9 +40,9 @@ public enum PollingPolicy {
     /// - Returns: the wait between polls, or nil to stop polling until the context changes.
     public static func interval(
         for context: PollingContext,
-        panelOpen: Duration = panelOpenInterval,
-        panelClosed: Duration = panelClosedInterval
-    ) -> Duration? {
+        panelOpen: TimeSpan = panelOpenInterval,
+        panelClosed: TimeSpan = panelClosedInterval
+    ) -> TimeSpan? {
         guard context.systemActive else { return nil }
         if context.panelVisible { return panelOpen }
         return context.lowPower ? panelClosed * lowPowerFactor : panelClosed

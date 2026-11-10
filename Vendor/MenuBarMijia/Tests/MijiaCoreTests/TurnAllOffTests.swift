@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Testing
 @testable import MijiaCore
 
@@ -40,7 +41,7 @@ struct TurnAllOffTests {
         let mock = MockHomeProvider(snapshot: snapshot)
         let store = HomeStore(provider: mock, defaultsSuiteName: "test.alloff.\(UUID().uuidString)")
         for _ in 0..<50 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
         store.hideDevice(Self.hiddenLight.id)
         return (store, mock)
@@ -65,7 +66,7 @@ struct TurnAllOffTests {
         #expect(isOn(store, "vacuum"))
         #expect(store.undoBanner?.title == "已关闭 2 台设备")
 
-        try await Task.sleep(for: .milliseconds(60))
+        try await MonotonicClock.sleep(for: .milliseconds(60))
         let sent = await mock.executedCommands
         #expect(!sent.contains(.setSwitch(entityId: "switch.router", isOn: false)))
         #expect(!sent.contains(.setLightPower(entityId: "light.aquarium", isOn: false)))

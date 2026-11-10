@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import os
 
 /// `HomeProvider` that talks to Xiaomi cloud directly (no Home Assistant): discovers devices and
@@ -11,10 +12,10 @@ public actor MiCloudProvider: HomeProvider {
     private let apiFactory: APIFactory
     private let specSource: any MiotSpecSource
     /// Poll interval while the panel is open; see `PollingPolicy` for the rest (#26).
-    private let pollInterval: Duration
-    private let closedPollInterval: Duration
+    private let pollInterval: TimeSpan
+    private let closedPollInterval: TimeSpan
     private let deviceRefreshEveryPolls: Int
-    private let followUpDelay: Duration
+    private let followUpDelay: TimeSpan
     private let selectedHomeLoader: @Sendable () -> String?
 
     private var continuation: AsyncStream<HomeProviderEvent>.Continuation?
@@ -29,7 +30,7 @@ public actor MiCloudProvider: HomeProvider {
     private var effectsUnsupported: Set<String> = []
 
     private var pollingContext = PollingContext()
-    private var lastFullPollAt: ContinuousClock.Instant?
+    private var lastFullPollAt: MonotonicClock.Instant?
     /// The loop's current wait; cancelling it makes the loop re-check `pollingContext` right away.
     private var waitTask: Task<Void, Never>?
     private var pollsSinceContextChange = 0
@@ -40,10 +41,10 @@ public actor MiCloudProvider: HomeProvider {
         sessionLoader: @escaping @Sendable () -> MiSession? = { MiSessionStore.load() },
         apiFactory: @escaping APIFactory = { MiCloudClient(session: $0) },
         specSource: any MiotSpecSource = MiotSpecStore(),
-        pollInterval: Duration = PollingPolicy.panelOpenInterval,
-        closedPollInterval: Duration = PollingPolicy.panelClosedInterval,
+        pollInterval: TimeSpan = PollingPolicy.panelOpenInterval,
+        closedPollInterval: TimeSpan = PollingPolicy.panelClosedInterval,
         deviceRefreshEveryPolls: Int = 20,
-        followUpDelay: Duration = .milliseconds(800),
+        followUpDelay: TimeSpan = .milliseconds(800),
         selectedHomeLoader: @escaping @Sendable () -> String? = { UserDefaults.standard.string(forKey: MiCloudProvider.selectedHomeKey) }
     ) {
         self.sessionLoader = sessionLoader
@@ -135,7 +136,7 @@ public actor MiCloudProvider: HomeProvider {
                 // Xiaomi throttles busy clients; back off for minutes instead of seconds (#26).
                 let throttled = (error as? MiCloudError) == .http(429)
                 if throttled { backoff = max(backoff, 60) }
-                try? await Task.sleep(for: .seconds(backoff))
+                try? await MonotonicClock.sleep(for: .seconds(backoff))
                 await waitWhilePaused()
                 backoff = min(backoff * 2, throttled ? 900 : 60)
             }
@@ -157,7 +158,7 @@ public actor MiCloudProvider: HomeProvider {
         waitTask?.cancel()
     }
 
-    private var currentInterval: Duration? {
+    private var currentInterval: TimeSpan? {
         PollingPolicy.interval(for: pollingContext, panelOpen: pollInterval, panelClosed: closedPollInterval)
     }
 
@@ -171,7 +172,7 @@ public actor MiCloudProvider: HomeProvider {
                 continue
             }
             if pollRequested { return }
-            let remaining = (lastFullPollAt ?? .now).advanced(by: interval) - ContinuousClock.now
+            let remaining = (lastFullPollAt ?? .now).advanced(by: interval) - MonotonicClock.now
             guard remaining > .zero else { return }
             await sleepUntilWoken(for: remaining)
         }
@@ -184,8 +185,8 @@ public actor MiCloudProvider: HomeProvider {
     }
 
     /// Sleeps for `duration` (an hour when nil), returning early on `setPollingContext` or cancellation.
-    private func sleepUntilWoken(for duration: Duration?) async {
-        let sleeper = Task<Void, Never> { _ = try? await Task.sleep(for: duration ?? .seconds(3600)) }
+    private func sleepUntilWoken(for duration: TimeSpan?) async {
+        let sleeper = Task<Void, Never> { _ = try? await MonotonicClock.sleep(for: duration ?? .seconds(3600)) }
         waitTask = sleeper
         await withTaskCancellationHandler {
             await sleeper.value
@@ -375,7 +376,7 @@ public actor MiCloudProvider: HomeProvider {
 
         let delay = followUpDelay
         Task {
-            try? await Task.sleep(for: delay)
+            try? await MonotonicClock.sleep(for: delay)
             await self.followUpPoll(did: did)
         }
     }

@@ -32,7 +32,7 @@ In-app updates are available starting with 0.1.6; earlier versions require one m
 
 **Requirements**
 
-- macOS 13 or later, on an Apple Silicon or Intel Mac. Release packages include both architectures.
+- Current source builds support macOS 12 or later on Apple silicon and Intel Macs. The published 0.2.1 installer requires macOS 13 or later.
 - A network path between your Mac and the devices. HomeKit discovery also needs reachable Bonjour / mDNS.
 - Internet access for QR import and for device specifications that are not cached yet.
 

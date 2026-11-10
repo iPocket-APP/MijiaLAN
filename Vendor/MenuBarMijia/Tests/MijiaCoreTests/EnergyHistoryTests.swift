@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Testing
 @testable import MijiaCore
 
@@ -505,7 +506,7 @@ struct EnergyHistoryTests {
         let mock = MockHomeProvider(snapshot: SynthesizedHome(devices: [plug], scenes: []))
         let store = HomeStore(provider: mock, defaultsSuiteName: suite)
         for _ in 0..<50 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
 
         // First snapshot only sets a baseline: subscribing alone must never invent consumption.
@@ -515,7 +516,7 @@ struct EnergyHistoryTests {
 
         await mock.updateSnapshot(SynthesizedHome(devices: [testPlug("plug_tv", "电视插座", kwh: 4.75)], scenes: []))
         for _ in 0..<50 where !store.energyHistory.hasMeasuredConsumption {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
 
         // The history saw the fresh reading through the same store instance.

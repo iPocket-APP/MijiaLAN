@@ -1,6 +1,6 @@
 import Foundation
+import MijiaSupport
 import MijiaCore
-import os
 @testable import MijiaLAN
 
 /// A real UDP miIO peer, bound only to 127.0.0.1:0. The blocking descriptor is confined to its
@@ -24,7 +24,7 @@ final class LoopbackMiioDevice: Sendable {
         var settling: [String: (passing: JSONValue, reads: Int)] = [:]
         var error: String?
     }
-    private final class Storage: Sendable { let state = OSAllocatedUnfairLock(initialState: State()) }
+    private final class Storage: Sendable { let state = LockedState(initialState: State()) }
     private let storage = Storage()
     private let queue = DispatchQueue(label: "test.mijialan.miio-device")
     let port: UInt16
@@ -161,9 +161,9 @@ final class LoopbackMiioDevice: Sendable {
 /// travels through production UDPMiioTransport and the production miIO encryption codec.
 struct LoopbackMiioTransport: MiioTransport {
     let port: UInt16
-    func exchange(_ packet: Data, host: String, port: UInt16, timeout: Duration) async throws -> Data {
+    func exchange(_ packet: Data, host: String, port: UInt16, timeout: TimeSpan) async throws -> Data {
         guard host == "127.0.0.1" else { throw MiioError.hostUnreachable }
         return try await UDPMiioTransport().exchange(packet, host: host, port: self.port, timeout: timeout)
     }
-    func broadcast(_ packet: Data, port: UInt16, duration: Duration, rounds: Int) async throws -> [MiioDatagram] { [] }
+    func broadcast(_ packet: Data, port: UInt16, duration: TimeSpan, rounds: Int) async throws -> [MiioDatagram] { [] }
 }

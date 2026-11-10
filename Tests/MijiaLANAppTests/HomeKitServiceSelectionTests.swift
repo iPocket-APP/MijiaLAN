@@ -2,6 +2,7 @@
 #if DEBUG
 import Combine
 import Foundation
+import MijiaSupport
 import MijiaHomeKitBridge
 import MijiaLAN
 import Testing
@@ -18,7 +19,7 @@ struct HomeKitServiceSelectionTests {
             UserDefaults.standard.removePersistentDomain(forName: "com.mijialan.MijiaLAN.dev")
         }
         let device = try #require(model.config.devices.first { $0.model == "zhimi.airpurifier.rma1" })
-        for _ in 0..<500 where model.devices.snapshots[device.did] == nil { try await Task.sleep(for: .milliseconds(2)) }
+        for _ in 0..<500 where model.devices.snapshots[device.did] == nil { try await MonotonicClock.sleep(for: .milliseconds(2)) }
         let services = model.homeKitServices(device)
         #expect(services.count > 2)
         #expect(services.first?.isPrimary == true)

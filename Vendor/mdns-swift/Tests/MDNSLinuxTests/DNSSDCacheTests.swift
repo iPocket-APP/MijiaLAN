@@ -2,6 +2,7 @@
 // Copyright 2026 Monagle Pty Ltd
 
 import Testing
+import MijiaSupport
 import Foundation
 @testable import MDNSLinux
 
@@ -67,7 +68,7 @@ struct DNSSDCacheTests {
     @Test("Records expire after their TTL")
     func recordsExpire() throws {
         var cache = DNSSDCache()
-        let start = ContinuousClock.now
+        let start = MonotonicClock.now
         cache.ingest(try Self.wire(Self.commissionable(ttl: 120)), now: start)
         cache.ingest([], now: start + .seconds(119))
         #expect(cache.instances(of: Self.type) == [Self.instance])
@@ -157,7 +158,7 @@ struct DNSSDCacheTests {
     @Test("A cache-flush A record heard later replaces the host's older A record")
     func cacheFlushReplacesOlderAddress() {
         var cache = DNSSDCache()
-        let start = ContinuousClock.now
+        let start = MonotonicClock.now
         cache.ingest([Self.address(1, cacheFlush: true)], now: start)
         cache.ingest([Self.address(2, cacheFlush: true)], now: start + .seconds(2))
         #expect(cache.addresses(host: "host-1.local") == ["192.0.2.2"])
@@ -166,7 +167,7 @@ struct DNSSDCacheTests {
     @Test("Without cache-flush both addresses are kept, the newest first")
     func sharedAddressesNewestFirst() {
         var cache = DNSSDCache()
-        let start = ContinuousClock.now
+        let start = MonotonicClock.now
         cache.ingest([Self.address(1, cacheFlush: false)], now: start)
         cache.ingest([Self.address(2, cacheFlush: false)], now: start + .seconds(2))
         #expect(cache.addresses(host: "host-1.local") == ["192.0.2.2", "192.0.2.1"])
@@ -175,7 +176,7 @@ struct DNSSDCacheTests {
     @Test("Cache-flush records heard within 1 s of each other are kept together")
     func cacheFlushKeepsSameBurst() {
         var cache = DNSSDCache()
-        let start = ContinuousClock.now
+        let start = MonotonicClock.now
         cache.ingest([Self.address(1, cacheFlush: true)], now: start)
         cache.ingest([Self.address(2, cacheFlush: true)], now: start + .milliseconds(500))
         #expect(cache.addresses(host: "host-1.local") == ["192.0.2.2", "192.0.2.1"])
@@ -185,7 +186,7 @@ struct DNSSDCacheTests {
     func cacheFlushIsPerType() {
         let v6 = Data([0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0])
         var cache = DNSSDCache()
-        let start = ContinuousClock.now
+        let start = MonotonicClock.now
         cache.ingest([DNSRecord(name: "host-1.local", type: .aaaa, ttl: 120, rdata: .aaaa(v6), cacheFlush: true)], now: start)
         cache.ingest([Self.address(2, cacheFlush: true)], now: start + .seconds(2))
         #expect(cache.addresses(host: "host-1.local") == ["192.0.2.2", "[fe80::1234:5678:9abc:def0]"])

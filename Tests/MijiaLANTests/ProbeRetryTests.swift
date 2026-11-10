@@ -1,6 +1,6 @@
 import Foundation
+import MijiaSupport
 import Combine
-import os
 import Testing
 import MijiaCore
 @testable import MijiaLAN
@@ -251,10 +251,10 @@ struct ProbeSchedulingIntegrationTests {
         for _ in 0..<10 { await Task.yield() }
         let old = try #require(controller.snapshots["1"]?.readings["p:2:1"]?.updatedAt)
         let structure = controller.structureRevision, values = controller.valuesRevision
-        let notices = OSAllocatedUnfairLock(initialState: 0)
+        let notices = LockedState(initialState: 0)
         let observation = controller.objectWillChange.sink { notices.withLock { $0 += 1 } }
         defer { observation.cancel() }
-        try await Task.sleep(for: .milliseconds(2))
+        try await MonotonicClock.sleep(for: .milliseconds(2))
         await controller.refreshNow()
         #expect(controller.structureRevision == structure && controller.valuesRevision == values)
         #expect(controller.snapshots["1"]?.readings["p:2:1"]?.updatedAt ?? .distantPast > old)
@@ -320,7 +320,7 @@ struct ProbeSchedulingIntegrationTests {
         let fixture = ProbeFixture()
         let controller = DeviceController(api: fixture.api, config: { fixture.config.value })
         await controller.refreshNow()
-        let received = OSAllocatedUnfairLock(initialState: 0)
+        let received = LockedState(initialState: 0)
         let stream = controller.events()
         let consumer = Task {
             for await event in stream {
@@ -359,8 +359,8 @@ private struct ProbeFixture: Sendable {
 }
 
 private final class ProbeConfig: Sendable {
-    private let storage: OSAllocatedUnfairLock<LocalHomeConfig>
-    init(_ value: LocalHomeConfig) { storage = OSAllocatedUnfairLock(initialState: value) }
+    private let storage: LockedState<LocalHomeConfig>
+    init(_ value: LocalHomeConfig) { storage = LockedState(initialState: value) }
     var value: LocalHomeConfig { storage.withLock { $0 } }
     func update(_ change: @Sendable (inout LocalHomeConfig) -> Void) { storage.withLock(change) }
 }
@@ -368,7 +368,7 @@ private final class ProbeConfig: Sendable {
 private final class ManualProbeClock: Sendable {
     private struct Sleeper { var deadline: Date; var reply: CheckedContinuation<Void, any Error> }
     private struct State { var now = Date(timeIntervalSince1970: 0); var sleepers: [UUID: Sleeper] = [:] }
-    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let state = LockedState(initialState: State())
     var now: Date { state.withLock { $0.now } }
     var pendingSleeps: Int { state.withLock { $0.sleepers.count } }
     var clock: ProbeClock { ProbeClock(now: { self.now }, sleep: { try await self.sleep($0) }) }
@@ -417,7 +417,7 @@ private actor ProbeTestTransport: MiioTransport {
     }
     func packetCount(_ host: String) -> Int { packets[host] ?? 0 }
     func methodCount(_ method: String, host: String) -> Int { methods[host, default: []].filter { $0 == method }.count }
-    func exchange(_ packet: Data, host: String, port: UInt16, timeout: Duration) async throws -> Data {
+    func exchange(_ packet: Data, host: String, port: UInt16, timeout: TimeSpan) async throws -> Data {
         packets[host, default: 0] += 1
         if packet != MiioPacket.hello {
             let (_, data) = try MiioPacket.decode(packet, token: token)
@@ -428,13 +428,13 @@ private actor ProbeTestTransport: MiioTransport {
         if silent.contains(host) { throw MiioError.timeout }
         return try await network.exchange(packet, host: host, port: port, timeout: timeout)
     }
-    func broadcast(_ packet: Data, port: UInt16, duration: Duration, rounds: Int) async throws -> [MiioDatagram] { [] }
+    func broadcast(_ packet: Data, port: UInt16, duration: TimeSpan, rounds: Int) async throws -> [MiioDatagram] { [] }
 }
 
 private func eventually(isolation: isolated (any Actor)? = #isolation, _ condition: () async -> Bool) async throws {
-    let deadline = ContinuousClock.now + .seconds(3)
+    let deadline = MonotonicClock.now + .seconds(3)
     while !(await condition()) {
-        guard ContinuousClock.now < deadline else { throw MiioError.timeout }
-        try await Task.sleep(for: .milliseconds(2))
+        guard MonotonicClock.now < deadline else { throw MiioError.timeout }
+        try await MonotonicClock.sleep(for: .milliseconds(2))
     }
 }

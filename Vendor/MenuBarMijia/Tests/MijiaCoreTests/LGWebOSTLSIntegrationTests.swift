@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import MijiaSupport
 import Testing
 @testable import MijiaCore
 
@@ -81,7 +82,7 @@ struct LGWebOSTLSIntegrationTests {
                 let (_, response) = try await session.data(from: url)
                 return try #require(response as? HTTPURLResponse).statusCode
             } catch let error as URLError where error.code == .cannotConnectToHost && attempt < 39 {
-                try await Task.sleep(for: .milliseconds(25))
+                try await MonotonicClock.sleep(for: .milliseconds(25))
             }
         }
         throw URLError(.cannotConnectToHost)

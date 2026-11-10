@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import MijiaCore
 import Testing
 @testable import MijiaLAN
@@ -297,11 +298,11 @@ struct LegacyIntegrationTests {
     }
 
     @MainActor
-    private func waitFor<T>(timeout: Duration = .seconds(5), _ probe: @MainActor () -> T?) async throws -> T {
-        let deadline = ContinuousClock.now + timeout
-        while ContinuousClock.now < deadline {
+    private func waitFor<T>(timeout: TimeSpan = .seconds(5), _ probe: @MainActor () -> T?) async throws -> T {
+        let deadline = MonotonicClock.now + timeout
+        while MonotonicClock.now < deadline {
             if let value = probe() { return value }
-            try await Task.sleep(for: .milliseconds(20))
+            try await MonotonicClock.sleep(for: .milliseconds(20))
         }
         throw MiioError.timeout
     }

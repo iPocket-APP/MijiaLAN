@@ -3,6 +3,7 @@
 
 #if canImport(Network)
 import Foundation
+import MijiaSupport
 import Network
 import dnssd
 import Darwin
@@ -248,7 +249,7 @@ public final class AppleServiceDiscovery: ServiceDiscovery, @unchecked Sendable 
     /// device with no IPv4 address) commonly parks in `.waiting` rather than
     /// transitioning to `.failed` — without a deadline, ``resolve(_:)``
     /// would simply hang for an IPv6-only device instead of falling back.
-    static let ipv4PreferenceTimeout: Duration = .seconds(2)
+    static let ipv4PreferenceTimeout: TimeSpan = .seconds(2)
 
     /// Resolves an instance to an address. Honours task cancellation: a
     /// cancelled resolve throws `CancellationError` promptly.
@@ -296,7 +297,7 @@ public final class AppleServiceDiscovery: ServiceDiscovery, @unchecked Sendable 
         endpoint: NWEndpoint,
         parameters: NWParameters,
         recordName: String,
-        timeout: Duration?
+        timeout: TimeSpan?
     ) async throws -> NetworkAddress {
         let connection = NWConnection(to: endpoint, using: parameters)
         defer { connection.stateUpdateHandler = nil }
@@ -365,7 +366,7 @@ public final class AppleServiceDiscovery: ServiceDiscovery, @unchecked Sendable 
                 group.addTask {
                     // Cancelled sleep must still cancel the connection.
                     defer { connection.cancel() }
-                    try await Task.sleep(for: timeout)
+                    try await MonotonicClock.sleep(for: timeout)
                     throw ServiceDiscoveryError.resolveFailed(recordName)
                 }
             }
@@ -409,18 +410,18 @@ public final class AppleServiceDiscovery: ServiceDiscovery, @unchecked Sendable 
     /// How long the `DNSServiceResolve` TXT lookup in ``resolveService(_:)``
     /// gets. The same bound the address resolve puts on its first attempt
     /// (``ipv4PreferenceTimeout``).
-    static let txtResolveTimeout: Duration = ipv4PreferenceTimeout
+    static let txtResolveTimeout: TimeSpan = ipv4PreferenceTimeout
 
     /// Look up an instance's TXT record with `DNSServiceResolve`, throwing
     /// ``ServiceDiscoveryError/resolveFailed(_:)`` if no answer arrives
     /// within `timeout`.
-    func resolveTXT(_ record: ServiceRecord, timeout: Duration) async throws -> [String: String] {
+    func resolveTXT(_ record: ServiceRecord, timeout: TimeSpan) async throws -> [String: String] {
         let name = record.name
         let lookup = TXTLookup(name: name, type: record.serviceType.rawValue, queue: queue)
         return try await withThrowingTaskGroup(of: [String: String].self) { group in
             group.addTask { try await lookup.run() }
             group.addTask {
-                try await Task.sleep(for: timeout)
+                try await MonotonicClock.sleep(for: timeout)
                 throw ServiceDiscoveryError.resolveFailed(name)
             }
             defer { group.cancelAll() }
@@ -819,12 +820,23 @@ public final class AppleServiceDiscovery: ServiceDiscovery, @unchecked Sendable 
             return nil
         }
 
-        // Decode the raw wire bytes rather than walking `NWTXTRecord`'s
-        // entries, so browse follows the same RFC 6763 rule (bare keys,
-        // first-occurrence-wins duplicates) as `resolveService`.
         var txtRecords: [String: String] = [:]
         if case .bonjour(let txtRecord) = result.metadata {
-            txtRecords = TXTRecord.decode(wireFormat: txtRecord.data)
+            if #available(macOS 13, *) {
+                // Prefer wire bytes so duplicate keys follow RFC 6763.
+                txtRecords = TXTRecord.decode(wireFormat: txtRecord.data)
+            } else {
+                // Monterey exposes parsed entries, including bare and empty keys.
+                let entries: [String] = txtRecord.compactMap { key, entry in
+                    switch entry {
+                    case .none: return key
+                    case .empty: return key + "="
+                    case .string(let value): return key + "=" + value
+                    default: return nil
+                    }
+                }
+                txtRecords = TXTRecord.decode(entries)
+            }
         }
 
         return ServiceRecord(

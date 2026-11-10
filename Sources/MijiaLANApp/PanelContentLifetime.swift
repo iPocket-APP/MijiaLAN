@@ -1,11 +1,12 @@
 import Foundation
+import MijiaSupport
 
 /// The exit animation finishes before this one-shot idle deadline starts.
 /// Reopening cancels eviction; generations also reject late canceled sleepers.
 @MainActor
 final class PanelContentLifetime {
-    typealias Sleep = @Sendable (Duration) async throws -> Void
-    private let idleDelay: Duration
+    typealias Sleep = @Sendable (TimeSpan) async throws -> Void
+    private let idleDelay: TimeSpan
     private let sleep: Sleep
     private var pendingRelease: Task<Void, Never>?
     private var generation = 0
@@ -13,7 +14,7 @@ final class PanelContentLifetime {
     var load: (() -> Void)?
     var unload: (() -> Void)?
 
-    init(idleDelay: Duration = .seconds(30), sleep: @escaping Sleep = { try await Task.sleep(for: $0) }) {
+    init(idleDelay: TimeSpan = .seconds(30), sleep: @escaping Sleep = { try await MonotonicClock.sleep(for: $0) }) {
         self.idleDelay = idleDelay
         self.sleep = sleep
     }

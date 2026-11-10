@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import MijiaSupport
 #if os(macOS)
 import Security
 #endif
@@ -520,7 +521,7 @@ public struct UpdateSystemDriver: Sendable {
             var buffer = Data()
             buffer.reserveCapacity(64 * 1024)
             var receivedBytes: Int64 = 0
-            var lastReportedAt = ContinuousClock.now
+            var lastReportedAt = MonotonicClock.now
 
             for try await byte in asyncBytes {
                 buffer.append(byte)
@@ -529,7 +530,7 @@ public struct UpdateSystemDriver: Sendable {
                     try handle.write(contentsOf: buffer)
                     receivedBytes += Int64(buffer.count)
                     buffer.removeAll(keepingCapacity: true)
-                    let now = ContinuousClock.now
+                    let now = MonotonicClock.now
                     if now - lastReportedAt >= .milliseconds(60) {
                         lastReportedAt = now
                         onProgress(DownloadProgress(receivedBytes: receivedBytes, totalBytes: totalBytes))
@@ -669,7 +670,7 @@ public struct UpdateSystemDriver: Sendable {
             let (stdout, stderrData) = await (outData, errData)
             #if os(macOS)
             while process.isRunning {
-                try? await Task.sleep(for: .milliseconds(5))
+                try? await MonotonicClock.sleep(for: .milliseconds(5))
             }
             #else
             await Task.detached(priority: .userInitiated) {
@@ -711,7 +712,7 @@ public struct UpdateSystemDriver: Sendable {
         )
         var attempt = 1
         while attachResult.exitCode != 0 && attempt < 5 {
-            try await Task.sleep(for: .milliseconds(250 * attempt))
+            try await MonotonicClock.sleep(for: .milliseconds(250 * attempt))
             attachResult = try await runProcess(
                 executable: "/usr/bin/hdiutil",
                 arguments: attachArguments
