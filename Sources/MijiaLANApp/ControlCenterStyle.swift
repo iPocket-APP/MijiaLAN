@@ -3,9 +3,29 @@ import MijiaCore
 import MijiaLAN
 import SwiftUI
 
+extension Picker {
+    @ViewBuilder
+    func panelPickerStyle() -> some View {
+        if #available(macOS 13, *) {
+            pickerStyle(.segmented)
+        } else {
+            // Monterey's segmented control can fail during AppKit's first layout.
+            pickerStyle(.menu)
+        }
+    }
+}
+
 enum ControlCenterSymbol {
+    static let lamp = available("lamp.desk", fallback: "lightbulb")
+    static let airConditioner = available("air.conditioner.horizontal", fallback: "snowflake")
     static let fan = available("fan", fallback: "fanblades")
-    static let keychainUnavailable = available("key.slash", fallback: "lock.trianglebadge.exclamationmark")
+    static let airPurifier = available("air.purifier", fallback: "wind")
+    static let cooktop = available("cooktop", fallback: "flame")
+    static let healthPot = available("mug", fallback: "cup.and.saucer")
+    static let juicer = available("carrot", fallback: "leaf")
+    static let airFryer = available("oven", fallback: "timer")
+    static let keychainUnavailable = available("key.slash",
+        fallback: available("lock.trianglebadge.exclamationmark", fallback: "lock.fill"))
 
     private static func available(_ preferred: String, fallback: String) -> String {
         NSImage(systemSymbolName: preferred, accessibilityDescription: nil) == nil ? fallback : preferred
@@ -42,15 +62,15 @@ enum DevicePresentation {
 
     static func symbol(_ snapshot: DeviceSnapshot?) -> String {
         switch snapshot?.schema.category {
-        case "light": "lamp.desk"
-        case "air-conditioner": "air.conditioner.horizontal"
+        case "light": ControlCenterSymbol.lamp
+        case "air-conditioner": ControlCenterSymbol.airConditioner
         case "fan": ControlCenterSymbol.fan
-        case "air-purifier": "air.purifier"
+        case "air-purifier": ControlCenterSymbol.airPurifier
         case "outlet", "switch": "powerplug"
-        case "cooker": "cooktop"
-        case "health-pot": "mug"
-        case "juicer": "carrot"
-        case "air-fryer": "oven"
+        case "cooker": ControlCenterSymbol.cooktop
+        case "health-pot": ControlCenterSymbol.healthPot
+        case "juicer": ControlCenterSymbol.juicer
+        case "air-fryer": ControlCenterSymbol.airFryer
         default: "square.grid.2x2"
         }
     }

@@ -1,4 +1,5 @@
 import AppKit
+import MijiaSupport
 import MijiaCore
 import Combine
 import SwiftUI
@@ -139,7 +140,7 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate, NSMenuItemValida
                 var previous: NSRect?
                 var stableSamples = 0
                 for _ in 0..<60 {
-                    do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
+                    do { try await MonotonicClock.sleep(for: .milliseconds(16)) } catch { return }
                     guard let self else { return }
                     let current = positionedIconFrame
                     stableSamples = current != nil && current == previous ? stableSamples + 1 : 0
@@ -195,7 +196,7 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate, NSMenuItemValida
             #endif
         })
         // Only the sizing bridge owns the frame, including page animations.
-        host.sizingOptions = []
+        if #available(macOS 13, *) { host.sizingOptions = [] }
         panel.contentView = host
         PanelTransitionDiagnostics.record("contentLoaded", ["route": session.route.diagnosticName,
             "scrollOffset": session.scrollOffsets[session.route] ?? 0])

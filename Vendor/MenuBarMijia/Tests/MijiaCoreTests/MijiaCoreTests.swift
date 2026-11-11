@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Testing
 @testable import MijiaCore
 
@@ -103,7 +104,7 @@ struct MijiaCoreTests {
 
         // Allow initial stream event to arrive
         for _ in 0..<50 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
         #expect(store.devices.count == 1)
         #expect(store.activeDeviceCount == 0)
@@ -115,7 +116,7 @@ struct MijiaCoreTests {
 
         for _ in 0..<200 {
             if !(await mock.executedCommands).isEmpty { break }
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
         let cmds = await mock.executedCommands
         #expect(cmds.last == .setLightPower(entityId: "light.bed", isOn: true))
@@ -211,7 +212,7 @@ struct MijiaCoreTests {
         let mock = MockHomeProvider(snapshot: snapshot)
         let store = HomeStore(provider: mock, defaultsSuiteName: "test.slice1.\(UUID().uuidString)")
         for _ in 0..<50 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
 
         // Execute QuickAction.lightsOff -> turns off light, keeps coffee plug on
@@ -271,7 +272,7 @@ struct MijiaCoreTests {
         let mock = MockHomeProvider(snapshot: snapshot)
         let store = HomeStore(provider: mock, defaultsSuiteName: "test.slice2.\(UUID().uuidString)")
         for _ in 0..<50 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
 
         // 1. Quick index 1 toggles 1st device (dev_1) off
@@ -316,7 +317,7 @@ struct MijiaCoreTests {
         let mock = MockHomeProvider(snapshot: SynthesizedHome(rooms: [RoomArea(id: "r1", name: "客厅")], devices: devs))
         let store = HomeStore(provider: mock, defaultsSuiteName: suiteName)
         for _ in 0..<50 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
 
         #expect(store.favoriteDevices.map(\.id) == ["dev_1", "dev_2", "dev_3"])
@@ -377,7 +378,7 @@ struct MijiaCoreTests {
         let mock = MockHomeProvider(snapshot: snapshot)
         let store = HomeStore(provider: mock, defaultsSuiteName: suiteName)
         for _ in 0..<50 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
 
         // 1. Dynamic menu bar target: temp+humidity and total power
@@ -414,7 +415,7 @@ struct MijiaCoreTests {
                 environmentReadings: snapshot.environmentReadings
             )
         )
-        try await Task.sleep(for: .milliseconds(50))
+        try await MonotonicClock.sleep(for: .milliseconds(50))
         let offlineAlerts = store.evaluateSafetyAlerts(now: after46Min.addingTimeInterval(30))
         #expect(offlineAlerts.contains(where: { $0.deviceId == "dev_coffee" && $0.title.contains("离线") }))
     }
@@ -438,7 +439,7 @@ struct MijiaCoreTests {
         let mock = MockHomeProvider(snapshot: snapshot)
         let store = HomeStore(provider: mock, defaultsSuiteName: "test.aliases.\(UUID().uuidString)")
         for _ in 0..<50 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
 
         store.applyDeviceAliases(["dev_split_2": "餐边柜射灯"])

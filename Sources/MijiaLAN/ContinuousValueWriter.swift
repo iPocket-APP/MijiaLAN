@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Combine
 
 /// View-owned edit intent, separate from the controller's confirmed device readings.
@@ -8,14 +9,14 @@ public final class ContinuousValueWriter: ObservableObject {
     @Published public private(set) var pendingValue: Double?
     @Published public private(set) var error: String?
     public var isSending: Bool { pendingValue != nil }
-    private let minimumInterval: Duration
+    private let minimumInterval: TimeSpan
     private let apply: @MainActor @Sendable (Double) async throws -> Void
     private var queued: Double?
     private var active: Double?
     private var worker: Task<Void, Never>?
-    private var lastStart: ContinuousClock.Instant?
+    private var lastStart: MonotonicClock.Instant?
 
-    public init(minimumInterval: Duration = .milliseconds(100),
+    public init(minimumInterval: TimeSpan = .milliseconds(100),
                 apply: @escaping @MainActor @Sendable (Double) async throws -> Void) {
         self.minimumInterval = max(.zero, minimumInterval)
         self.apply = apply
@@ -38,16 +39,15 @@ public final class ContinuousValueWriter: ObservableObject {
     }
 
     private func drain() async {
-        let clock = ContinuousClock()
         while queued != nil {
             if let lastStart {
-                do { try await clock.sleep(until: lastStart.advanced(by: minimumInterval)) }
+                do { try await MonotonicClock.sleep(until: lastStart.advanced(by: minimumInterval)) }
                 catch { break }
             }
             guard !Task.isCancelled, let value = queued else { break }
             queued = nil
             active = value
-            lastStart = clock.now
+            lastStart = MonotonicClock.now
             do {
                 try await apply(value)
                 // A gesture may return to the value already being confirmed.

@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Testing
 @testable import MijiaCore
 
@@ -46,9 +47,9 @@ struct AssistantScheduleTests {
         let mock = MockHomeProvider(snapshot: SynthesizedHome(devices: [Self.ceiling], scenes: []))
         let store = HomeStore(provider: mock, defaultsSuiteName: "test.schedule.\(UUID().uuidString)")
         for _ in 0..<50 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
-        store.assistantSleep = { _ in try await Task.sleep(for: .milliseconds(80)) }
+        store.assistantSleep = { _ in try await MonotonicClock.sleep(for: .milliseconds(80)) }
         return (store, mock)
     }
 
@@ -63,7 +64,7 @@ struct AssistantScheduleTests {
         #expect(await mock.executedCommands.isEmpty)
 
         for _ in 0..<50 where store.scheduledCommands.isEmpty == false {
-            try await Task.sleep(for: .milliseconds(20))
+            try await MonotonicClock.sleep(for: .milliseconds(20))
         }
         #expect(store.scheduledCommands.isEmpty)
         #expect(await mock.executedCommands == [.setLightPower(entityId: "light.study_ceiling", isOn: false)])
@@ -78,7 +79,7 @@ struct AssistantScheduleTests {
         _ = await store.runAssistantCommand("取消定时")
         #expect(store.assistantState == .done("已取消 1 个定时"))
         #expect(store.scheduledCommands.isEmpty)
-        try await Task.sleep(for: .milliseconds(200))
+        try await MonotonicClock.sleep(for: .milliseconds(200))
         #expect(await mock.executedCommands.isEmpty)
 
         _ = await store.runAssistantCommand("取消定时")
@@ -104,16 +105,16 @@ struct AssistantScheduleTests {
         let mock = MockHomeProvider(snapshot: SynthesizedHome(devices: [Self.ceiling], scenes: []))
         let store = HomeStore(provider: mock, defaultsSuiteName: suiteName)
         for _ in 0..<50 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
         #expect(store.scheduledCommands.map(\.id) == [futureEntry.id])
         #expect(store.missedScheduledCommands.isEmpty)
         #expect(await mock.executedCommands.isEmpty)
 
-        store.assistantSleep = { _ in try await Task.sleep(for: .milliseconds(30)) }
+        store.assistantSleep = { _ in try await MonotonicClock.sleep(for: .milliseconds(30)) }
         store.restoreScheduledCommands(now: Date())
         for _ in 0..<50 where !store.scheduledCommands.isEmpty {
-            try await Task.sleep(for: .milliseconds(20))
+            try await MonotonicClock.sleep(for: .milliseconds(20))
         }
         #expect(store.scheduledCommands.isEmpty)
         #expect(ScheduledCommand.load(from: defaults).isEmpty)
@@ -152,7 +153,7 @@ struct AssistantScheduleTests {
         // A second restart before user action must keep the missed timer until confirmed or dismissed.
         let restartedStore = HomeStore(provider: mock, defaultsSuiteName: suiteName)
         for _ in 0..<50 where restartedStore.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
         #expect(restartedStore.missedScheduledCommands.map(\.id) == [expiredEntry.id])
 
@@ -175,7 +176,7 @@ struct AssistantScheduleTests {
         store.isShowingAssistantBar = false
 
         for _ in 0..<50 where !store.scheduledCommands.isEmpty {
-            try await Task.sleep(for: .milliseconds(20))
+            try await MonotonicClock.sleep(for: .milliseconds(20))
         }
         #expect(store.scheduledCommands.isEmpty)
         #expect(store.missedScheduledCommands.map(\.id) == [entry.id])
@@ -195,7 +196,7 @@ struct AssistantScheduleTests {
         _ = await store.runAssistantCommand("10分钟后关闭书房吸顶灯")
         store.assistantNow = { Date().addingTimeInterval(10 * 60 + 20) }
         for _ in 0..<50 where !store.scheduledCommands.isEmpty {
-            try await Task.sleep(for: .milliseconds(20))
+            try await MonotonicClock.sleep(for: .milliseconds(20))
         }
         #expect(store.missedScheduledCommands.isEmpty)
         #expect(await mock.executedCommands == [.setLightPower(entityId: "light.study_ceiling", isOn: false)])
@@ -220,7 +221,7 @@ struct AssistantUndoTests {
         let mock = MockHomeProvider(snapshot: SynthesizedHome(devices: [AssistantScheduleTests.ceiling], scenes: []))
         let store = HomeStore(provider: mock, defaultsSuiteName: "test.undo.\(UUID().uuidString)")
         for _ in 0..<50 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
         _ = await store.runAssistantCommand("关闭书房吸顶灯")
         #expect(store.devices.first?.isActiveOn == false)

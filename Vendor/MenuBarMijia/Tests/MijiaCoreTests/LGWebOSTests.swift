@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Testing
 @testable import MijiaCore
 
@@ -106,7 +107,7 @@ struct LGWebOSTests {
         let mock = MockHomeProvider(snapshot: SynthesizedHome(devices: [lgTV], scenes: []))
         let store = HomeStore(provider: mock, defaultsSuiteName: "test.lg.\(UUID().uuidString)")
         for _ in 0..<50 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
 
         // 1. Voice command "打开电视"
@@ -120,9 +121,9 @@ struct LGWebOSTests {
         store.toggleTVScreenOff(LGWebOSProtocol.deviceId)
         store.selectTVSource(LGWebOSProtocol.deviceId, source: "HDMI 2")
         // These controls dispatch tasks; wait for delivery rather than assuming a scheduler delay.
-        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
-        while await mock.executedCommands.count < 4, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
+        let deadline = MonotonicClock.now.advanced(by: .seconds(1))
+        while await mock.executedCommands.count < 4, MonotonicClock.now < deadline {
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
 
         let executed = await mock.executedCommands

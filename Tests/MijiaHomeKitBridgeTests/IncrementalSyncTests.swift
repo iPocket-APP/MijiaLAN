@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Testing
 import HAPCore
 import HAPTransport
@@ -151,7 +152,7 @@ struct IncrementalSyncTests {
         #expect(await fixture.hap.currentConfigurationNumber == configuration)
         #expect(fixture.bridge.setupURI == uri)
         #expect(fixture.bridge.isPaired)
-        for _ in 0..<100 where await events.count == 0 { try await Task.sleep(for: .milliseconds(2)) }
+        for _ in 0..<100 where await events.count == 0 { try await MonotonicClock.sleep(for: .milliseconds(2)) }
         #expect(await events.count >= 1)
         await fixture.stop()
     }
@@ -166,14 +167,14 @@ struct IncrementalSyncTests {
             await fixture.hap.setCharacteristicChangeHandler { _, data in
                 // A suspended send exposes whether a newer notification can pass it.
                 if String(decoding: data, as: UTF8.self).contains("-70402") {
-                    try? await Task.sleep(for: .milliseconds(50))
+                    try? await MonotonicClock.sleep(for: .milliseconds(50))
                 }
                 await events.append(data)
             }
             await fixture.hap.setReadStatus(aid: 2, iid: iid, status: .communicationFailure)
             if subscribingWhileUnavailable { await fixture.hap.subscribe(connectionID: 7, aid: 2, iid: iid) }
             await fixture.hap.updateCharacteristic(aid: 2, iid: iid, value: .float(50))
-            for _ in 0..<200 where await events.count < 2 { try await Task.sleep(for: .milliseconds(2)) }
+            for _ in 0..<200 where await events.count < 2 { try await MonotonicClock.sleep(for: .milliseconds(2)) }
             let payloads = await events.captured()
             let changes = try payloads.map { raw -> JSONValue in
                 let separator = try #require(raw.range(of: Data("\r\n\r\n".utf8)))
@@ -207,7 +208,7 @@ struct IncrementalSyncTests {
         await fixture.hap.updateCharacteristic(aid: 2, iid: iid, value: .float(60))
         for _ in 0..<100 {
             if await events.captured().last.map({ String(decoding: $0, as: UTF8.self).contains("60") }) == true { break }
-            try await Task.sleep(for: .milliseconds(2))
+            try await MonotonicClock.sleep(for: .milliseconds(2))
         }
         let eventCount = await events.count
         #expect(eventCount == 1)
@@ -260,7 +261,7 @@ struct IncrementalSyncTests {
             let devices = DeviceController(api: api, config: { config })
             await devices.refreshNow()
             let store = HomeStore(provider: CapabilityHomeProvider(controller: devices), defaultsSuiteName: suite)
-            for _ in 0..<100 where !store.hasReceivedInitialSnapshot { try await Task.sleep(for: .milliseconds(2)) }
+            for _ in 0..<100 where !store.hasReceivedInitialSnapshot { try await MonotonicClock.sleep(for: .milliseconds(2)) }
             var secrets = HomeKitBridgeSecrets.generate()
             secrets.pairings = ["existing-controller": Data(repeating: 1, count: 32)]
             let data = try #require(secrets.encoded())
@@ -302,7 +303,7 @@ private actor SyncTestTransport: MiioTransport {
     init(model: String = "dmaker.fan.p28") { self.model = model }
     func set(_ key: String, _ value: JSONValue) { values[key] = value }
     func setOffline(_ value: Bool) { offline = value }
-    func exchange(_ packet: Data, host: String, port: UInt16, timeout: Duration) async throws -> Data {
+    func exchange(_ packet: Data, host: String, port: UInt16, timeout: TimeSpan) async throws -> Data {
         if offline { throw MiioError.hostUnreachable }
         if packet == MiioPacket.hello {
             return Data([0x21, 0x31, 0, 32, 0, 0, 0, 0, 0, 0, 0, 123, 0, 0, 0x13, 0x88] + [UInt8](repeating: 255, count: 16))
@@ -331,5 +332,5 @@ private actor SyncTestTransport: MiioTransport {
         let reply = JSONValue.object(["id": request["id"] ?? .number(0), "result": result])
         return try MiioPacket.encode(Data(reply.compactJSONString.utf8) + [0], token: token, deviceID: 123, stamp: 5000)
     }
-    func broadcast(_ packet: Data, port: UInt16, duration: Duration, rounds: Int) async throws -> [MiioDatagram] { [] }
+    func broadcast(_ packet: Data, port: UInt16, duration: TimeSpan, rounds: Int) async throws -> [MiioDatagram] { [] }
 }

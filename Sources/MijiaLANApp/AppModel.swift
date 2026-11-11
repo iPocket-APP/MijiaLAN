@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import MijiaCore
 import MijiaHomeKitBridge
 import MijiaLAN
@@ -15,7 +16,7 @@ final class AppModel: ObservableObject {
     nonisolated static let configAccount = "home_config_v1"
     nonisolated static let bridgeAccount = "homekit_bridge_v1"
     /// DHCP leases move devices around; a broadcast hello finds them again by device ID.
-    static let rediscoveryInterval: Duration = .seconds(300)
+    static let rediscoveryInterval: TimeSpan = .seconds(300)
 
     enum ImportState: Equatable {
         case idle
@@ -330,7 +331,7 @@ final class AppModel: ObservableObject {
         rediscoveryTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.rediscover()
-                try? await Task.sleep(for: Self.rediscoveryInterval)
+                try? await MonotonicClock.sleep(for: Self.rediscoveryInterval)
             }
         }
     }

@@ -1,6 +1,6 @@
 # mdns-swift
 
-MijiaLAN vendors 1.2.0 at `ef8c8d387a15b762816f88264667d3278042fa78` and builds the unchanged sources for macOS 13.
+MijiaLAN vendors 1.2.0 at `ef8c8d387a15b762816f88264667d3278042fa78` with shared timing support for macOS 12.
 
 Shared mDNS/DNS-SD service discovery for Swift — used by [matter-swift](https://github.com/monagle/matter-swift) and [hap-swift](https://github.com/monagle/hap-swift).
 

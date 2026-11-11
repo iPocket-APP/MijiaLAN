@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 
 // Assistant side of HomeStore: command bar, model/local intent resolution,
 // spoken delays, voice undo and applying intents to devices.
@@ -392,7 +393,7 @@ extension HomeStore {
 
     private func waitForInitialSnapshotIfNeeded() async {
         for _ in 0..<50 where devices.isEmpty && scenes.isEmpty && !Task.isCancelled {
-            try? await Task.sleep(for: .milliseconds(100))
+            try? await MonotonicClock.sleep(for: .milliseconds(100))
         }
     }
 
@@ -841,7 +842,7 @@ extension HomeStore {
             // A "tap a suggestion" hint stays longer so it can be read next to the chips.
             let delay: Double = if case .awaitingChoice = state { 8 } else { 3.2 }
             assistantResetTask = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(delay))
+                try? await MonotonicClock.sleep(for: .seconds(delay))
                 guard !Task.isCancelled, let self, self.assistantState == state else { return }
                 self.assistantState = .idle
                 self.lastAssistantReceipt = nil

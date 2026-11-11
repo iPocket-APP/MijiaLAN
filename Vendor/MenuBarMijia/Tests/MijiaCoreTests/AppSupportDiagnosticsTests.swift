@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Testing
 @testable import MijiaCore
 
@@ -215,7 +216,7 @@ struct AppSupportDiagnosticsTests {
         ))
         let store = HomeStore(provider: mock, defaultsSuiteName: "test.undoPause.\(UUID().uuidString)")
         for _ in 0..<50 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
         return store
     }

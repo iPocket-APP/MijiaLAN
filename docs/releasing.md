@@ -114,7 +114,7 @@ the same. Versions before 0.1.6 require one manual installation to gain the upda
 
 ## Local packaging
 
-`scripts/package_release.sh` builds a universal macOS 13+ app, signs it with
+`scripts/package_release.sh` builds a universal macOS 12+ app, signs it with
 Developer ID and Hardened Runtime, notarizes and staples the app and DMG,
 checks Gatekeeper acceptance, and produces a DMG, ZIP and SHA-256 checksums.
 It runs Release tests before packaging and does not publish anything to GitHub.

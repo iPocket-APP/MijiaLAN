@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Testing
 @testable import MijiaCore
 
@@ -66,7 +67,7 @@ struct AssistantConsentTests {
         let mock = MockHomeProvider(snapshot: SynthesizedHome(devices: AssistantTests.devices, scenes: AssistantTests.scenes))
         let store = HomeStore(provider: mock, defaultsSuiteName: suite)
         for _ in 0..<50 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
         let log = CallLog()
         store.assistantTransportOverride = { request in

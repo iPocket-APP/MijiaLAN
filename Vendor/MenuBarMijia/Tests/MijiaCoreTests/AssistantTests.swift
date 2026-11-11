@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Testing
 @testable import MijiaCore
 
@@ -406,7 +407,7 @@ struct AssistantTests {
         let mock = MockHomeProvider(snapshot: SynthesizedHome(devices: Self.devices, scenes: Self.scenes))
         let store = HomeStore(provider: mock, defaultsSuiteName: "test.assistant.\(UUID().uuidString)")
         for _ in 0..<50 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
         return (store, mock)
     }
@@ -726,7 +727,7 @@ struct AssistantTests {
         let mock = MockHomeProvider(snapshot: SynthesizedHome(devices: Self.devices, scenes: Self.scenes))
         let store = HomeStore(provider: mock, defaultsSuiteName: suite)
         for _ in 0..<50 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
 
         for customURL in ["http://127.0.0.1:3425/v1", "http://localhost:3425/v1"] {
@@ -787,10 +788,9 @@ struct AssistantTests {
         guard ProcessInfo.processInfo.environment["ASSISTANT_RUN_LIVE_TEST"] == "1" else { return }
         let key = try #require(AssistantConfig.loadCodexBarOpenRouterKey())
         let resolver = ModelIntentResolver(config: AssistantConfig(apiKey: key))
-        let clock = ContinuousClock()
-        let start = clock.now
+        let start = MonotonicClock.now
         let plan = try await resolver.resolve("书房来点柔和月光", devices: Self.devices, scenes: Self.scenes)
-        let elapsed = clock.now - start
+        let elapsed = MonotonicClock.now - start
         print("ASSISTANT_LIVE_JEV latency=\(elapsed) intents=\(plan.intents) reply=\(plan.reply)")
         #expect(plan.intents == [
             DeviceIntent(targetId: "dev_study_ceiling", operation: .lightEffect("Night"))

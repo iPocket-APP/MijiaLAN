@@ -2,6 +2,7 @@
 // Copyright 2026 Monagle Pty Ltd
 
 import Testing
+import MijiaSupport
 import Foundation
 import NIOCore
 import MDNSCore
@@ -29,8 +30,8 @@ struct LinuxServiceDiscoveryConsumerTests {
 
     /// A discovery whose outgoing messages land in the returned stream.
     static func makeDiscovery(
-        resolveTimeout: Duration = .seconds(5),
-        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        resolveTimeout: TimeSpan = .seconds(5),
+        sleep: @escaping @Sendable (TimeSpan) async throws -> Void = { try await MonotonicClock.sleep(for: $0) },
         clock: ManualClock = ManualClock()
     ) -> (LinuxServiceDiscovery, AsyncStream<DNSMessage>) {
         let (sent, sink) = AsyncStream.makeStream(of: DNSMessage.self)
@@ -406,13 +407,13 @@ final class SentLog: @unchecked Sendable {
 /// A clock that moves only when the test advances it.
 final class ManualClock: @unchecked Sendable {
     private let lock = NSLock()
-    private var current = ContinuousClock.now
+    private var current = MonotonicClock.now
 
-    var now: ContinuousClock.Instant {
+    var now: MonotonicClock.Instant {
         lock.withLock { current }
     }
 
-    func advance(by duration: Duration) {
-        lock.withLock { current += duration }
+    func advance(by duration: TimeSpan) {
+        lock.withLock { current = current.advanced(by: duration) }
     }
 }

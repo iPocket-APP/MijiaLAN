@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import MijiaCore
 
 /// Builds MenuBarMijia's `MiCloudProvider` on top of the LAN API instead of the cloud client, wrapped in
@@ -18,8 +19,8 @@ public enum LocalHomeProvider {
     public static func make(
         api: LANMiotAPI,
         specSource: any MiotSpecSource = MiotSpecStore(cacheDirectory: specCacheDirectory),
-        pollInterval: Duration = .seconds(3),
-        closedPollInterval: Duration = .seconds(5)
+        pollInterval: TimeSpan = .seconds(3),
+        closedPollInterval: TimeSpan = .seconds(5)
     ) -> LANHomeProvider {
         let inner = MiCloudProvider(
             sessionLoader: { placeholderSession },

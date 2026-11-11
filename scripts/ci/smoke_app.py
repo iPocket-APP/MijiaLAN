@@ -50,7 +50,13 @@ def main():
         info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
         assert info['CFBundleShortVersionString'] == data['version']
         assert info['CFBundleVersion'] == str(data['build_number'])
-        assert info['LSMinimumSystemVersion'] == '13.0'
+        assert info['LSMinimumSystemVersion'] == '12.0'
+        helper = app / 'Contents/Library/LoginItems/MijiaLANLoginItem.app'
+        login = plistlib.loads((helper / 'Contents/Info.plist').read_bytes())
+        assert login['CFBundleIdentifier'] == info['CFBundleIdentifier'] + '.LoginItem'
+        assert login['LSMinimumSystemVersion'] == info['LSMinimumSystemVersion']
+        assert login['LSBackgroundOnly'] is True
+        run('lipo', str(helper / 'Contents/MacOS' / login['CFBundleExecutable']), '-verify_arch', platform.machine())
         run('lipo', str(app / 'Contents/MacOS/MijiaLAN'), '-verify_arch', platform.machine())
         run('codesign', '--verify', '--deep', '--strict', str(app))
         run(sys.executable, str(ROOT / 'scripts/swift_runtime.py'), 'verify', str(app),

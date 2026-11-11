@@ -2,7 +2,6 @@ import AppKit
 import MijiaCore
 import MijiaHomeKitBridge
 import MijiaLAN
-import ServiceManagement
 import SwiftUI
 
 struct ControlCenterSettings: View {
@@ -84,7 +83,7 @@ struct ControlCenterSettings: View {
                             Text(L10n.tr("浅色", "Light")).tag("light")
                             Text(L10n.tr("深色", "Dark")).tag("dark")
                         }
-                        .pickerStyle(.segmented).labelsHidden().frame(width: 166).controlSize(.small)
+                        .panelPickerStyle().labelsHidden().frame(width: 166).controlSize(.small)
                     }
                     .padding(.horizontal, 12).padding(.vertical, 11)
                 }
@@ -116,7 +115,7 @@ struct ControlCenterSettings: View {
 
 private struct LaunchAtLoginSettings: View {
     @Environment(\.panelPresented) private var panelPresented
-    @State private var status: SMAppService.Status?
+    @State private var status: LaunchAtLogin.Status?
     @State private var errorMessage: String?
 
     private let isEphemeral = ProcessInfo.processInfo.environment["MIJIALAN_EPHEMERAL"] == "1" ||
@@ -132,7 +131,7 @@ private struct LaunchAtLoginSettings: View {
             }
             if status == .requiresApproval {
                 Button(L10n.tr("打开登录项设置…", "Open Login Items Settings…")) {
-                    SMAppService.openSystemSettingsLoginItems()
+                    LaunchAtLogin.openSystemSettings()
                 }
                 .controlSize(.small).padding(.leading, 3)
             }
@@ -144,20 +143,12 @@ private struct LaunchAtLoginSettings: View {
         }
         .onValueChange(of: panelPresented, initial: true) { presented in
             guard presented, !isEphemeral else { return }
-            status = SMAppService.mainApp.status
+            status = LaunchAtLogin.status
             errorMessage = nil
         }
     }
 
-    // A pending item is still registered. The switch can remove it while macOS approval is outstanding.
-    private var registered: Bool? {
-        switch status {
-        case .enabled, .requiresApproval: true
-        // A fresh main app can report .notFound before its first successful registration.
-        case .notRegistered, .notFound: false
-        default: nil
-        }
-    }
+    private var registered: Bool? { status?.registered }
 
     private var subtitle: String {
         if isEphemeral { return L10n.tr("预览模式下无法更改登录项。", "Login items can’t be changed in preview mode.") }
@@ -173,18 +164,17 @@ private struct LaunchAtLoginSettings: View {
 
     private func setRegistered(_ requested: Bool) {
         guard !isEphemeral else { return }
-        let service = SMAppService.mainApp
-        status = service.status
+        status = LaunchAtLogin.status
         errorMessage = nil
         guard let registered, registered != requested else { return }
 
         var failure: String?
         do {
-            if requested { try service.register() } else { try service.unregister() }
+            try LaunchAtLogin.setEnabled(requested)
         } catch {
             failure = error.localizedDescription
         }
-        status = service.status
+        status = LaunchAtLogin.status
         if self.registered != requested { errorMessage = failure }
     }
 }
@@ -489,7 +479,7 @@ private extension CapabilityHomeKitService.Kind {
         case .outlet: "powerplug"
         case .light: "lightbulb"
         case .fan: ControlCenterSymbol.fan
-        case .airPurifier: "air.purifier"
+        case .airPurifier: ControlCenterSymbol.airPurifier
         case .climate: "thermometer.medium"
         case .humidifier: "humidifier"
         case .windowCovering: "blinds.horizontal.closed"

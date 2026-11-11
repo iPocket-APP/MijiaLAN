@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Testing
 @testable import MijiaCore
 
@@ -91,7 +92,7 @@ struct HAAddressPolicyTests {
         let watcher = Task { for await _ in events {} }
         defer { watcher.cancel() }
         for _ in 0..<100 where await reported.count == 0 {
-            try await Task.sleep(for: .milliseconds(50))
+            try await MonotonicClock.sleep(for: .milliseconds(50))
         }
         #expect(await reported.count == 1)
         #expect(await provider.currentBaseURLString == "http://127.0.0.1:9")

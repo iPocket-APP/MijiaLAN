@@ -1,4 +1,5 @@
 import AppKit
+import MijiaSupport
 import SwiftUI
 import Testing
 @testable import MijiaLANApp
@@ -118,11 +119,11 @@ struct PanelMemoryTests {
         presentation.hide()
         #expect(closes == 0)
         presentation.show()
-        try await Task.sleep(for: .milliseconds(200))
+        try await MonotonicClock.sleep(for: .milliseconds(200))
         #expect(closes == 0)
         #expect(presentation.isPresented)
         presentation.hide()
-        try await Task.sleep(for: .milliseconds(200))
+        try await MonotonicClock.sleep(for: .milliseconds(200))
         #expect(closes == 1)
         #expect(!window.isVisible)
         presentation.stop()
@@ -163,7 +164,7 @@ struct PanelMemoryTests {
     private func settle(_ condition: () -> Bool) async {
         for _ in 0..<200 {
             if condition() { return }
-            try? await Task.sleep(for: .milliseconds(1))
+            try? await MonotonicClock.sleep(for: .milliseconds(1))
         }
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Testing
 @testable import MijiaCore
 
@@ -141,7 +142,7 @@ struct MiAccountLoginTests {
         #expect(!ticket.qrImageURL.absoluteString.isEmpty)
         #expect(!ticket.longPollURL.absoluteString.isEmpty)
         #expect(ticket.timeout > 0)
-        print("LIVE_QR ok host=\(ticket.qrImageURL.host() ?? "?") lpHost=\(ticket.longPollURL.host() ?? "?") timeout=\(ticket.timeout)")
+        print("LIVE_QR ok host=\(ticket.qrImageURL.host ?? "?") lpHost=\(ticket.longPollURL.host ?? "?") timeout=\(ticket.timeout)")
     }
 }
 
@@ -585,7 +586,7 @@ actor EventLog {
     func wait(until predicate: @Sendable (EventLog) async -> Bool) async -> Bool {
         for _ in 0..<300 {
             if await predicate(self) { return true }
-            try? await Task.sleep(for: .milliseconds(10))
+            try? await MonotonicClock.sleep(for: .milliseconds(10))
         }
         return false
     }
@@ -638,7 +639,7 @@ struct MiCloudProviderTests {
     func concurrentMultiModelSpecLoading() async throws {
         struct DelayedMultiSpecSource: MiotSpecSource {
             func spec(model: String, specType: String?) async throws -> MiotDeviceSpec? {
-                try await Task.sleep(for: .milliseconds(2))
+                try await MonotonicClock.sleep(for: .milliseconds(2))
                 if model.hasSuffix(".fail") {
                     throw MiCloudError.http(503)
                 }

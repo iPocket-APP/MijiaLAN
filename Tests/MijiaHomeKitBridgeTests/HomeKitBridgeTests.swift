@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import MijiaSupport
 import Testing
 import HAPCore
 import HAPTransport
@@ -343,7 +344,7 @@ struct HomeKitWriteRoutingTests {
         ))
         let store = HomeStore(provider: mock, defaultsSuiteName: "test.homekit.\(UUID().uuidString)")
         for _ in 0..<100 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
         return (store, mock)
     }
@@ -353,7 +354,7 @@ struct HomeKitWriteRoutingTests {
         for _ in 0..<200 {
             let commands = await mock.executedCommands
             if commands.count >= count { return commands }
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
         return await mock.executedCommands
     }
@@ -392,7 +393,7 @@ struct HomeKitWriteRoutingTests {
         let (store, mock) = try await makeStore([HomeKitAccessoryMapperTests.light(isOn: true)])
         let light = try #require(store.devices.first)
         HomeKitBridgeController.apply(.power(true), to: light, in: store)
-        try await Task.sleep(for: .milliseconds(100))
+        try await MonotonicClock.sleep(for: .milliseconds(100))
         #expect(await mock.executedCommands.isEmpty)
     }
 }
@@ -463,7 +464,7 @@ struct HomeKitBridgeControllerTests {
         let mock = MockHomeProvider(snapshot: SynthesizedHome(rooms: [], devices: [HomeKitAccessoryMapperTests.light()], scenes: []))
         let store = HomeStore(provider: mock, defaultsSuiteName: "test.homekit.vault.\(UUID().uuidString)")
         for _ in 0..<100 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
         let probe = VaultProbe()
         let vault = HomeKitBridgeVault(load: { .unavailable }, save: { _ in probe.recordSave(); return true })

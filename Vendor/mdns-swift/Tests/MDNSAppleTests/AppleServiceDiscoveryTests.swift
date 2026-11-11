@@ -2,6 +2,7 @@
 // Copyright 2026 Monagle Pty Ltd
 
 import Foundation
+import MijiaSupport
 import Testing
 import MDNSCore
 
@@ -69,6 +70,7 @@ struct AppleTXTDecodingTests {
 
     /// Browse decodes `NWTXTRecord.data`; this pins that those bytes keep
     /// what the rule needs (bare keys, duplicate order).
+    @available(macOS 13, *)
     @Test("NWTXTRecord.data keeps bare keys and duplicate order for the shared rule")
     func nwTXTRecordBytes() {
         var wire = Data()
@@ -92,7 +94,7 @@ struct AppleServiceDiscoveryLiveTests {
     static let serviceType: ServiceType = "_mdnstest3b._udp"
     static let port: UInt16 = 51234
     static let txt = ["D": "1234", "CM": "1", "SII": "5000"]
-    static let hangGuard: Duration = .seconds(30)
+    static let hangGuard: TimeSpan = .seconds(30)
 
     struct HangGuardExpired: Error, CustomStringConvertible {
         let description: String
@@ -134,7 +136,7 @@ struct AppleServiceDiscoveryLiveTests {
         try await withThrowingTaskGroup(of: T.self) { group in
             group.addTask { try await body() }
             group.addTask {
-                try await Task.sleep(for: hangGuard)
+                try await MonotonicClock.sleep(for: hangGuard)
                 throw HangGuardExpired(description: "hang guard expired: \(what)")
             }
             defer { group.cancelAll() }
@@ -167,7 +169,7 @@ struct AppleServiceDiscoveryLiveTests {
                 return .ended(lastSeen: lastSeen, yields: yields)
             }
             group.addTask {
-                try? await Task.sleep(for: hangGuard)
+                try? await MonotonicClock.sleep(for: hangGuard)
                 return .hangGuard
             }
             let first = await group.next()!
@@ -230,7 +232,7 @@ struct AppleServiceDiscoveryLiveTests {
     /// a cancellable stream read, so an operation that ignores cancellation
     /// fails the check instead of hanging the test.
     private static func cancelledOutcome(
-        guardDuration: Duration = hangGuard,
+        guardDuration: TimeSpan = hangGuard,
         _ operation: @escaping @Sendable () async throws -> Void
     ) async -> Bool? {
         let (finished, signal) = AsyncStream<Bool>.makeStream()
@@ -245,7 +247,7 @@ struct AppleServiceDiscoveryLiveTests {
         }
         // Long enough for the operation to be in flight; the assertion is only
         // that it returns, not when.
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await MonotonicClock.sleep(for: .milliseconds(100))
         task.cancel()
         return await withTaskGroup(of: Bool?.self) { group in
             group.addTask {
@@ -253,7 +255,7 @@ struct AppleServiceDiscoveryLiveTests {
                 return nil
             }
             group.addTask {
-                try? await Task.sleep(for: guardDuration)
+                try? await MonotonicClock.sleep(for: guardDuration)
                 return nil
             }
             defer { group.cancelAll() }

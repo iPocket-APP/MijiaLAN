@@ -1,4 +1,5 @@
 import AppKit
+import MijiaSupport
 import Foundation
 import MijiaCore
 import MijiaHomeKitBridge
@@ -79,12 +80,15 @@ enum DiagnosticReport {
     static func export(model: AppModel) async throws -> URL {
         await model.devices.refreshNow()
         // Let the bridge publish what that read found before its read statuses are collected.
-        try? await Task.sleep(for: .milliseconds(300))
+        try? await MonotonicClock.sleep(for: .milliseconds(300))
         guard let data = json(model: model) else { throw CocoaError(.fileWriteUnknown) }
         let directory = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Logs/MijiaLAN", isDirectory: true)
-        let stamp = Date().formatted(.verbatim("\(year: .defaultDigits)\(month: .twoDigits)\(day: .twoDigits)-\(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased))\(minute: .twoDigits)\(second: .twoDigits)",
-                                               timeZone: .current, calendar: Calendar(identifier: .gregorian)))
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let stamp = formatter.string(from: Date())
         let url = directory.appendingPathComponent("MijiaLAN-Diagnostics-\(stamp).json")
         // Blocking filesystem access stays off the main actor.
         try await Task.detached(priority: .utility) {

@@ -5,7 +5,7 @@ import PackageDescription
 let package = Package(
     name: "hap-swift",
     platforms: [
-        .macOS(.v13),
+        .macOS(.v12),
         .iOS(.v18),
         .tvOS(.v18),
         .watchOS(.v11),
@@ -26,6 +26,7 @@ let package = Package(
         .library(name: "HAPSwift", targets: ["HAPSwift"]),
     ],
     dependencies: [
+        .package(path: "../../Packages/MijiaSupport"),
         .package(path: "../mdns-swift"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "4.0.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.0.0"),
@@ -70,6 +71,7 @@ let package = Package(
         .target(
             name: "HAPApple",
             dependencies: [
+                .product(name: "MijiaSupport", package: "MijiaSupport"),
                 "HAPTransport",
                 .product(name: "MDNSApple", package: "mdns-swift"),
                 .product(name: "Logging", package: "swift-log"),

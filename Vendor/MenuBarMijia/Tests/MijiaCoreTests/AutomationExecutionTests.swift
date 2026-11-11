@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Testing
 @testable import MijiaCore
 
@@ -44,7 +45,7 @@ struct AutomationExecutionTests {
         ))
         let store = HomeStore(provider: mock, defaultsSuiteName: "test.automation.exec.\(UUID().uuidString)")
         for _ in 0..<50 where store.devices.isEmpty {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
         store.hideDevice(Self.hiddenLight.id)
         return (store, mock)
@@ -100,7 +101,7 @@ struct AutomationExecutionTests {
         #expect(store.lastAssistantActionAt == nil)
         for _ in 0..<50 {
             if await mock.executedCommands.count >= 2 { break }
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
         let light = try #require(store.devices.first(where: { $0.id == Self.studyLight.id }))
         let task = try #require(store.togglePrimary(light))

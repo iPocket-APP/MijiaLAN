@@ -157,19 +157,18 @@ private struct PanelPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header.onGeometryChange(for: CGFloat.self) { ceil($0.size.height) } action: { headerHeight = $0 }
+            header.readPanelHeight { headerHeight = $0 }
             if scrolls {
                 ScrollView {
                     page.frame(maxWidth: .infinity, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
-                        .onGeometryChange(for: CGFloat.self) { ceil($0.size.height) } action: { contentHeight = $0 }
+                        .readPanelHeight { contentHeight = $0 }
                         .background(PanelScrollState(session: session, route: route, isPresented: panelPresented))
                 }
                 .frame(height: layout?.viewportHeight ?? 360)
-                .scrollIndicators(.automatic)
             } else { page }
             if route == .home {
-                footer.onGeometryChange(for: CGFloat.self) { ceil($0.size.height) } action: { footerHeight = $0 }
+                footer.readPanelHeight { footerHeight = $0 }
             }
         }
         .frame(width: PanelView.width)
@@ -319,5 +318,31 @@ enum QRCode {
         let image = NSImage(size: rep.size)
         image.addRepresentation(rep)
         return image
+    }
+}
+
+private struct PanelHeightPreference: PreferenceKey {
+    static let defaultValue: CGFloat? = nil
+
+    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) {
+        value = nextValue() ?? value
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func readPanelHeight(_ update: @escaping (CGFloat) -> Void) -> some View {
+        if #available(macOS 13, *) {
+            onGeometryChange(for: CGFloat.self, of: { ceil($0.size.height) }, action: update)
+        } else {
+            background {
+                GeometryReader { geometry in
+                    Color.clear.preference(key: PanelHeightPreference.self, value: ceil(geometry.size.height))
+                }
+            }
+            .onPreferenceChange(PanelHeightPreference.self) { height in
+                if let height { update(height) }
+            }
+        }
     }
 }

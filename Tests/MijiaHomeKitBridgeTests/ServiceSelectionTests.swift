@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import HAPCore
 import HAPTransport
 import MijiaCore
@@ -199,7 +200,7 @@ struct ServiceSelectionTests {
         let devices = DeviceController(api: api, config: { config })
         await devices.refreshNow()
         let store = HomeStore(provider: CapabilityHomeProvider(controller: devices), defaultsSuiteName: suite)
-        for _ in 0..<100 where !store.hasReceivedInitialSnapshot { try await Task.sleep(for: .milliseconds(2)) }
+        for _ in 0..<100 where !store.hasReceivedInitialSnapshot { try await MonotonicClock.sleep(for: .milliseconds(2)) }
         var secrets = HomeKitBridgeSecrets.generate()
         secrets.pairings = ["existing-controller": Data(repeating: 1, count: 32)]
         let data = try #require(secrets.encoded())
@@ -229,7 +230,7 @@ private actor SelectionTransport: MiioTransport {
     private let token = Data(repeating: 0, count: 16)
     private var values: [String: JSONValue] = ["2.1": .bool(true), "8.1": .number(50)]
 
-    func exchange(_ packet: Data, host: String, port: UInt16, timeout: Duration) async throws -> Data {
+    func exchange(_ packet: Data, host: String, port: UInt16, timeout: TimeSpan) async throws -> Data {
         if packet == MiioPacket.hello {
             return Data([0x21, 0x31, 0, 32, 0, 0, 0, 0, 0, 0, 0, 123, 0, 0, 0x13, 0x88] + [UInt8](repeating: 255, count: 16))
         }
@@ -251,5 +252,5 @@ private actor SelectionTransport: MiioTransport {
         return try MiioPacket.encode(Data(reply.compactJSONString.utf8) + [0], token: token, deviceID: 123, stamp: 5000)
     }
 
-    func broadcast(_ packet: Data, port: UInt16, duration: Duration, rounds: Int) async throws -> [MiioDatagram] { [] }
+    func broadcast(_ packet: Data, port: UInt16, duration: TimeSpan, rounds: Int) async throws -> [MiioDatagram] { [] }
 }

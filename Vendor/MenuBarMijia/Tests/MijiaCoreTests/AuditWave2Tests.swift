@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Testing
 @testable import MijiaCore
 
@@ -28,7 +29,7 @@ struct AuditWave2Tests {
     @MainActor
     private func waitForDevices(_ store: HomeStore, count: Int = 1) async throws {
         for _ in 0..<100 where store.devices.count < count {
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
     }
 
@@ -49,7 +50,7 @@ struct AuditWave2Tests {
             if store.devices.count >= devices.count && (readings.isEmpty || !store.environmentReadings.isEmpty) {
                 break
             }
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
         return (store, mock)
     }
@@ -178,7 +179,7 @@ struct AuditWave2Tests {
         _ = await store.runAssistantCommand("10秒后打开书房灯")
         for _ in 0..<200 {
             if store.devices.first?.isActiveOn == true { break }
-            try await Task.sleep(for: .milliseconds(10))
+            try await MonotonicClock.sleep(for: .milliseconds(10))
         }
         #expect(store.devices.first?.isActiveOn == true)
         #expect(store.userHabitMemory.entries.isEmpty)
@@ -424,7 +425,7 @@ struct AuditWave2Tests {
         let living = try #require(store.devices.first(where: { $0.id == "living_light" }))
         store.togglePrimary(living)                 // on
         store.togglePrimary(living)                 // off, but remembered
-        try await Task.sleep(for: .milliseconds(30))
+        try await MonotonicClock.sleep(for: .milliseconds(30))
 
         store.executeQuickAction(.softNightLight)
         let bedroomAfter = try #require(store.devices.first(where: { $0.id == "bed_light" }))
@@ -486,7 +487,7 @@ struct AuditWave2Tests {
         let lamp = try #require(store.devices.first(where: { $0.id == "demo_study_light" }))
         store.togglePrimary(lamp)
         await store.provider.refreshNow()
-        try await Task.sleep(for: .milliseconds(30))
+        try await MonotonicClock.sleep(for: .milliseconds(30))
         let demoLampOn = store.devices.first(where: { $0.id == "demo_study_light" })?.isActiveOn
         #expect(demoLampOn == true)
     }

@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 
 // Primary toggle and detail-drawer controls backed by optimistic state (#48).
 extension HomeStore {
@@ -487,7 +488,7 @@ extension HomeStore {
     ) {
         debounceTasks[key]?.cancel()
         debounceTasks[key] = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(280))
+            try? await MonotonicClock.sleep(for: .milliseconds(280))
             guard !Task.isCancelled, let self else { return }
             do {
                 try await self.executeDeviceCommand(command)

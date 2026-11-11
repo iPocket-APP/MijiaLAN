@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import HAPCore
 import HAPCrypto
 import HAPTransport
@@ -179,7 +180,7 @@ struct HAPWriteOriginTests {
             await bridge.updateCharacteristic(aid: 2, iid: 11, value: .int32(356), forceNotify: true)
             for _ in 0..<200 {
                 if await capture.events.last?.iid == 11 { return await capture.take() }
-                try await Task.sleep(for: .milliseconds(2))
+                try await MonotonicClock.sleep(for: .milliseconds(2))
             }
             throw WireHAPController.Failure.timedOut
         }

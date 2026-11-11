@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import MijiaCore
 import Testing
 @testable import MijiaLAN
@@ -60,9 +61,8 @@ struct ContinuousLightControlTests {
 
     @Test("Rate limiting also covers separate fast slider gestures")
     func rateLimit() async {
-        let clock = ContinuousClock()
-        var starts: [ContinuousClock.Instant] = []
-        let writer = ContinuousValueWriter(minimumInterval: .milliseconds(60)) { _ in starts.append(clock.now) }
+        var starts: [MonotonicClock.Instant] = []
+        let writer = ContinuousValueWriter(minimumInterval: .milliseconds(60)) { _ in starts.append(MonotonicClock.now) }
         writer.submit(10)
         await writer.waitUntilIdle()
         writer.submit(20)
@@ -92,15 +92,14 @@ struct ContinuousLightControlTests {
         let (controller, transport) = makeLamp()
         await controller.refreshNow()
         await transport.reset(delay: .milliseconds(75))
-        let clock = ContinuousClock()
-        let oldStart = clock.now
+        let oldStart = MonotonicClock.now
         try await controller.execute(did: "lamp", .batch([.set("p:2:2", .number(80)), .set("p:2:1", .bool(true))]), coalesce: true)
-        let oldMS = milliseconds(clock.now - oldStart)
+        let oldMS = milliseconds(MonotonicClock.now - oldStart)
         let oldMethods = await transport.methods
         await transport.reset(delay: .milliseconds(75))
-        let newStart = clock.now
+        let newStart = MonotonicClock.now
         try await controller.execute(did: "lamp", .setLightBrightness(60))
-        let newMS = milliseconds(clock.now - newStart)
+        let newMS = milliseconds(MonotonicClock.now - newStart)
         let newMethods = await transport.methods
         #expect(oldMethods == ["set_bright", "get_prop", "set_power", "get_prop"])
         #expect(newMethods == ["set_bright", "get_prop"])
@@ -151,8 +150,8 @@ struct ContinuousLightControlTests {
         return (DeviceController(api: api, config: { config }), transport)
     }
 
-    private func milliseconds(_ duration: Duration) -> Double {
-        Double(duration.components.seconds) * 1000 + Double(duration.components.attoseconds) / 1e15
+    private func milliseconds(_ duration: TimeSpan) -> Double {
+        duration.timeInterval * 1_000
     }
 }
 
@@ -180,15 +179,15 @@ private final class PausedValueWrite {
 private actor DelayedLampTransport: MiioTransport {
     private let token = Data(repeating: 0, count: 16)
     private var values: [String: JSONValue] = ["power": .string("on"), "bright": .number(35), "ct": .number(3500)]
-    private var delay = Duration.zero
+    private var delay = TimeSpan.zero
     private var quantize = false
     private(set) var methods: [String] = []
 
-    func reset(delay: Duration = .zero, quantize: Bool = false) {
+    func reset(delay: TimeSpan = .zero, quantize: Bool = false) {
         methods = []; self.delay = delay; self.quantize = quantize
     }
     func setPower(_ on: Bool) { values["power"] = .string(on ? "on" : "off") }
-    func exchange(_ packet: Data, host: String, port: UInt16, timeout: Duration) async throws -> Data {
+    func exchange(_ packet: Data, host: String, port: UInt16, timeout: TimeSpan) async throws -> Data {
         if packet == MiioPacket.hello {
             return Data([0x21, 0x31, 0, 32, 0, 0, 0, 0, 0, 0, 0, 123, 0, 0, 0x13, 0x88] + [UInt8](repeating: 255, count: 16))
         }
@@ -197,7 +196,7 @@ private actor DelayedLampTransport: MiioTransport {
         let method = request["method"]?.stringValue ?? ""
         let args = request["params"]?.arrayValue ?? []
         methods.append(method)
-        try await Task.sleep(for: delay)
+        try await MonotonicClock.sleep(for: delay)
         let result: JSONValue
         if method == "miIO.info" { result = .object(["model": .string("yeelink.light.lamp4")]) }
         else if method == "get_prop" { result = .array(args.map { values[$0.stringValue ?? ""] ?? .null }) }
@@ -209,5 +208,5 @@ private actor DelayedLampTransport: MiioTransport {
         let reply = JSONValue.object(["id": request["id"] ?? .number(0), "result": result])
         return try MiioPacket.encode(Data(reply.compactJSONString.utf8) + [0], token: token, deviceID: 123, stamp: 5000)
     }
-    func broadcast(_ packet: Data, port: UInt16, duration: Duration, rounds: Int) async throws -> [MiioDatagram] { [] }
+    func broadcast(_ packet: Data, port: UInt16, duration: TimeSpan, rounds: Int) async throws -> [MiioDatagram] { [] }
 }

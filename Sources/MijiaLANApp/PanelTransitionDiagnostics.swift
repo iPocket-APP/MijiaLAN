@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 
 /// Opt-in, local layout measurements for native transition verification.
 /// No device data or credentials are recorded and normal runs do no work here.
@@ -22,7 +23,7 @@ enum PanelTransitionDiagnostics {
         guard let path else { return }
         flushTask?.cancel()
         flushTask = Task { @MainActor in
-            do { try await Task.sleep(for: .milliseconds(150)) }
+            do { try await MonotonicClock.sleep(for: .milliseconds(150)) }
             catch { return }
             if let data = try? JSONSerialization.data(withJSONObject: ["events": events], options: [.prettyPrinted, .sortedKeys]) {
                 writer.submit(data, to: URL(fileURLWithPath: path))

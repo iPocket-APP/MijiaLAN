@@ -609,7 +609,7 @@ public enum DeviceSynthesizer {
                   entity.entity_category != "config", entity.entity_category != "diagnostic" else { return false }
             if states[entity.entity_id]?.attributes["device_class"]?.stringValue == "outlet" { return true }
             let objectId = entity.entity_id.dropFirst("switch.".count)
-            return objectId.firstMatch(of: #/(?:^|_)(?:physical_controls_locked|child_lock|indicator|mute|sleep_mode)(?:_|$)/#) == nil
+            return objectId.range(of: #"(?:^|_)(?:physical_controls_locked|child_lock|indicator|mute|sleep_mode)(?:_|$)"#, options: .regularExpression) == nil
         }
         let outletSwitch = primarySwitches.first {
             states[$0.entity_id]?.attributes["device_class"]?.stringValue == "outlet"

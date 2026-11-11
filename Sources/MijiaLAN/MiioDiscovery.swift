@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 
 /// A device that answered the broadcast hello. Discovery needs no token, so it finds IPs and device IDs only.
 public struct MiioDiscoveredDevice: Equatable, Sendable, Identifiable {
@@ -15,7 +16,7 @@ public struct MiioDiscoveredDevice: Equatable, Sendable, Identifiable {
 public enum MiioDiscovery {
     /// Broadcasts the hello three times over `duration` and returns one entry per device ID, sorted by IP.
     public static func discover(
-        duration: Duration = .seconds(3),
+        duration: TimeSpan = .seconds(3),
         transport: any MiioTransport = UDPMiioTransport()
     ) async throws -> [MiioDiscoveredDevice] {
         let replies = try await transport.broadcast(MiioPacket.hello, port: MiioPacket.port, duration: duration, rounds: 3)

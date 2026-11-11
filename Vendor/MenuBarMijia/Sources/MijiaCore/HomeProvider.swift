@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import os
 
 public enum HomeBackend: String, CaseIterable, Identifiable, Sendable {
@@ -180,7 +181,7 @@ public actor HAWebSocketProvider: HomeProvider {
                     logger.error("WebSocket disconnected: \(msg, privacy: .public)")
                     continuation?.yield(.statusChanged(.disconnected(msg)))
                 }
-                try? await Task.sleep(for: .seconds(backoffSeconds))
+                try? await MonotonicClock.sleep(for: .seconds(backoffSeconds))
                 backoffSeconds = min(backoffSeconds * 1.8, 10.0)
             }
         }
@@ -243,7 +244,7 @@ public actor HAWebSocketProvider: HomeProvider {
         let pingTask = Task { [weak self] in
             var pingId = 100_000
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(25))
+                try? await MonotonicClock.sleep(for: .seconds(25))
                 guard !Task.isCancelled else { break }
                 pingId += 1
                 try? await self?.sendJSON(ws: ws, ["id": pingId, "type": "ping"])

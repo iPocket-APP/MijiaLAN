@@ -1,5 +1,6 @@
 #if DEBUG
 import Foundation
+import MijiaSupport
 import MijiaCore
 import MijiaLAN
 
@@ -26,7 +27,7 @@ enum ControlCenterPreview {
 
 actor ControlCenterPreviewTransport: MiioTransport {
     private let token = Data(repeating: 0, count: 16)
-    private let latency: Duration
+    private let latency: TimeSpan
     private var values: [String: [String: JSONValue]] = [
         "192.0.2.3": ["power": .string("on"), "bright": .number(71), "ct": .number(3500)],
         "192.0.2.6": ["power": .string("off"), "mode": .string("auto"), "tar_temp": .number(29),
@@ -38,7 +39,7 @@ actor ControlCenterPreviewTransport: MiioTransport {
         latency = .milliseconds(max(0, milliseconds))
     }
 
-    func exchange(_ packet: Data, host: String, port: UInt16, timeout: Duration) async throws -> Data {
+    func exchange(_ packet: Data, host: String, port: UInt16, timeout: TimeSpan) async throws -> Data {
         guard values[host] != nil else { throw MiioError.hostUnreachable }
         if packet == MiioPacket.hello {
             var hello: [UInt8] = [0x21, 0x31, 0, 32, 0, 0, 0, 0]
@@ -48,7 +49,7 @@ actor ControlCenterPreviewTransport: MiioTransport {
         let (_, payload) = try MiioPacket.decode(packet, token: token)
         guard case .object(let request) = try JSONDecoder().decode(JSONValue.self, from: payload.prefix { $0 != 0 }) else { throw MiioError.timeout }
         let method = request["method"]?.stringValue ?? ""
-        if latency > .zero { try await Task.sleep(for: latency) }
+        if latency > .zero { try await MonotonicClock.sleep(for: latency) }
         let args: [JSONValue]
         if case .array(let array) = request["params"] { args = array } else { args = [] }
         let result: JSONValue
@@ -64,6 +65,6 @@ actor ControlCenterPreviewTransport: MiioTransport {
         return try MiioPacket.encode(Data(reply.compactJSONString.utf8) + [0], token: token, deviceID: 123, stamp: 5000)
     }
 
-    func broadcast(_ packet: Data, port: UInt16, duration: Duration, rounds: Int) async throws -> [MiioDatagram] { [] }
+    func broadcast(_ packet: Data, port: UInt16, duration: TimeSpan, rounds: Int) async throws -> [MiioDatagram] { [] }
 }
 #endif

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sign nested Sparkle helpers before their framework and the containing app.
+# Sign nested helpers and frameworks before the containing app.
 set -euo pipefail
 APP="${1:?Pass an app bundle}"
 IDENTITY="${2:--}"
@@ -20,5 +20,9 @@ fi
 while IFS= read -r -d '' library; do
     codesign "${FLAGS[@]}" "$library"
 done < <(find "$APP/Contents/Frameworks" -maxdepth 1 -name '*.dylib' -type f -print0)
+LOGIN_ITEM="$APP/Contents/Library/LoginItems/MijiaLANLoginItem.app"
+if [[ -d "$LOGIN_ITEM" ]]; then
+    codesign "${FLAGS[@]}" "$LOGIN_ITEM"
+fi
 codesign "${FLAGS[@]}" "$APP"
 codesign --verify --deep --strict "$APP"

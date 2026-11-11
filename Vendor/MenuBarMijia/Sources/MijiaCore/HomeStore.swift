@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 import Combine
 
 public struct ToastNotice: Equatable, Sendable {
@@ -240,7 +241,7 @@ public final class HomeStore: ObservableObject {
     var debounceTasks: [String: Task<Void, Never>] = [:]
     var undoTimerTask: Task<Void, Never>?
     private var toastTimerTask: Task<Void, Never>?
-    var optimisticLockUntil: [String: ContinuousClock.Instant] = [:]
+    var optimisticLockUntil: [String: MonotonicClock.Instant] = [:]
     public static let deviceAliasesKey = "device_aliases"
     var rawDeviceNames: [String: String] = [:]
 
@@ -390,7 +391,7 @@ public final class HomeStore: ObservableObject {
         self.toastNotice = notice
         toastTimerTask?.cancel()
         toastTimerTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2.8))
+            try? await MonotonicClock.sleep(for: .seconds(2.8))
             guard !Task.isCancelled else { return }
             if self?.toastNotice?.id == notice.id {
                 self?.toastNotice = nil
@@ -408,8 +409,8 @@ public final class HomeStore: ObservableObject {
         }
     }
 
-    func lockOptimistic(_ deviceId: String, duration: Duration) {
-        optimisticLockUntil[deviceId] = ContinuousClock.now.advanced(by: duration)
+    func lockOptimistic(_ deviceId: String, duration: TimeSpan) {
+        optimisticLockUntil[deviceId] = MonotonicClock.now.advanced(by: duration)
     }
 
     // MARK: - Assistant Commands & Personalized Jev Context
@@ -450,7 +451,7 @@ public final class HomeStore: ObservableObject {
     /// How long a spoken "撤销" can still reach back.
     static let voiceUndoWindow: TimeInterval = 10 * 60
     /// Test seam for the delay before a scheduled command fires.
-    var assistantSleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    var assistantSleep: @Sendable (TimeSpan) async throws -> Void = { try await MonotonicClock.sleep(for: $0) }
     /// Test seam for "now" when a timer wakes up, so a Mac that slept through it can be simulated.
     var assistantNow: @Sendable () -> Date = { Date() }
     /// A timer that wakes up later than this (the Mac slept, the app was frozen) waits for the user (#22).

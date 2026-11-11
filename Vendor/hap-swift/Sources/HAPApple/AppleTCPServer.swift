@@ -4,6 +4,7 @@
 
 #if canImport(Network)
 import Foundation
+import MijiaSupport
 import Network
 import Logging
 import HAPCore
@@ -136,7 +137,7 @@ private actor HAPConnectionContext {
                         return false
                     }
 
-                    let started = ContinuousClock.now
+                    let started = MonotonicClock.now
                     let response: HTTPResponse
                     do {
                         response = try await charProtocol.handleRequest(request)

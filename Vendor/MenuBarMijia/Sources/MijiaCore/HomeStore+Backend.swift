@@ -1,4 +1,5 @@
 import Foundation
+import MijiaSupport
 
 // Backend connections, discovery, provider events, device naming and polling rhythm (#48).
 extension HomeStore {
@@ -13,8 +14,9 @@ extension HomeStore {
             return miSessionMaskedUserId.map { L10n.tr("米家云端 (\($0))", "Xiaomi Cloud (\($0))") }
                 ?? L10n.tr("米家云端 (未登录)", "Xiaomi Cloud (Signed Out)")
         }
-        if let url = URL(string: serverURLString), let host = url.host() {
-            return host
+        if let host = URLComponents(string: serverURLString)?.percentEncodedHost {
+            // URLComponents includes the IPv6 brackets; the host label omits them.
+            return host.hasPrefix("[") && host.hasSuffix("]") ? String(host.dropFirst().dropLast()) : host
         }
         return serverURLString
             .replacingOccurrences(of: "http://", with: "")
@@ -60,7 +62,7 @@ extension HomeStore {
         }
         latestLGDevice = dev
         rawDeviceNames[dev.id] = dev.name
-        let now = ContinuousClock.now
+        let now = MonotonicClock.now
         if let lockTime = optimisticLockUntil[dev.id], now < lockTime {
             return
         }
@@ -92,17 +94,17 @@ extension HomeStore {
         pushPollingContext()
     }
 
-    public func waitForInitialSnapshot(timeout: Duration = .seconds(4)) async throws {
+    public func waitForInitialSnapshot(timeout: TimeSpan = .seconds(4)) async throws {
         try Task.checkCancellation()
-        let deadline = ContinuousClock.now.advanced(by: timeout)
+        let deadline = MonotonicClock.now.advanced(by: timeout)
         while !hasReceivedInitialSnapshot {
-            guard ContinuousClock.now < deadline else {
+            guard MonotonicClock.now < deadline else {
                 throw HomeProviderError.networkError(L10n.tr(
                     "家居数据尚未加载，请稍后重试",
                     "Home data has not loaded yet. Try again shortly."
                 ))
             }
-            try await Task.sleep(for: .milliseconds(50))
+            try await MonotonicClock.sleep(for: .milliseconds(50))
         }
     }
 
@@ -163,7 +165,7 @@ extension HomeStore {
             }
             if scenes != snapshot.scenes { scenes = snapshot.scenes }
 
-            let now = ContinuousClock.now
+            let now = MonotonicClock.now
             var merged: [SmartDevice] = []
             let existingById = Dictionary(uniqueKeysWithValues: self.devices.map { ($0.id, $0) })
 

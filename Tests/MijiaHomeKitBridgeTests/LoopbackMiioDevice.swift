@@ -1,6 +1,6 @@
 import Foundation
+import MijiaSupport
 import MijiaCore
-import os
 @testable import MijiaLAN
 
 /// A real UDP miIO peer, bound only to 127.0.0.1:0. The blocking descriptor is confined to its
@@ -21,10 +21,13 @@ final class LoopbackMiioDevice: Sendable {
         /// halfway for a number, the old value otherwise.
         var readsBeforeSettling = 0
         var ignoresSetsWhileOff = false
+        var ignoresWrites = false
+        /// Seconds before answering each `set_*` call; the device answers nothing else meanwhile.
+        var writeDelay: TimeInterval = 0
         var settling: [String: (passing: JSONValue, reads: Int)] = [:]
         var error: String?
     }
-    private final class Storage: Sendable { let state = OSAllocatedUnfairLock(initialState: State()) }
+    private final class Storage: Sendable { let state = LockedState(initialState: State()) }
     private let storage = Storage()
     private let queue = DispatchQueue(label: "test.mijialan.miio-device")
     let port: UInt16
@@ -68,6 +71,7 @@ final class LoopbackMiioDevice: Sendable {
                             if model == Self.lampModel, method.hasPrefix("set_") { state.lampWrites.append(method) }
                             if method == "set_properties" {
                                 for p in params {
+                                    if state.ignoresWrites { continue }
                                     if state.ignoresSetsWhileOff, key(p) != "2.1",
                                        (state.written["2.1"] ?? initialValues["2.1"]) == .bool(false) { continue }
                                     if state.readsBeforeSettling > 0, let old = state.written[key(p)] ?? initialValues[key(p)] {
@@ -136,6 +140,8 @@ final class LoopbackMiioDevice: Sendable {
                         let body = JSONValue.object(["id": request["id"] ?? .null,
                             deviceError == nil ? "result" : "error": deviceError ?? result])
                         response = try MiioPacket.encode(Data(body.compactJSONString.utf8) + [0], token: token, deviceID: 77, stamp: 5000)
+                        let delay = storage.state.withLock { $0.writeDelay }
+                        if method.hasPrefix("set_"), delay > 0 { Thread.sleep(forTimeInterval: delay) }
                     }
                     try socket.send(response, to: datagram.host, port: datagram.port)
                 } catch { storage.state.withLock { $0.error = String(describing: error) } }
@@ -147,6 +153,9 @@ final class LoopbackMiioDevice: Sendable {
     func setReadsBeforeSettling(_ reads: Int) { storage.state.withLock { $0.readsBeforeSettling = reads } }
     /// Like a Yeelight lamp ignoring brightness: while power is off, other writes succeed but change nothing.
     func setIgnoresSetsWhileOff(_ ignores: Bool) { storage.state.withLock { $0.ignoresSetsWhileOff = ignores } }
+    /// Every `set_properties` call succeeds and changes nothing.
+    func setIgnoresWrites(_ ignores: Bool) { storage.state.withLock { $0.ignoresWrites = ignores } }
+    func setWriteDelay(_ seconds: TimeInterval) { storage.state.withLock { $0.writeDelay = seconds } }
     var encryptedRequests: Int { storage.state.withLock { $0.encryptedRequests } }
     var writes: Int { storage.state.withLock { $0.writes } }
     var lampWrites: [String] { storage.state.withLock { $0.lampWrites } }
@@ -161,9 +170,9 @@ final class LoopbackMiioDevice: Sendable {
 /// travels through production UDPMiioTransport and the production miIO encryption codec.
 struct LoopbackMiioTransport: MiioTransport {
     let port: UInt16
-    func exchange(_ packet: Data, host: String, port: UInt16, timeout: Duration) async throws -> Data {
+    func exchange(_ packet: Data, host: String, port: UInt16, timeout: TimeSpan) async throws -> Data {
         guard host == "127.0.0.1" else { throw MiioError.hostUnreachable }
         return try await UDPMiioTransport().exchange(packet, host: host, port: self.port, timeout: timeout)
     }
-    func broadcast(_ packet: Data, port: UInt16, duration: Duration, rounds: Int) async throws -> [MiioDatagram] { [] }
+    func broadcast(_ packet: Data, port: UInt16, duration: TimeSpan, rounds: Int) async throws -> [MiioDatagram] { [] }
 }
