@@ -67,9 +67,10 @@ struct WireHomeKitIntegrationTests {
             ])))
             #expect(off.status == 204)
             // Sliding Home's dimmer to zero turns power off while the lamp retains its last level.
-            // Re-sending that unchanged nonzero level can overwrite Home's just-completed zero gesture.
+            // Re-sending that unchanged nonzero level can overwrite Home's just-completed zero gesture,
+            // and Home wrote power off itself, so it hears nothing back.
             let offChanges = try await confirmedChanges()
-            #expect(offChanges == ["\(power):false"])
+            #expect(offChanges.isEmpty)
             let state = try json(await client.request("GET", path))["characteristics"]?.arrayValue ?? []
             #expect(state.first { $0["iid"]?.intValue == power }?["value"] == .bool(false))
             #expect(state.first { $0["iid"]?.intValue == brightness }?["value"] == .number(2))
@@ -334,6 +335,8 @@ struct WireHomeKitIntegrationTests {
             defer { polling.cancel() }
             let full = JSONValue.object(["characteristics": .array([.object(["aid": .number(2), "iid": .number(Double(speed)), "value": .number(100)])])])
             let written = try await controller.request("PUT", "/characteristics", body: data(full))
+            // Home is answered before the device has settled; keep polling until it has.
+            await fixture.settle()
             polling.cancel(); await polling.value
             #expect(written.status == 204)
             let read = try json(await controller.request("GET", "/characteristics?id=2.\(speed)"))
@@ -367,8 +370,92 @@ struct WireHomeKitIntegrationTests {
             ])])
             let written = try await controller.request("PUT", "/characteristics", body: data(on))
             #expect(written.status == 204, "\(String(decoding: written.body, as: UTF8.self))")
+            // Once the device has settled, what it read back is published; a level it ignored would show here.
+            await fixture.settle()
             let read = try json(await controller.request("GET", "/characteristics?id=2.\(speed),2.\(active)"))
             #expect(read["characteristics"]?.arrayValue?.map { $0["value"]?.intValue } == [100, 1])
+            #expect(fixture.device.error == nil)
+        } catch {
+            await controller.close(); await fixture.stop()
+            throw error
+        }
+        await controller.close(); await fixture.stop()
+    }
+
+    @Test("A slow lamp still answers Home at once, so a slider's next write never overtakes an unanswered one")
+    func slowLampAnswersAtOnce() async throws {
+        let fixture = try await Fixture.make(model: LoopbackMiioDevice.lampModel)
+        let client = WireHAPController(port: fixture.port)
+        do {
+            try await client.connect()
+            try await client.pair(setupCode: fixture.code)
+            try await client.verify()
+            let database = try json(await client.request("GET", "/accessories"))
+            let lamp = try #require(database["accessories"]?.arrayValue?.first { $0["aid"]?.intValue == 2 })
+            let chars = lamp["services"]?.arrayValue?.flatMap { $0["characteristics"]?.arrayValue ?? [] } ?? []
+            let power = try #require(chars.first { $0["type"]?.stringValue == "25" }?["iid"]?.intValue)
+            let brightness = try #require(chars.first { $0["type"]?.stringValue == "8" }?["iid"]?.intValue)
+            let temperature = try #require(chars.first { $0["type"]?.stringValue == "CE" }?["iid"]?.intValue)
+            let subscription = JSONValue.object(["characteristics": .array([power, brightness, temperature].map {
+                .object(["aid": .number(2), "iid": .number(Double($0)), "ev": .bool(true)])
+            })])
+            #expect(try await client.request("PUT", "/characteristics", body: data(subscription)).status == 204)
+            for _ in 0..<3 { _ = try await client.nextEvent() }
+            func write(_ entries: [(Int, JSONValue)]) -> JSONValue {
+                .object(["characteristics": .array(entries.map {
+                    .object(["aid": .number(2), "iid": .number(Double($0.0)), "value": $0.1])
+                })])
+            }
+
+            // Each lamp command takes 200 ms. Home's drag on the switched-off lamp starts with [Brightness, On] and
+            // the lift sends the final level without waiting for that answer; one that came after the lift stayed
+            // "Updating" in Home for good.
+            fixture.device.setWriteDelay(0.2)
+            var started = MonotonicClock.now
+            #expect(try await client.request("PUT", "/characteristics", body: data(write([(brightness, .number(2)), (power, .bool(true))]))).status == 204)
+            #expect(MonotonicClock.now - started < .milliseconds(150))
+            started = MonotonicClock.now
+            #expect(try await client.request("PUT", "/characteristics", body: data(write([(brightness, .number(31))]))).status == 204)
+            #expect(MonotonicClock.now - started < .milliseconds(150))
+
+            // The lamp gets power, then only the last level. Home wrote both, so it hears nothing back; a marker on
+            // colour temperature shows that no event came before it.
+            await fixture.settle()
+            #expect(fixture.device.lampWrites == ["set_power", "set_bright"])
+            let hap = try #require(fixture.bridge.bridge)
+            await hap.updateCharacteristic(aid: 2, iid: UInt64(temperature), value: .int32(356), forceNotify: true)
+            let next = try #require(json(await client.nextEvent())["characteristics"]?.arrayValue?.first)
+            #expect(next["iid"]?.intValue == temperature, "Home was told \(next)")
+            let state = try json(await client.request("GET", "/characteristics?id=2.\(power),2.\(brightness)"))["characteristics"]?.arrayValue ?? []
+            #expect(state.first { $0["iid"]?.intValue == power }?["value"] == .bool(true))
+            #expect(state.first { $0["iid"]?.intValue == brightness }?["value"] == .number(31))
+            #expect(fixture.device.error == nil)
+        } catch {
+            await client.close(); await fixture.stop()
+            throw error
+        }
+        await client.close(); await fixture.stop()
+    }
+
+    @Test("A write the device does not apply is corrected for the writer once the device has settled")
+    func ignoredWriteIsCorrected() async throws {
+        let fixture = try await Fixture.make()
+        let controller = WireHAPController(port: fixture.port)
+        do {
+            _ = try await pairedPurifier(controller, fixture)
+            let speed = try await rotationSpeed(controller)
+            let subscribe = JSONValue.object(["characteristics": .array([.object(["aid": .number(2), "iid": .number(Double(speed)), "ev": .bool(true)])])])
+            #expect(try await controller.request("PUT", "/characteristics", body: data(subscribe)).status == 204)
+            let before = try #require(try await event(controller, iid: speed)["value"]?.doubleValue)
+
+            // Accepted, then ignored.
+            fixture.device.setIgnoresWrites(true)
+            let full = JSONValue.object(["characteristics": .array([.object(["aid": .number(2), "iid": .number(Double(speed)), "value": .number(100)])])])
+            #expect(try await controller.request("PUT", "/characteristics", body: data(full)).status == 204)
+            await fixture.settle()
+            #expect(try await event(controller, iid: speed)["value"]?.doubleValue == before)
+            let read = try json(await controller.request("GET", "/characteristics?id=2.\(speed)"))
+            #expect(read["characteristics"]?.arrayValue?.first?["value"]?.doubleValue == before)
             #expect(fixture.device.error == nil)
         } catch {
             await controller.close(); await fixture.stop()
