@@ -139,7 +139,7 @@ private struct AirConditionerControl: View {
                         if snapshot.value(fan.id) == nil { Text(L10n.tr("未知", "Unknown")).tag(-1) }
                         ForEach(fan.options) { Text($0.title).tag($0.value) }
                     }
-                    .pickerStyle(.segmented).labelsHidden().disabled(unavailable)
+                    .panelPickerStyle().labelsHidden().disabled(unavailable)
                 }
                 .font(.system(size: 12))
             }

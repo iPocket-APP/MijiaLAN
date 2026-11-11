@@ -83,7 +83,7 @@ struct ControlCenterSettings: View {
                             Text(L10n.tr("浅色", "Light")).tag("light")
                             Text(L10n.tr("深色", "Dark")).tag("dark")
                         }
-                        .pickerStyle(.segmented).labelsHidden().frame(width: 166).controlSize(.small)
+                        .panelPickerStyle().labelsHidden().frame(width: 166).controlSize(.small)
                     }
                     .padding(.horizontal, 12).padding(.vertical, 11)
                 }

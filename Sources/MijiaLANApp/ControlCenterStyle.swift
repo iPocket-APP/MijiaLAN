@@ -3,6 +3,18 @@ import MijiaCore
 import MijiaLAN
 import SwiftUI
 
+extension Picker {
+    @ViewBuilder
+    func panelPickerStyle() -> some View {
+        if #available(macOS 13, *) {
+            pickerStyle(.segmented)
+        } else {
+            // Monterey's segmented control can fail during AppKit's first layout.
+            pickerStyle(.menu)
+        }
+    }
+}
+
 enum ControlCenterSymbol {
     static let lamp = available("lamp.desk", fallback: "lightbulb")
     static let airConditioner = available("air.conditioner.horizontal", fallback: "snowflake")
