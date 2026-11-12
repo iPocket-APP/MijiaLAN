@@ -128,3 +128,14 @@ published after pending Home writes complete, keeping a lamp's intermediate fade
 `HAPBridge.addAccessory` keeps it when it renumbers services. MijiaLAN marks each device's main service,
 such as Fan v2, so Home builds the accessory tile around it instead of one of its named switches.
 A changed flag is part of MijiaLAN's database signature, so Home is told to reload the accessory.
+
+### State number (2026-11-12)
+
+The Bonjour `s#` was always `1`. In a home without a hub, an iPhone that had left kept showing a bridged lamp as
+off for 45 minutes after it was switched on elsewhere, and opening Home did not reconnect to the bridge. The lamp's
+own HomeKit tile was right; that accessory advertised `s#=39`. `HAPBridge` now keeps a state number that moves once
+after a controller disconnects, on the next change of a writable, notifying characteristic or of its read status.
+Sensor readings do not move it, so a changing temperature cannot re-announce the bridge each time a controller comes
+and goes. `HAPAdvertiser.updateStateNumber` replaces the TXT record in place through the new
+`ServiceDiscovery.updateTXT` (`DNSServiceUpdateRecord` in vendored mdns-swift), and advertises the whole record
+where that is not possible. MijiaLAN persists the number in its bridge layout.

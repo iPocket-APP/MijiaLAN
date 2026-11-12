@@ -6,15 +6,15 @@
 
 | Activity | Connection or storage | Data involved |
 | --- | --- | --- |
-| QR import | Xiaomi account and Xiaomi Home cloud services | Temporary session, device registry, tokens, IPs, names and rooms |
+| Xiaomi Home device import | Xiaomi account and Xiaomi Home cloud services | Login session, device registry, tokens, IPs, names and rooms |
 | Device specifications | `miot-spec.org` and a local cache | Models and public specifications; no Xiaomi credentials required |
 | Daily device control | Local UDP 54321 | miIO / MIoT commands and readings |
 | Apple Home bridge | LAN HAP and Bonjour / mDNS | Bridge identity, selected device names, services, readings and controls |
-| Credential persistence | macOS Keychain | Device registry and tokens, bridge identity, setup code and pairing keys |
+| Credential persistence | Local macOS Keychain | Device registry and tokens, bridge identity, setup code and pairing keys, and the Xiaomi Home login session and server region if remembered |
 | Preferences | Local UserDefaults | Appearance, HomeKit inclusion choices and related identifiers |
 | Software updates | GitHub Pages at `mijialan-updates.ipocket.xyz`, GitHub Releases and its download CDN | Update feed, release notes and packages; hosting services receive the IP address and ordinary HTTP request information |
 
-The app has no project operated backend, advertising or analytics SDK. Xiaomi cloud sessions are used for the current import only; the app does not call the dependency's session persistence API. HTTP uses ephemeral URLSession with automatic cookie storage disabled.
+The app has no project operated backend, advertising or analytics SDK. After a successful QR import, the session is saved to this Mac's Keychain only if you choose Remember Xiaomi Home Login. The app uses the saved session when you choose to re-import devices. Use Forget Login in Settings to delete it. HTTP uses ephemeral URLSession with automatic cookie storage disabled.
 
 Sparkle checks for updates once per day by default. You can disable automatic checks or check manually in Settings. Automatic downloads and installation on quit are off by default. Updates do not upload device registries, tokens or HomeKit pairing material; Sparkle system profile reporting is disabled. The ephemeral URLSession description above applies to device import and specification requests; Sparkle uses its own download mechanism.
 

@@ -26,6 +26,36 @@ public struct LANDeviceHealth: Equatable, Sendable {
     }
 }
 
+/// Reads of one device since the app started talking to its current endpoint, for the diagnostics file: how many
+/// failed tells loss on the network from a single command the device ignored.
+public struct LANLinkStats: Equatable, Sendable {
+    public static let sampleLimit = 50
+    public var since: Date
+    public var reads = 0
+    public var failures = 0
+    public var timeouts = 0
+    public var lastFailure: String?
+    public var lastFailureAt: Date?
+    /// Round trips of the latest successful reads, in milliseconds, oldest first; retries included.
+    public var recentMilliseconds: [Int] = []
+
+    public init(since: Date) { self.since = since }
+
+    public var medianMilliseconds: Int? { percentile(0.5) }
+    public var p95Milliseconds: Int? { percentile(0.95) }
+    private func percentile(_ q: Double) -> Int? {
+        let sorted = recentMilliseconds.sorted()
+        guard !sorted.isEmpty else { return nil }
+        return sorted[min(sorted.count - 1, Int(Double(sorted.count) * q))]
+    }
+}
+
+public struct LANDeviceDiagnostics: Equatable, Sendable {
+    public var firmware: String?
+    public var link: LANLinkStats?
+    public init(firmware: String? = nil, link: LANLinkStats? = nil) { self.firmware = firmware; self.link = link }
+}
+
 /// `MiCloudAPI` served entirely from the LAN, so `MiCloudProvider` (spec loading, synthesis, polling, command
 /// mapping) runs unchanged without a Xiaomi account. The device list and rooms come from the stored config.
 /// Pre-MIoT models go through their `LegacyMiioProfile` instead of `get_properties` / `set_properties`.
@@ -178,7 +208,7 @@ public actor LANMiotAPI: MiCloudAPI {
         let requested = Set(keys)
         let byDid = Dictionary(grouping: keys, by: \.did)
         var values: [MiotPropKey: JSONValue] = [:]
-        await withTaskGroup(of: (LocalDevice, MiioClient, Result<[MiotPropKey: JSONValue], any Error>).self) { group in
+        await withTaskGroup(of: (LocalDevice, MiioClient, Result<[MiotPropKey: JSONValue], any Error>, TimeInterval).self) { group in
             for (did, keys) in byDid {
                 guard let device = devices[did] else { continue }
                 let client = client(for: device)
@@ -186,27 +216,30 @@ public actor LANMiotAPI: MiCloudAPI {
                 let extra = (companions[did] ?? []).filter { !requested.contains($0) }
                 let props = (keys + extra).map { (siid: $0.siid, piid: $0.piid) }
                 group.addTask {
+                    let started = Date()
                     do {
                         let fresh = if let legacy {
                             try await client.getProperties(did: did, props, legacy: legacy)
                         } else {
                             try await client.getProperties(did: did, props)
                         }
-                        return (device, client, .success(fresh))
+                        return (device, client, .success(fresh), Date().timeIntervalSince(started))
                     } catch {
-                        return (device, client, .failure(error))
+                        return (device, client, .failure(error), Date().timeIntervalSince(started))
                     }
                 }
             }
-            for await (device, client, outcome) in group {
+            for await (device, client, outcome, seconds) in group {
                 guard isCurrent(device, client: client) else { continue }
                 let did = device.did
                 switch outcome {
                 case .success(let fresh):
+                    noteRead(did, seconds: seconds, error: nil)
                     latest.merge(fresh) { _, new in new }
                     values.merge(fresh.filter { requested.contains($0.key) }) { _, new in new }
                     record(did, .online, error: nil)
                 case .failure(let error):
+                    noteRead(did, seconds: seconds, error: error)
                     recordFailure(did, error, model: devices[did]?.model)
                 }
             }
@@ -236,13 +269,22 @@ public actor LANMiotAPI: MiCloudAPI {
         publishHealth()
     }
 
+    /// MijiaCore's mapper only sends actions without arguments; one with arguments needs `action(_:inputIDs:)`.
     public func action(_ call: MiotActionCall) async throws {
+        try await action(call, inputIDs: [])
+    }
+
+    /// `inputIDs`: the action's input piids from the spec, paired with `call.inputs` on the wire.
+    public func action(_ call: MiotActionCall, inputIDs: [Int]) async throws {
         let (device, client) = try client(forDid: call.did)
+        let legacy = legacyProfile(for: device)
+        // The caller's mistake, not the device's: rejected before anything counts against its health.
+        guard legacy != nil || call.inputs.count == inputIDs.count else { throw DeviceControlError.argumentMismatch }
         do {
-            if let legacy = legacyProfile(for: device) {
+            if let legacy {
                 try await client.action(call, legacy: legacy)
             } else {
-                try await client.action(call)
+                try await client.action(call, inputIDs: inputIDs)
             }
             guard isCurrent(device, client: client) else { throw CancellationError() }
             record(call.did, .online, error: nil)
@@ -270,6 +312,7 @@ public actor LANMiotAPI: MiCloudAPI {
 
     public func readCapabilities(did: String, capabilities: [DeviceCapability]) async -> [String: DeviceReading] {
         var endpoint: (LocalDevice, MiioClient)?
+        let started = Date()
         do {
             let (device, client) = try client(forDid: did)
             endpoint = (device, client)
@@ -286,12 +329,14 @@ public actor LANMiotAPI: MiCloudAPI {
                 readings = try await client.readProperties(did: did, props)
             }
             guard isCurrent(device, client: client) else { return [:] }
+            noteRead(did, seconds: Date().timeIntervalSince(started), error: nil)
             for (key, reading) in readings where reading.isAvailable { latest[key] = reading.value }
             record(did, .online, error: nil)
             publishHealth()
             return Dictionary(uniqueKeysWithValues: readings.map { (DeviceCapability.propertyID($0.key.siid, $0.key.piid), $0.value) })
         } catch {
             if let (device, client) = endpoint, !isCurrent(device, client: client) { return [:] }
+            if endpoint != nil { noteRead(did, seconds: Date().timeIntervalSince(started), error: error) }
             recordFailure(did, error, model: nil)
             publishHealth()
             return Dictionary(uniqueKeysWithValues: capabilities.filter(\.readable).map { ($0.id, DeviceReading(error: Self.describe(error))) })
@@ -307,10 +352,46 @@ public actor LANMiotAPI: MiCloudAPI {
             health[device.did] = nil
             consecutiveFailures[device.did] = 0
         }
+        // Another endpoint may be another unit: its link and firmware are measured anew.
+        links[device.did] = nil; firmware[device.did] = nil
         let client = MiioClient(host: device.host, token: MiioToken.parse(device.token) ?? Data(),
                                 port: port, transport: transport, timeout: commandTimeout, retries: 1)
         clients[device.did] = (device, client)
         return client
+    }
+
+    // MARK: Diagnostics
+
+    private var links: [String: LANLinkStats] = [:]
+    private var firmware: [String: String] = [:]
+
+    private func noteRead(_ did: String, seconds: TimeInterval, error: (any Error)?) {
+        var link = links[did] ?? LANLinkStats(since: Date())
+        link.reads += 1
+        if let error {
+            link.failures += 1
+            if case MiioError.timeout = error { link.timeouts += 1 }
+            link.lastFailure = Self.describe(error)
+            link.lastFailureAt = Date()
+        } else {
+            link.recentMilliseconds = Array((link.recentMilliseconds + [Int(seconds * 1000)]).suffix(LANLinkStats.sampleLimit))
+        }
+        links[did] = link
+    }
+
+    /// Each device's read record and firmware for the diagnostics file. A device that answers is asked for its
+    /// firmware once per endpoint; nothing else is sent.
+    public func diagnostics(timeout: TimeSpan = .seconds(2)) async -> [String: LANDeviceDiagnostics] {
+        for device in config().devices where firmware[device.did] == nil && health[device.did]?.state == .online {
+            let client = client(for: device)
+            guard let info = try? await client.info(timeout: timeout), isCurrent(device, client: client) else { continue }
+            firmware[device.did] = info.firmware
+        }
+        var result: [String: LANDeviceDiagnostics] = [:]
+        for device in config().devices {
+            result[device.did] = LANDeviceDiagnostics(firmware: firmware[device.did], link: links[device.did])
+        }
+        return result
     }
 
     private func client(forDid did: String) throws -> (LocalDevice, MiioClient) {

@@ -519,6 +519,50 @@ struct CategoryMappingTests {
         #expect(try commands(plan, service, "25", .bool(false), s) == [])
     }
 
+    @Test("A health kettle is one main switch that reads its working state; the next menu stays named switches")
+    func healthKettle() throws {
+        let model = HealthPotStatus.model
+        let schema = try #require(DeviceSchema.bundled(model: model))
+        var s = DeviceSnapshot(device: LocalDevice(did: "9", name: "Test", model: model, host: "test", token: ""),
+                               schema: schema, capabilities: DeviceCapabilityCatalog.capabilities(schema: schema, model: model))
+        let plan = try plan(s)
+        let service = try #require(plan.services.first { service in
+            service.characteristics.contains { if case .kettle = plan.bindings[$0.iid] { true } else { false } }
+        })
+        #expect(service.type == .switch && service.isPrimary)
+        #expect(plan.services.filter(\.isPrimary).count == 1)
+        // Start and stop are the main switch now, not momentary switches of their own.
+        #expect(actionSwitches(plan).isEmpty)
+        let menus = plan.bindings.values.compactMap { binding -> Double? in
+            if case .option("p:2:3", let v) = binding { v.doubleValue } else { nil }
+        }
+        #expect(menus.sorted() == [0, 1, 2, 3, 4, 5, 6, 7])
+
+        // A selected next menu is not the kettle working.
+        s.health = LANDeviceHealth(state: .online)
+        s.prepared["p:2:3"] = .number(5)
+        for (status, on) in [(1.0, false), (2, true), (3, true), (4, true), (5, false), (6, true), (8, true), (9, false), (11, false)] {
+            s.readings["p:2:1"] = DeviceReading(value: .number(status), code: 0)
+            #expect(value(plan, service, "25", s) == .bool(on), "status \(status)")
+        }
+        s.readings["p:2:1"] = DeviceReading(value: .number(1), code: 0)
+        #expect(try commands(plan, service, "25", .bool(true), s) == [.invoke("a:2:1")])
+        #expect(try commands(plan, service, "25", .bool(false), s) == [])
+        s.readings["p:2:1"] = DeviceReading(value: .number(4), code: 0)
+        #expect(try commands(plan, service, "25", .bool(true), s) == [])
+        #expect(try commands(plan, service, "25", .bool(false), s) == [.invoke("a:2:2")])
+        // Lifted off its base, or a state the last read could not establish: nothing is started.
+        s.readings["p:2:1"] = DeviceReading(value: .number(5), code: 0)
+        #expect(throws: HAPError.self) { try commands(plan, service, "25", .bool(true), s) }
+        s.readings["p:2:1"] = DeviceReading(value: .number(1), error: "no reply")
+        #expect(value(plan, service, "25", s) == nil)
+        #expect(throws: HAPError.self) { try commands(plan, service, "25", .bool(true), s) }
+        #expect(try commands(plan, service, "25", .bool(false), s) == [.invoke("a:2:2")])
+        s.health = LANDeviceHealth(state: .offline)
+        s.readings["p:2:1"] = DeviceReading(value: .number(4), code: 0)
+        #expect(value(plan, service, "25", s) == nil)
+    }
+
     @Test("An old Roborock gets the same switch through its legacy miIO table")
     func legacyVacuum() throws {
         // The real model name this time, so the legacy table applies: identify has no legacy method.

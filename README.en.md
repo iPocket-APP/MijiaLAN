@@ -13,7 +13,7 @@ MijiaLAN talks to devices directly on your LAN using miIO / MIoT. You import cre
 - **Menu bar panel**: Control Center style device tiles, with power controls, detail pages and offline explanations. Left-click to show or hide the panel; right-click for Settings and Quit.
 - **Apple Home bridge** with light, outlet, fan, air purifier, air conditioner and sensor services. Choose which devices to expose.
 - **One shared state**: the Mac and Apple Home share capabilities, polling and command execution. Modes, brightness, color temperature, temperature, fan speed, swing, readings and cooking presets follow each model.
-- **Credentials stay on your Mac**: device tokens, the registry and HomeKit pairing material live in macOS Keychain. Xiaomi cloud login sessions are not kept.
+- **Credentials stay on your Mac**: device tokens, the registry and HomeKit pairing material live in macOS Keychain. After a QR import, you can choose to remember your Xiaomi Home login for the next import.
 - **IP rediscovery**: periodic discovery broadcasts update addresses by device ID after your router reassigns them.
 - **In-app updates**: check from Settings or the menu-bar context menu. Checks run daily by default; automatic downloads and installation on quit are optional.
 - **Light in the background**: retries for offline devices back off to at most once every 24 hours. The panel releases its views after 30 seconds hidden and keeps the page, scroll position and input drafts. See [performance and background operation](docs/performance.md).
@@ -34,12 +34,12 @@ In-app updates are available starting with 0.1.6; earlier versions require one m
 
 - macOS 12 or later on Apple silicon or Intel. The Universal installer includes both architectures.
 - A network path between your Mac and the devices. HomeKit discovery also needs reachable Bonjour / mDNS.
-- Internet access for QR import and for device specifications that are not cached yet.
+- Internet access to import from Xiaomi Home and to fetch device specifications that are not cached yet.
 
 ## Setup
 
 1. Open the menu bar panel and enter Settings.
-2. Select your server region, start QR import and confirm with Xiaomi Home. Alternatively, enter the device IP and its 32 character hexadecimal token manually.
+2. Select your server region, start QR import and confirm with Xiaomi Home. After the import, choose Remember Xiaomi Home Login to re-import from the same region with one click. Scan again if the session expires. Alternatively, enter the device IP and its 32 character hexadecimal token manually.
 3. Choose the devices to expose in HomeKit settings. Exclude devices already connected to HomeKit natively to avoid duplicates.
 4. In Apple Home on iPhone, select **+ → Add Accessory** and scan the bridge QR code. Confirm the uncertified accessory prompt to continue.
 
@@ -77,6 +77,7 @@ How generated controls appear in Apple Home: lights, fans and air purifiers use 
 
 - Selecting a cooking preset only stages parameters; starting the appliance is a separate action.
 - A robot vacuum's switch starts cleaning when turned on and sends the robot back to its dock when turned off. It shows on while the robot reports cleaning. Stop, pause, vacuum-and-mop and other actions without parameters appear as named switches; actions that need room or zone parameters are not offered.
+- A health kettle's main control in Home is one switch. It shows on while the kettle cooks, waits on a schedule or keeps warm. Turning it on starts the selected next menu, and turning it off stops. It does nothing without a selected menu, while the pot is off its base, or while its state cannot be read. The next menu remains a row of named switches, and selecting one does not start the kettle. The kettle's temperature is read-only: its specification offers no writable temperature.
 - Interfaces with unconfirmed parameter semantics never receive guessed commands.
 - Features without a suitable native Home control use named switches or presets; some readings appear only on the Mac.
 - For air conditioners and heaters without a temperature reading, the current temperature is a placeholder based on the target temperature, not a room temperature measurement.
@@ -99,7 +100,7 @@ IP changes are picked up automatically. Reconfiguring a device's Wi-Fi may chang
 
 ## Privacy
 
-MijiaLAN has no project operated cloud backend, advertising or analytics SDK. QR import connects to Xiaomi services. Importing or adding devices may fetch specifications from `miot-spec.org`. Device control uses UDP 54321, and Apple Home accesses the LAN HAP bridge.
+MijiaLAN has no project operated cloud backend, advertising or analytics SDK. Importing from Xiaomi Home connects to Xiaomi services. Importing or adding devices may fetch specifications from `miot-spec.org`. Device control uses UDP 54321, and Apple Home accesses the LAN HAP bridge.
 
 Source tokens and preview data are fixtures. Real device registries, Keychain data, pairing codes, diagnostic output and local screenshots are excluded from publication. Diagnostic exports omit tokens and pairing keys but can still contain device names, IDs, readings and timestamps. Review them before sharing.
 

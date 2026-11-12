@@ -93,12 +93,14 @@ struct DeviceCommandFeedback: View {
     var body: some View {
         Group {
             if snapshot.lastCommand == "已选择下次参数，尚未启动" {
-                Text(L10n.tr("已选择下次菜单参数，尚未开始烹饪", "Next menu settings selected. Cooking has not started."))
+                Text(L10n.tr("已选择下次菜单", "Next menu selected."))
             } else if let receipt = snapshot.commandReceipt, receipt.error == nil {
                 if receipt.confirmedAt != nil {
                     if showsConfirmation {
                         Label(confirmation(for: receipt), systemImage: "checkmark.circle")
                     }
+                } else if receipt.checkingStateAfterFailure {
+                    Text(L10n.tr("指令未获确认，正在读取设备状态…", "Command unconfirmed. Reading device status…"))
                 } else if receipt.acceptedAt == nil {
                     Text(L10n.tr("正在发送…", "Sending…"))
                 } else if snapshot.capabilities.first(where: { $0.id == receipt.capabilityID }).map({ $0.kind == .property && !$0.readable }) == true {

@@ -15,7 +15,7 @@ public struct CloudImportResult: Equatable, Sendable {
 }
 
 /// The only place the Xiaomi cloud is used: one device-list read for tokens and LAN IPs, plus the room names.
-/// The caller passes a fresh `MiSession` and drops it afterwards; nothing here stores it.
+/// The caller supplies the Xiaomi Home session and manages its lifetime.
 public enum CloudTokenImport {
     /// Server regions, most common first. A device list is per region, so an empty one means "try the next".
     public static let regions = ["cn", "de", "us", "sg", "ru", "i2"]
@@ -28,6 +28,7 @@ public enum CloudTokenImport {
         let order = [session.region] + (tryOtherRegions ? regions.filter { $0 != session.region } : [])
         var lastError: (any Error)?
         for region in order {
+            try Task.checkCancellation()
             var scoped = session
             scoped.region = region
             let client = MiCloudClient(session: scoped, transport: transport)
@@ -45,6 +46,7 @@ public enum CloudTokenImport {
             } catch MiCloudError.sessionExpired {
                 throw MiCloudError.sessionExpired
             } catch {
+                try Task.checkCancellation()
                 lastError = error
             }
         }

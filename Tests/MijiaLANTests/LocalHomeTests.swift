@@ -76,6 +76,34 @@ struct LANMiotAPITests {
         await api.shutdown()
     }
 
+    @Test("Diagnostics count each device's reads and ask an answering device for its firmware once")
+    func diagnostics() async throws {
+        let network = FakeMiioNetwork()
+        let device = network.add(host: "192.168.1.10", token: tokenA, deviceID: 10)
+        device.props["2.1"] = .bool(true)
+        let config = ConfigBox(LocalHomeConfig(devices: [lamp("10", host: "192.168.1.10")]))
+        let api = LANMiotAPI(config: { config.value }, transport: network)
+        _ = try await api.getProps([MiotPropKey(did: "10", siid: 2, piid: 1)])
+        _ = try await api.getProps([MiotPropKey(did: "10", siid: 2, piid: 1)])
+        var report = await api.diagnostics()
+        #expect(report["10"]?.firmware == "1.0.0")
+        #expect(report["10"]?.link?.reads == 2)
+        #expect(report["10"]?.link?.failures == 0)
+        #expect(report["10"]?.link?.medianMilliseconds != nil)
+        // Asked once per endpoint, not on every export.
+        report = await api.diagnostics()
+        #expect(report["10"]?.firmware == "1.0.0")
+        #expect(device.receivedMethods.filter { $0 == "miIO.info" }.count == 1)
+
+        device.offline = true
+        _ = try? await api.getProps([MiotPropKey(did: "10", siid: 2, piid: 1)])
+        report = await api.diagnostics()
+        #expect(report["10"]?.link?.reads == 3)
+        #expect(report["10"]?.link?.failures == 1)
+        #expect(report["10"]?.link?.lastFailure != nil)
+        await api.shutdown()
+    }
+
     @Test("Writes are grouped per device and a rejected write throws")
     func writes() async throws {
         let network = FakeMiioNetwork()
@@ -90,7 +118,13 @@ struct LANMiotAPITests {
         #expect(device.receivedMethods == ["set_properties"])
         #expect(device.props["2.2"] == .number(30))
 
-        try await api.action(MiotActionCall(did: "10", siid: 3, aiid: 1, inputs: [.number(2)]))
+        try await api.action(MiotActionCall(did: "10", siid: 3, aiid: 1, inputs: [.number(2)]), inputIDs: [1])
+        #expect(device.receivedWrites.last?["in"] == .array([.object(["piid": .number(1), "value": .number(2)])]))
+        // Arguments without their spec piids are refused before sending and do not count against the device.
+        await #expect(throws: DeviceControlError.argumentMismatch) {
+            try await api.action(MiotActionCall(did: "10", siid: 3, aiid: 1, inputs: [.number(2)]))
+        }
+        #expect(device.receivedMethods.filter { $0 == "action" }.count == 1)
         await #expect(throws: MiioError.self) {
             try await api.setProps([MiotPropWrite(did: "10", siid: 9, piid: 9, value: .number(1))])
         }

@@ -30,6 +30,14 @@ public final class DeviceController: ObservableObject {
     @Published public private(set) var structureRevision: UInt64 = 0
     @Published public private(set) var valuesRevision: UInt64 = 0
     @Published public private(set) var retryStates: [String: ProbeRetryState] = [:]
+    /// The last `commandLogLimit` commands per device, oldest first, for the diagnostics file. Not published: nothing
+    /// on screen shows it, so recording one never redraws the panel.
+    public private(set) var commandLog: [String: [DeviceCommandRecord]] = [:]
+    public static let commandLogLimit = 20
+    /// Who sent the commands executed in this task; Apple Home's writes set `.appleHome`.
+    @TaskLocal public static var commandSource: DeviceCommandRecord.Source = .mac
+    /// The LAN layer, for its per-device diagnostics.
+    public var lan: LANMiotAPI { api }
     private let api: LANMiotAPI
     private let config: @Sendable () -> LocalHomeConfig
     private var pollTask: Task<Void, Never>?
@@ -53,7 +61,7 @@ public final class DeviceController: ObservableObject {
     private var refreshing = false
     private var queues: [String: Task<Void, Error>] = [:]
     private var queueIDs: [String: UUID] = [:]
-    private var actionsPending: Set<String> = []
+    @Published private var actionsPending: Set<String> = []
     private var continuations: [UUID: AsyncStream<HomeProviderEvent>.Continuation] = [:]
     private struct Pending {
         var command: CapabilityCommand
@@ -280,6 +288,8 @@ public final class DeviceController: ObservableObject {
         snapshots[did] = snapshot
     }
 
+    public func isActionPending(for did: String) -> Bool { actionsPending.contains(did) }
+
     public func execute(did: String, _ command: CapabilityCommand, coalesce: Bool = false) async throws {
         if coalesce, let id = command.coalescingID, !command.hasAction {
             let key = did + ":" + id
@@ -321,7 +331,65 @@ public final class DeviceController: ObservableObject {
         try await task.value
     }
 
+    /// Logs each command that reaches a device, or the Mac's store of next-menu settings, with the request as sent
+    /// and how it ended. Batches and adjustments come back here for each command they resolve to.
     private func perform(did: String, _ command: CapabilityCommand) async throws {
+        let id: String
+        switch command {
+        case .set(let key, _), .invoke(let key): id = key
+        default: return try await performCommand(did: did, command)
+        }
+        guard let snapshot = snapshots[did], let cap = snapshot.capabilitiesByID[id] else { return try await performCommand(did: did, command) }
+        let status = snapshot.capability(snapshot.schema.category, "status")
+        let started = Date()
+        var record = DeviceCommandRecord(at: started, source: Self.commandSource, capabilityID: id,
+                                         request: request(for: command, capability: cap, snapshot: snapshot),
+                                         statusBefore: status.flatMap { snapshot.value($0.id)?.integer })
+        defer {
+            record.milliseconds = Int(Date().timeIntervalSince(started) * 1000)
+            record.statusAfter = status.flatMap { snapshots[did]?.value($0.id)?.integer }
+            record.onlineAfter = snapshots[did]?.isOnline == true
+            var log = commandLog[did] ?? []
+            log.append(record)
+            commandLog[did] = Array(log.suffix(Self.commandLogLimit))
+        }
+        do {
+            try await performCommand(did: did, command)
+            if case .set = command, cap.prepared {
+                record.outcome = .prepared; record.request = nil
+            } else {
+                record.outcome = snapshots[did]?.commandReceipt?.confirmedAt != nil ? .confirmed : .accepted
+            }
+        } catch {
+            record.outcome = .failed
+            record.error = error.localizedDescription
+            record.errorCode = String(describing: error)
+            // Refused before anything went out (offline, nothing selected, a value out of range), except the two
+            // that are only known after sending.
+            if let control = error as? DeviceControlError, control != .unanswered, control != .notConfirmed { record.request = nil }
+            throw error
+        }
+    }
+
+    /// The miIO request this command sends, built by the same functions as the request itself. A pre-MIoT device is
+    /// sent its legacy method instead, which the prefix says.
+    private func request(for command: CapabilityCommand, capability cap: DeviceCapability, snapshot: DeviceSnapshot) -> String? {
+        let text: String
+        switch command {
+        case .set(_, let raw):
+            guard !cap.prepared, let value = try? cap.validated(raw) else { return nil }
+            text = "set_properties " + MiioClient.setParams([MiotPropWrite(did: snapshot.id, siid: cap.siid, piid: cap.iid, value: value)]).compactJSONString
+        case .invoke:
+            guard let inputs = try? actionInputs(snapshot: snapshot, action: cap),
+                  let params = try? MiioClient.actionParams(MiotActionCall(did: snapshot.id, siid: cap.siid, aiid: cap.iid, inputs: inputs), inputIDs: cap.inputs)
+            else { return nil }
+            text = "action " + params.compactJSONString
+        default: return nil
+        }
+        return LegacyMiioProfile.forModel(snapshot.device.model) == nil ? text : "legacy miIO, mapped from " + text
+    }
+
+    private func performCommand(did: String, _ command: CapabilityCommand) async throws {
         if case .batch(let commands) = command {
             for command in commands { try await perform(did: did, command) }
             return
@@ -385,8 +453,10 @@ public final class DeviceController: ObservableObject {
             }
         case .invoke:
             snapshots[did]?.commandReceipt = DeviceCommandReceipt(capabilityID: id)
+            snapshots[did]?.lastCommand = nil
             guard snapshot.isOnline else { throw DeviceControlError.offline }
             let inputs = try actionInputs(snapshot: snapshot, action: cap)
+            publish()
             if cap.name == "start-cook" {
                 let params = snapshot.capabilities.filter { $0.prepared && $0.writable && snapshot.prepared[$0.id] != nil }.sorted {
                     let left = ["mode", "cook-mode"].contains($0.name) ? 0 : 1
@@ -399,14 +469,20 @@ public final class DeviceController: ObservableObject {
                 }
             }
             do {
-                try await api.action(MiotActionCall(did: did, siid: cap.siid, aiid: cap.iid, inputs: inputs))
+                try await api.action(MiotActionCall(did: did, siid: cap.siid, aiid: cap.iid, inputs: inputs), inputIDs: cap.inputs)
                 snapshots[did]?.commandReceipt?.acceptedAt = Date()
             } catch {
                 // Non-idempotent actions are never retried. Re-read before a person decides what to do next.
+                snapshots[did]?.commandReceipt?.checkingStateAfterFailure = true
+                publish()
                 await refresh(did: did, capabilities: snapshot.capabilities.filter(\.readable))
+                // A device that still answers reads was reachable: the generic timeout text ("may be offline")
+                // would send the person to check the network instead.
+                if case MiioError.timeout = error, snapshots[did]?.isOnline == true { throw DeviceControlError.unanswered }
                 throw error
             }
             snapshots[did]?.lastCommand = L10n.tr("设备已接受动作，正在确认状态", "Action accepted. Confirming device state.")
+            publish()
             let status = snapshot.capability(snapshot.schema.category, "status")
             let before = status.flatMap { snapshot.value($0.id)?.integer }
             var confirmed = false
@@ -444,8 +520,8 @@ public final class DeviceController: ObservableObject {
         case ("air-fryer", "cancel-cooking"): return [0, 1, 6, 7, 12].contains(status)
         case ("juicer", "start-cook"): return [2, 4, 6].contains(status)
         case ("juicer", "cancel-cooking"): return [1, 5, 7].contains(status)
-        case ("health-pot", "start-cook"): return [2, 3, 4, 6, 7, 8].contains(status)
-        case ("health-pot", "cancel-cooking"): return [1, 5, 11].contains(status)
+        case ("health-pot", "start-cook"): return HealthPotStatus(rawValue: status)?.isActive == true
+        case ("health-pot", "cancel-cooking"): return HealthPotStatus(rawValue: status)?.isStopped == true
         case ("cooker", "start-cook"): return [2, 3, 4].contains(status)
         case ("cooker", "cancel-cooking"): return [1, 7].contains(status)
         default: return false

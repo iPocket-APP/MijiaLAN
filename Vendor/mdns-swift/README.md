@@ -1,6 +1,7 @@
 # mdns-swift
 
-MijiaLAN vendors 1.2.0 at `ef8c8d387a15b762816f88264667d3278042fa78` with shared timing support for macOS 12.
+MijiaLAN vendors 1.2.0 at `ef8c8d387a15b762816f88264667d3278042fa78` with shared timing support for macOS 12. `ServiceDiscovery.updateTXT` is a local addition (2026-11-12): `AppleServiceDiscovery` replaces a running
+registration's TXT record with `DNSServiceUpdateRecord`; other conformers return `false` and the caller re-advertises.
 
 Shared mDNS/DNS-SD service discovery for Swift — used by [matter-swift](https://github.com/monagle/matter-swift) and [hap-swift](https://github.com/monagle/hap-swift).
 

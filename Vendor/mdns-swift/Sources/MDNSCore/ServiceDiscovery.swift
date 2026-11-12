@@ -249,12 +249,23 @@ public protocol ServiceDiscovery: Sendable {
 
     /// Stop advertising a specific service by name.
     func stopAdvertising(name: String) async
+
+    /// Replaces the TXT record of a running advertisement in place, without withdrawing the service.
+    ///
+    /// Returns `false` when there is no such advertisement or the platform cannot update it in place; the caller
+    /// then advertises the whole record again.
+    func updateTXT(name: String, serviceType: ServiceType, txtRecords: [String: String]) async -> Bool
 }
 
 extension ServiceDiscovery {
     /// Default implementation: stop all advertisements.
     public func stopAdvertising(name: String) async {
         await stopAdvertising()
+    }
+
+    /// Default: no in-place update; the caller re-advertises.
+    public func updateTXT(name: String, serviceType: ServiceType, txtRecords: [String: String]) async -> Bool {
+        false
     }
 
     /// Default for conformers that predate TXT resolution: address only,

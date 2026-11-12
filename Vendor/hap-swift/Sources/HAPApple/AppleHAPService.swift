@@ -115,6 +115,7 @@ public actor AppleHAPService {
                 category: category,
                 setupID: setupID,
                 configNumber: configNumber,
+                stateNumber: await bridge.currentStateNumber,
                 isPaired: isPaired
             )
         }
@@ -135,6 +136,7 @@ public actor AppleHAPService {
                 category: category,
                 setupID: setupID,
                 configNumber: configNumber,
+                stateNumber: await bridge.currentStateNumber,
                 isPaired: isPaired
             )
         }
@@ -150,6 +152,21 @@ public actor AppleHAPService {
         try await server.start(port: port, loopbackOnly: loopbackOnly)
         let actualPort = server.port
 
+        // A new s# replaces the TXT record in place; registered only once the server listens, so a failed start on
+        // an occupied port leaves no handler advertising that port.
+        await bridge.addStateNumberChangeHandler { [advertiser, bridge, pairingStore, setupID, server] stateNumber in
+            guard !loopbackOnly else { return }
+            try? await advertiser.updateStateNumber(
+                name: await bridge.accessoryDatabase().first?.name ?? "HAP Bridge",
+                port: server.port,
+                category: await bridge.category,
+                setupID: setupID,
+                configNumber: await bridge.currentConfigurationNumber,
+                stateNumber: stateNumber,
+                isPaired: await pairingStore.isPaired
+            )
+        }
+
         let isPaired = await pairingStore.isPaired
         let configNumber = await bridge.currentConfigurationNumber
         if !loopbackOnly {
@@ -159,6 +176,7 @@ public actor AppleHAPService {
                 category: await bridge.category,
                 setupID: setupID,
                 configNumber: configNumber,
+                stateNumber: await bridge.currentStateNumber,
                 isPaired: isPaired
             )
         }
@@ -200,6 +218,7 @@ public actor AppleHAPService {
             category: await bridge.category,
             setupID: setupID,
             configNumber: configNumber,
+            stateNumber: await bridge.currentStateNumber,
             isPaired: isPaired
         )
     }

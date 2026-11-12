@@ -429,6 +429,23 @@ public final class AppleServiceDiscovery: ServiceDiscovery, @unchecked Sendable 
         }
     }
 
+    /// `DNSServiceUpdateRecord` on the registration's primary TXT record. It runs on the registration's queue, and
+    /// under the lock so a concurrent stop cannot deallocate the ref mid-call.
+    public func updateTXT(name: String, serviceType: ServiceType, txtRecords: [String: String]) async -> Bool {
+        let data = Self.txtRecordData(txtRecords)
+        let err: DNSServiceErrorType? = queue.sync {
+            withLock {
+                guard let ref = advertisedRefs[name] else { return nil }
+                return data.withUnsafeBytes { ptr in
+                    DNSServiceUpdateRecord(ref, nil, 0, UInt16(data.count), ptr.baseAddress, 0)
+                }
+            }
+        }
+        guard let err else { return false }
+        if err != kDNSServiceErr_NoError { logger.warning("TXT update for '\(name)' failed: \(err)") }
+        return err == kDNSServiceErr_NoError
+    }
+
     public func stopAdvertising() async {
         let (toStop, addrRef) = withLock { () -> ([DNSServiceRef], DNSServiceRef?) in
             let all = Array(advertisedRefs.values)

@@ -3,18 +3,27 @@ import MijiaLAN
 import SwiftUI
 
 struct CapabilityControls: View {
-    let controller: DeviceController
+    @ObservedObject var controller: DeviceController
     let snapshot: DeviceSnapshot
     var excluding: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if snapshot.schema.category == "health-pot", let status = snapshot.capability("health-pot", "status") {
+                HStack {
+                    Text(L10n.tr("当前状态", "Current Status"))
+                    Spacer()
+                    Text(status.formatted(snapshot.isOnline ? snapshot.value(status.id) : nil))
+                        .foregroundStyle(.secondary)
+                }
+            }
             if snapshot.schema.isCooking {
                 Text(L10n.tr("先选择下次菜单，再点开始。选择参数不会启动设备。", "Choose the next menu, then press Start. Selecting settings does not start the device."))
                     .font(.caption).foregroundStyle(.secondary)
             }
             ForEach(snapshot.controls.filter { !excluding.contains($0.id) }) { capability in
-                CapabilityControlRow(controller: controller, snapshot: snapshot, capability: capability)
+                CapabilityControlRow(controller: controller, snapshot: snapshot, capability: capability,
+                                     actionPending: capability.kind == .action && controller.isActionPending(for: snapshot.id))
             }
         }
         .font(.caption).controlSize(.small)
@@ -25,6 +34,7 @@ private struct CapabilityControlRow: View {
     let controller: DeviceController
     let snapshot: DeviceSnapshot
     let capability: DeviceCapability
+    let actionPending: Bool
     @State private var error: String?
     @State private var working = false
 
@@ -34,11 +44,15 @@ private struct CapabilityControlRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .center) {
-                Text(capability.prepared && ["mode", "cook-mode"].contains(capability.name) ? L10n.tr("下次菜单", "Next Menu") : capability.displayTitle)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if capability.kind == .action {
+                    Spacer(minLength: 0)
+                } else {
+                    Text(capability.displayTitle).frame(maxWidth: .infinity, alignment: .leading)
+                }
                 control
             }
-            .disabled(working || (!capability.prepared && !snapshot.isOnline))
+            .disabled(working || actionPending || (!capability.prepared && !snapshot.isOnline)
+                      || (capability.kind == .action && !snapshot.permitsHealthPotAction(capability)))
             if let error { Text(error).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
         }
     }
@@ -62,7 +76,7 @@ private struct CapabilityControlRow: View {
                     // An option the spec does not list, shown by its number.
                     Text(capability.formatted(value)).tag(reported)
                 }
-                ForEach(capability.options) { Text($0.title).tag($0.value) }
+                ForEach(capability.options) { Text(capability.optionTitle($0)).tag($0.value) }
             }
             .labelsHidden().frame(maxWidth: 180)
         case .number:
@@ -71,7 +85,7 @@ private struct CapabilityControlRow: View {
                 send(.set(capability.id, .number($0)))
             }
         case .button:
-            Button(working ? L10n.tr("执行中…", "Running…") : capability.title) {
+            Button(working && capability.kind != .action ? L10n.tr("执行中…", "Running…") : capability.title) {
                 send(capability.kind == .action ? .invoke(capability.id) : .set(capability.id, .bool(true)))
             }
         default: Text(capability.formatted(value))

@@ -36,6 +36,9 @@ public enum CapabilityHAPBinding: Sendable {
     case action(String)
     /// A robot vacuum's switch: on invokes `start`, off invokes `dock`, and it reads on while `status` says cleaning.
     case cleaning(start: String, dock: String, status: String)
+    /// A health kettle's switch: it reads on while the kettle cooks, waits on a schedule or keeps warm. On starts the
+    /// next menu selected on the Mac or in Home; off stops.
+    case kettle(start: String, stop: String)
     case name(String, String)
     case legacy(HomeKitRole)
     case constant(HAPCharacteristicValue)
@@ -595,6 +598,22 @@ public enum CapabilityHomeKitMapper {
             builder.add(key, type: .on, format: .bool, binding: .cleaning(start: start.id, dock: dock.id, status: status.id), writable: true)
             consumed.formUnion([start.id, dock.id])
             return true
+        case "health-pot":
+            // Apple Home has no kettle either. One switch shows whether it is working, rather than a sensor tile that
+            // reads "on" whenever a next menu is selected. The menu stays a row of named switches; selecting one
+            // does not start the kettle.
+            func action(_ name: String) -> DeviceCapability? {
+                s.capabilities.first { $0.kind == .action && $0.control == .button && $0.service == category && $0.name == name }
+            }
+            guard s.device.model == HealthPotStatus.model, let status = s.capability(category, "status"), status.readable,
+                  let start = action("start-cook"), let stop = action("cancel-cooking") else { return false }
+            // The key of the former Start switch, so a scene that turned it on still starts the kettle.
+            let key = "control:" + start.id
+            builder.service(key, type: .switch, primary: true)
+            builder.add(key, type: .on, format: .bool, binding: .kettle(start: start.id, stop: stop.id), writable: true)
+            builder.names(key, title: L10n.tr("养生壶", "Health Kettle"))
+            consumed.formUnion([start.id, stop.id])
+            return true
         default:
             return false
         }
@@ -697,6 +716,7 @@ public enum CapabilityHomeKitMapper {
             return legacyValues[role]
         case .action: return .bool(false)
         case .cleaning(_, _, let status): return vacuumStatus(status, in: s).map { .bool(VacuumStatus.isCleaning($0)) }
+        case .kettle: return s.isOnline ? s.healthPotStatus.map { .bool($0.isActive) } : nil
         case .option(let id, let option):
             guard let c = s.capabilities.first(where: { $0.id == id }) else { return nil }
             if c.control == .button { return .bool(false) }
@@ -809,6 +829,16 @@ public enum CapabilityHomeKitMapper {
             let current = vacuumStatus(status, in: s)
             if n != 0 { return current.map(VacuumStatus.isCleaning) == true ? [] : [.invoke(start)] }
             return current.map(VacuumStatus.isDocking) == true ? [] : [.invoke(dock)]
+        case .kettle(let start, let stop):
+            // Nothing is sent when it already does what was asked. Without a known state nothing is started: a
+            // failed read cannot rule out that it is already heating. A lifted pot, a fault or an update refuses.
+            let current = s.healthPotStatus
+            if n != 0 {
+                if current?.isActive == true { return [] }
+                guard current?.canStart == true else { throw HAPError.busy }
+                return [.invoke(start)]
+            }
+            return current?.isStopped == true ? [] : [.invoke(stop)]
         case .option(let id, let v): return n == 0 ? [] : [.set(id, v)]
         case .property(let id, let conversion):
             guard let c = s.capabilities.first(where: { $0.id == id }) else { throw HAPError.notFound }

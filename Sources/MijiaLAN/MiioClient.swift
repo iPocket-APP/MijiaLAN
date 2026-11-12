@@ -235,20 +235,38 @@ extension MiioClient {
 
     /// Throws `MiioError.deviceError` with the first negative per-item code.
     public func setProperties(_ writes: [MiotPropWrite]) async throws {
-        let params = JSONValue.array(writes.map {
-            .object(["did": .string($0.did), "siid": .number(Double($0.siid)), "piid": .number(Double($0.piid)), "value": $0.value])
-        })
-        let result = try await call("set_properties", params: params)
+        let result = try await call("set_properties", params: Self.setParams(writes))
         guard let items = result.arrayValue, items.count == writes.count else { throw MiioError.badResponse(L10n.tr("写入结果数量不符", "The number of write results does not match.")) }
         try Self.checkCodes(items)
     }
 
-    public func action(_ call: MiotActionCall) async throws {
-        let result = try await self.call("action", params: .object([
-            "did": .string(call.did), "siid": .number(Double(call.siid)),
-            "aiid": .number(Double(call.aiid)), "in": .array(call.inputs),
-        ]), retryCount: 0)
+    /// `inputIDs` are the action's input piids from the spec, in order. On the LAN each argument goes out as
+    /// `{"piid", "value"}`: firmware drops a bare `"in": [5]` without replying (chunmi.health_pot.a1 2.1.8_0006
+    /// ignored start-cook for 30 s, then started within a second when given `[{"piid": 3, "value": 5}]`). The cloud
+    /// API takes bare values, which is why `MiotActionCall` keeps them.
+    public func action(_ call: MiotActionCall, inputIDs: [Int] = []) async throws {
+        let result = try await self.call("action", params: Self.actionParams(call, inputIDs: inputIDs), retryCount: 0)
         try Self.checkCodes([result])
+    }
+
+    /// The `set_properties` params exactly as sent; diagnostics record the same text.
+    static func setParams(_ writes: [MiotPropWrite]) -> JSONValue {
+        .array(writes.map {
+            .object(["did": .string($0.did), "siid": .number(Double($0.siid)), "piid": .number(Double($0.piid)), "value": $0.value])
+        })
+    }
+
+    /// The `action` params exactly as sent; diagnostics record the same text.
+    static func actionParams(_ call: MiotActionCall, inputIDs: [Int]) throws -> JSONValue {
+        .object([
+            "did": .string(call.did), "siid": .number(Double(call.siid)),
+            "aiid": .number(Double(call.aiid)), "in": .array(try actionArguments(call.inputs, inputIDs: inputIDs)),
+        ])
+    }
+
+    static func actionArguments(_ values: [JSONValue], inputIDs: [Int]) throws -> [JSONValue] {
+        guard values.count == inputIDs.count else { throw DeviceControlError.argumentMismatch }
+        return zip(inputIDs, values).map { .object(["piid": .number(Double($0)), "value": $1]) }
     }
 
     /// MIoT per-item codes: 0 done, 1 accepted; negatives are errors (e.g. -4004 invalid value, -4003 not writable).

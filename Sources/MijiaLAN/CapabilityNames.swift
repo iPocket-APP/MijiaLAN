@@ -109,7 +109,7 @@ public enum CapabilityNames {
          "start-sweep-mop": L10n.tr("扫拖", "Vacuum and Mop"), "stop-sweeping": L10n.tr("停止清扫", "Stop Cleaning"),
          "pause-sweeping": L10n.tr("暂停清扫", "Pause Cleaning"), "start-charge": L10n.tr("回充", "Return to Dock")][name] ?? fallback
     }
-    public static func option(_ text: String) -> String {
+    public static func option(_ text: String, isMenuChoice: Bool = false) -> String {
         // Some vendor schemas provide only Chinese descriptions, including in
         // the nominally English field. Keep their enum values unchanged.
         let vendorLabels = [
@@ -118,10 +118,14 @@ public enum CapabilityNames {
             "烧水": "Boil Water", "保温": "Keep Warm", "火力": "Heat Level", "自定义": "Custom",
         ]
         if let english = vendorLabels[text] { return L10n.tr(text, english) }
+        let key = text.lowercased().filter { !$0.isWhitespace && $0 != "-" && $0 != "_" }
+        if isMenuChoice, key == "keepwarm" { return L10n.tr("保温", "Keep Warm") }
         let names = ["auto": L10n.tr("自动", "Auto"), "sleep": L10n.tr("睡眠", "Sleep"), "favorite": L10n.tr("最爱", "Favorite"), "manual": L10n.tr("手动", "Manual"), "straightwind": L10n.tr("直吹风", "Direct Airflow"),
             "naturalwind": L10n.tr("自然风", "Natural Breeze"), "smart": L10n.tr("智能风", "Smart Airflow"), "off": L10n.tr("关闭", "Off"), "on": L10n.tr("开启", "On"), "idle": L10n.tr("待机", "Standby"),
             "busy": L10n.tr("运行中", "Running"), "running": L10n.tr("运行中", "Running"), "pause": L10n.tr("暂停", "Pause"), "paused": L10n.tr("已暂停", "Paused"), "delay": L10n.tr("预约中", "Scheduled"), "aptrunning": L10n.tr("预约中", "Scheduled"),
             "keepwarm": L10n.tr("保温中", "Keeping Warm"), "cooking": L10n.tr("烹饪中", "Cooking"), "completed": L10n.tr("已完成", "Completed"), "cookfinish": L10n.tr("烹饪完成", "Cooking Complete"),
+            "potoutidle": L10n.tr("壶体已取下", "Kettle Removed"), "potoutrunning": L10n.tr("壶体已取下，烹饪暂停", "Kettle Removed, Cooking Paused"),
+            "potoutaptrunning": L10n.tr("壶体已取下，已预约", "Kettle Removed, Scheduled"), "potoutkeepwarm": L10n.tr("壶体已取下，保温暂停", "Kettle Removed, Keep Warm Paused"),
             "error": L10n.tr("故障", "Fault"), "fault": L10n.tr("故障", "Fault"), "updating": L10n.tr("升级中", "Updating"), "finecook": L10n.tr("精煮饭", "Fine Rice"), "quickcook": L10n.tr("快煮饭", "Quick Rice"),
             "congee": L10n.tr("煮粥", "Congee"), "custom": L10n.tr("自定义", "Custom"), "soymilk": L10n.tr("豆浆", "Soy Milk"), "ricepaste": L10n.tr("米糊", "Rice Paste"), "juice": L10n.tr("果汁", "Juice"),
             "soup": L10n.tr("煲汤", "Soup"), "milkshake": L10n.tr("奶昔", "Milkshake"), "cornjuice": L10n.tr("玉米汁", "Corn Juice"), "tea": L10n.tr("花茶", "Herbal Tea"), "fruittea": L10n.tr("水果茶", "Fruit Tea"),
@@ -130,7 +134,6 @@ public enum CapabilityNames {
             "cake": L10n.tr("蛋糕", "Cake"), "tart": L10n.tr("蛋挞", "Egg Tart"), "defrost": L10n.tr("解冻", "Defrost"), "driedfruit": L10n.tr("果干", "Dried Fruit"), "yogurt": L10n.tr("酸奶", "Yogurt"),
             "cool": L10n.tr("制冷", "Cool"), "heat": L10n.tr("制热", "Heat"), "dry": L10n.tr("除湿", "Dry"), "fan": L10n.tr("送风", "Fan"), "low": L10n.tr("低", "Low"), "medium": L10n.tr("中", "Medium"), "high": L10n.tr("高", "High"),
             "nofaults": L10n.tr("无故障", "No Faults"), "none": L10n.tr("无", "None"), "crispyroast": L10n.tr("脆烤", "Crispy Roast"), "tenderroast": L10n.tr("嫩烤", "Tender Roast"), "degrease": L10n.tr("脱脂", "Degrease")]
-        let key = text.lowercased().filter { !$0.isWhitespace && $0 != "-" && $0 != "_" }
         return names[key] ?? text
     }
     public static func unit(_ unit: String?, name: String) -> String {

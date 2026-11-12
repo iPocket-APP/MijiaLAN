@@ -18,7 +18,8 @@ enum DevSnapshot {
             Task { @MainActor in
                 try? await MonotonicClock.sleep(for: .seconds(12))
                 await model.devices.refreshNow()
-                if let data = DiagnosticReport.json(model: model) {
+                let lan = await model.devices.lan.diagnostics()
+                if let data = DiagnosticReport.json(model: model, lan: lan) {
                     diagnosticWriter.submit(data, to: URL(fileURLWithPath: path))
                 }
             }
