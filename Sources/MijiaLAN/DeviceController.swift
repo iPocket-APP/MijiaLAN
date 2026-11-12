@@ -9,6 +9,7 @@ public enum CapabilityCommand: Equatable, Sendable {
     case adjust(String, Double)
     case batch([CapabilityCommand])
     case setLightBrightness(Double)
+    case stopHealthPotMenu(action: String, menu: Int)
     var coalescingID: String? {
         switch self {
         case .set(let id, _): id
@@ -18,7 +19,11 @@ public enum CapabilityCommand: Equatable, Sendable {
         }
     }
     public var hasAction: Bool {
-        switch self { case .invoke: true; case .batch(let commands): commands.contains(where: \.hasAction); default: false }
+        switch self {
+        case .invoke, .stopHealthPotMenu: true
+        case .batch(let commands): commands.contains(where: \.hasAction)
+        default: false
+        }
     }
 }
 
@@ -103,6 +108,7 @@ public final class DeviceController: ObservableObject {
                existing.device.model == device.model, existing.device.specType == device.specType {
                 if !ProbeScheduler.sameEndpoint(existing.device, device) {
                     existing.health = LANDeviceHealth(); existing.readings = [:]; existing.prepared = [:]
+                    existing.startedHealthPotMenu = nil
                 }
                 existing.device = device; snapshots[device.did] = existing
                 continue
@@ -135,6 +141,7 @@ public final class DeviceController: ObservableObject {
               old.schema.type == next.schema.type else { return }
         next.readings = old.readings.filter { next.capabilitiesByID[$0.key] != nil }
         next.prepared = old.prepared.filter { next.capabilitiesByID[$0.key] != nil }
+        next.startedHealthPotMenu = old.startedHealthPotMenu
         next.health = old.health; next.lastCommand = old.lastCommand; next.commandReceipt = old.commandReceipt
     }
 
@@ -235,6 +242,7 @@ public final class DeviceController: ObservableObject {
                 for did in self.snapshots.keys {
                     if update.health[did]?.state == .online && self.snapshots[did]?.isOnline != true { recovered.append(did) }
                     self.snapshots[did]?.health = update.health[did] ?? LANDeviceHealth()
+                    self.snapshots[did]?.reconcileHealthPotMenu()
                 }
                 if self.retryStates != update.retries { self.retryStates = update.retries }
                 if !self.refreshing || !recovered.isEmpty { self.publish() }
@@ -285,6 +293,7 @@ public final class DeviceController: ObservableObject {
             snapshot.readings[key] = reading
         }
         snapshot.health = health[did] ?? LANDeviceHealth()
+        snapshot.reconcileHealthPotMenu()
         snapshots[did] = snapshot
     }
 
@@ -395,6 +404,9 @@ public final class DeviceController: ObservableObject {
             return
         }
         guard let snapshot = snapshots[did] else { throw DeviceControlError.unavailable(did) }
+        if case .stopHealthPotMenu(let action, let menu) = command {
+            return try await stopHealthPotMenu(did: did, snapshot: snapshot, action: action, menu: menu)
+        }
         if case .setLightBrightness(let number) = command {
             guard snapshot.schema.category == "light", let brightness = snapshot.capability("light", "brightness"),
                   brightness.writable, brightness.control == .number else {
@@ -414,12 +426,12 @@ public final class DeviceController: ObservableObject {
         let id: String
         switch command {
         case .set(let key, _), .invoke(let key), .adjust(let key, _): id = key
-        case .batch, .setLightBrightness: return
+        case .batch, .setLightBrightness, .stopHealthPotMenu: return
         }
         guard let cap = snapshot.capabilitiesByID[id],
               ![.unsupported, .reading].contains(cap.control) else { throw DeviceControlError.unsupported(id) }
         switch command {
-        case .batch, .setLightBrightness: return
+        case .batch, .setLightBrightness, .stopHealthPotMenu: return
         case .adjust(_, let delta):
             guard let value = snapshot.controlValue(cap)?.doubleValue else { throw DeviceControlError.unavailable(cap.title) }
             let next = min(cap.max ?? .infinity, max(cap.min ?? -.infinity, value + delta * cap.step))
@@ -492,6 +504,10 @@ public final class DeviceController: ObservableObject {
                 await refresh(did: did, capabilities: snapshot.capabilities.filter { $0.readable && !$0.lowFrequency })
                 if let status, let actual = snapshots[did]?.value(status.id)?.integer,
                    Self.actionConfirmed(cap.name, category: snapshot.schema.category, status: actual, before: before, in: status) {
+                    if cap.name == "start-cook", snapshot.healthPotStatus?.canStart == true {
+                        snapshots[did]?.startedHealthPotMenu = inputs.first?.integer
+                        snapshots[did]?.reconcileHealthPotMenu()
+                    }
                     snapshots[did]?.lastCommand = L10n.tr("状态已确认：\(status.formatted(.number(Double(actual))))", "State confirmed: \(status.formatted(.number(Double(actual))))")
                     snapshots[did]?.commandReceipt?.confirmedAt = Date()
                     confirmed = true; break
@@ -500,6 +516,26 @@ public final class DeviceController: ObservableObject {
             guard confirmed else { throw DeviceControlError.notConfirmed }
         }
         publish()
+    }
+
+    private func stopHealthPotMenu(did: String, snapshot: DeviceSnapshot, action: String, menu: Int) async throws {
+        guard snapshot.isOnline else { throw DeviceControlError.offline }
+        guard snapshot.device.model == HealthPotStatus.model else { throw DeviceControlError.unsupported(action) }
+        guard snapshot.healthPotStatus?.isActive != false else { return }
+        // Confirm the menu in the device queue. The last poll may be incomplete or from a different run.
+        let state = [snapshot.capability("health-pot", "status"), snapshot.capability("custom", "menu-id"),
+                     snapshot.capability("custom", "recipe-type")].compactMap { $0 }
+        await refresh(did: did, capabilities: state)
+        publish()
+        guard let current = snapshots[did], ProbeScheduler.sameEndpoint(current.device, snapshot.device) else {
+            throw DeviceControlError.unavailable(did)
+        }
+        guard current.isOnline else { throw DeviceControlError.offline }
+        let unavailable = DeviceControlError.unavailable(L10n.tr("运行中的菜单", "Active Menu"))
+        guard let status = current.healthPotStatus else { throw unavailable }
+        guard status.isActive, (current.healthPotRecipeType ?? 0) == 0 else { return }
+        guard let activeMenu = current.activeHealthPotMenu else { throw unavailable }
+        if activeMenu == menu { try await perform(did: did, .invoke(action)) }
     }
 
     private static func matches(_ actual: JSONValue?, _ requested: JSONValue) -> Bool {

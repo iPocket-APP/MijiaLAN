@@ -9,14 +9,16 @@ import Testing
 /// their layout when category rules are added for other devices. The 2026-11-05 fingerprints record a deliberate
 /// change: range-end and ± switches, fan gear and angle switches left Home, child locks became characteristics,
 /// and the purifier's favorite level became its speed. On 2026-11-12 the health kettle's Start and Stop switches
-/// became one main switch that reads its working state, keeping Start's identifiers.
+/// became one main switch that reads its working state, keeping Start's identifiers. Later that day its next-menu
+/// switches gave way to new menu switches that start and stop their menu, under new identifiers on purpose: a scene
+/// that only selected a menu must not start heating. Removing the main switch preserves those new menu identifiers.
 struct BuiltInLayoutTests {
     /// SHA-256 prefixes of each plan's signature (service and characteristic IDs, types and ranges).
     static let signatures: [String: String] = [
         "careli.fryer.maf07c": "9cadc4533ded4707",
         "chuangmi.plug.m3": "e252186241d4a2ef",
         "chunmi.cooker.cmwy3": "4d0b1cb605cfa2a8",
-        "chunmi.health_pot.a1": "2a08068e5c462547",
+        "chunmi.health_pot.a1": "3913c3152c96d5ce",
         "chunmi.juicer.a1": "5dc2bb8b474f8153",
         "cuco.plug.v3": "14bfa8f213237ea9",
         "dmaker.fan.p28": "a35283795e7d91fe",

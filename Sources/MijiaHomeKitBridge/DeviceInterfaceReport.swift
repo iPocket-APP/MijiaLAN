@@ -53,8 +53,8 @@ public enum DeviceInterfaceReport {
                 let cleaningSwitch = plan.bindings.values.contains { binding in
                     if case .cleaning(let start, let dock, _) = binding { [start, dock].contains(c.id) } else { false }
                 }
-                let kettleSwitch = plan.bindings.values.contains { binding in
-                    if case .kettle(let start, let stop) = binding { [start, stop].contains(c.id) } else { false }
+                let kettleMenus = plan.bindings.values.contains { binding in
+                    if case .kettleMenu(let start, let stop, let mode, _) = binding { [start, stop, mode].contains(c.id) } else { false }
                 }
                 // A characteristic of a Home service is native; one on a Switch service is a named switch.
                 var native = device.model == "lumi.acpartner.mcn02" && [2, 3].contains(c.siid), switches = false
@@ -71,7 +71,7 @@ public enum DeviceInterfaceReport {
                 let feedback = c.prepared ? "待选值独立保存；运行后读实际状态" : c.readable ? "逐属性返回码＋回读＋时间" : c.kind == .action ? "动作返回码＋运行状态确认" : "接受回执；完成状态待确认"
                 let mac = [DeviceCapability.Control.toggle: "开关", .number: "精确输入", .choice: "选项", .button: "动作按钮", .reading: "实际读数", .unsupported: "待确认清单"][c.control] ?? ""
                 let home = cleaningSwitch ? "清扫开关（开=开始清扫，关=回充）"
-                    : kettleSwitch ? "养生壶开关（开=按下次菜单开始，关=停止）" : !native && !switches ? "Mac 保留"
+                    : kettleMenus ? "菜单开关（开=用该菜单开始，关=停止该菜单；火力、自选只在 Mac）" : !native && !switches ? "Mac 保留"
                     : native && switches ? "原生服务＋具名开关" : native ? "原生服务"
                     : c.kind == .action || c.control == .button ? "回弹按钮"
                     : c.control == .number ? "精选预设开关" : c.control == .choice ? "具名选项开关" : "具名开关"

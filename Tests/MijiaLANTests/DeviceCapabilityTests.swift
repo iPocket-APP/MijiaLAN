@@ -179,6 +179,53 @@ struct DeviceCapabilityTests {
         #expect(snapshot.permitsHealthPotAction(stop))
     }
 
+    @Test("A kettle menu can stop a confirmed local start even when the device cannot read back its menu ID")
+    func healthPotMenuStop() async throws {
+        let (controller, fake, _) = try makeController(model: HealthPotStatus.model)
+        defer { controller.shutdown() }
+        fake.props["5.1"] = nil
+        await controller.refreshNow()
+        let stopWarm = CapabilityCommand.stopHealthPotMenu(action: "a:2:2", menu: 5)
+        let stopBoil = CapabilityCommand.stopHealthPotMenu(action: "a:2:2", menu: 4)
+
+        try await controller.execute(did: "123", .batch([.set("p:2:3", .number(5)), .invoke("a:2:1")]))
+        #expect(controller.snapshots["123"]?.healthPotMenu == nil)
+        #expect(controller.snapshots["123"]?.activeHealthPotMenu == 5)
+        try await controller.execute(did: "123", .set("p:2:3", .number(4)))
+        try await controller.execute(did: "123", stopBoil)
+        #expect(fake.receivedWrites.compactMap { $0["aiid"]?.integer } == [1])
+
+        // Recover a missing status at the moment the corresponding switch is turned off.
+        fake.props["2.1"] = nil
+        await controller.refreshNow()
+        #expect(controller.snapshots["123"]?.healthPotStatus == nil)
+        fake.props["2.1"] = .number(4)
+        try await controller.execute(did: "123", stopWarm)
+        #expect(controller.snapshots["123"]?.healthPotStatus == .idle)
+        #expect(fake.receivedWrites.compactMap { $0["aiid"]?.integer } == [1, 2])
+
+        // An unidentified run after the kettle stopped must not use the last menu from this Mac.
+        fake.props["2.1"] = .number(2)
+        await controller.refreshNow()
+        #expect(controller.snapshots["123"]?.activeHealthPotMenu == nil)
+        await #expect(throws: DeviceControlError.self) { try await controller.execute(did: "123", stopWarm) }
+        fake.props["5.1"] = .number(5)
+        fake.props["5.9"] = .number(2)
+        await controller.refreshNow()
+        try await controller.execute(did: "123", stopBoil)
+        #expect(fake.receivedWrites.compactMap { $0["aiid"]?.integer } == [1, 2])
+
+        fake.props["5.9"] = .number(0)
+        await controller.refreshNow()
+        // A fresh read must catch a change of menu since the last poll.
+        #expect(controller.snapshots["123"]?.activeHealthPotMenu == 4)
+        fake.props["5.1"] = .number(6)
+        try await controller.execute(did: "123", stopBoil)
+        #expect(fake.receivedWrites.compactMap { $0["aiid"]?.integer } == [1, 2])
+        try await controller.execute(did: "123", stopWarm)
+        #expect(fake.receivedWrites.compactMap { $0["aiid"]?.integer } == [1, 2, 2])
+    }
+
     @Test("A timed-out kettle start changes from sending to reading state before releasing the action")
     func healthPotTimeoutFeedback() async throws {
         let (controller, fake, _) = try makeController(model: "chunmi.health_pot.a1")

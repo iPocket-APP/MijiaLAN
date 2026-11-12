@@ -246,6 +246,8 @@ public struct DeviceSnapshot: Equatable, Sendable, Identifiable {
     public var health = LANDeviceHealth()
     public var lastCommand: String?
     public var commandReceipt: DeviceCommandReceipt?
+    /// The menu from a local start confirmed to be running. Cleared when that run ends or can no longer be tracked.
+    var startedHealthPotMenu: Int?
     public init(device: LocalDevice, schema: DeviceSchema, capabilities: [DeviceCapability],
                 readings: [String: DeviceReading] = [:], prepared: [String: JSONValue] = [:], health: LANDeviceHealth = LANDeviceHealth()) {
         self.device = device; self.schema = schema; self.capabilities = capabilities
@@ -277,6 +279,31 @@ public struct DeviceSnapshot: Equatable, Sendable, Identifiable {
         return value("health-pot", "status")?.integer.flatMap(HealthPotStatus.init(rawValue:))
     }
 
+    /// The built-in menu ID starts at 1 (Boil Water is 5, Keep Warm is 6).
+    /// Convert it to the zero-based index accepted by the start action.
+    public var healthPotMenu: Int? {
+        guard healthPotRecipeType == 0, let id = value("custom", "menu-id")?.integer, id > 0 else { return nil }
+        return id - 1
+    }
+
+    var healthPotRecipeType: Int? {
+        guard device.model == HealthPotStatus.model else { return nil }
+        return value("custom", "recipe-type")?.integer
+    }
+
+    public var activeHealthPotMenu: Int? {
+        guard healthPotStatus?.isActive == true, (healthPotRecipeType ?? 0) == 0 else { return nil }
+        return healthPotMenu ?? startedHealthPotMenu
+    }
+
+    mutating func reconcileHealthPotMenu() {
+        guard let startedHealthPotMenu else { return }
+        if !isOnline || healthPotStatus.map({ !$0.isActive }) == true || (healthPotRecipeType ?? 0) != 0
+            || healthPotMenu.map({ $0 != startedHealthPotMenu }) == true {
+            self.startedHealthPotMenu = nil
+        }
+    }
+
     public func permitsHealthPotAction(_ action: DeviceCapability) -> Bool {
         guard device.model == HealthPotStatus.model, action.service == "health-pot" else { return true }
         let status = healthPotStatus
@@ -294,7 +321,8 @@ public struct DeviceSnapshot: Equatable, Sendable, Identifiable {
     /// Contact/read timestamps remain accurate without making a no-change poll a semantic update.
     func hasSameValues(as other: DeviceSnapshot?) -> Bool {
         guard let other, health.state == other.health.state, health.lastError == other.health.lastError,
-              prepared == other.prepared, readings.count == other.readings.count else { return false }
+              prepared == other.prepared, startedHealthPotMenu == other.startedHealthPotMenu,
+              readings.count == other.readings.count else { return false }
         return readings.allSatisfy { id, reading in
             guard let previous = other.readings[id] else { return false }
             return reading.value == previous.value && reading.code == previous.code && reading.error == previous.error

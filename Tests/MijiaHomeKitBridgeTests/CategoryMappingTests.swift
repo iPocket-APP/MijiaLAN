@@ -519,48 +519,86 @@ struct CategoryMappingTests {
         #expect(try commands(plan, service, "25", .bool(false), s) == [])
     }
 
-    @Test("A health kettle is one main switch that reads its working state; the next menu stays named switches")
+    @Test("A health kettle publishes only menu switches and keeps the IDs of its existing menus")
     func healthKettle() throws {
+        let model = HealthPotStatus.model
+        let schema = try #require(DeviceSchema.bundled(model: model))
+        let s = DeviceSnapshot(device: LocalDevice(did: "9", name: "Test", model: model, host: "test", token: ""),
+                               schema: schema, capabilities: DeviceCapabilityCatalog.capabilities(schema: schema, model: model))
+        var ids: [String: UInt64] = [
+            "s:control:a:2:1": 8, "c:control:a:2:1:25": 9,
+            "s:control:a:2:1=5": 32, "c:control:a:2:1=5:25": 33
+        ]
+        let plan = CapabilityHomeKitMapper.plan(snapshot: s, legacyDevice: nil, names: [:], identifiers: &ids)
+        let switches = zip(plan.serviceKeys, plan.services).filter { $0.1.type == .switch }
+        #expect(switches.map(\.0) == (0...5).map { "control:a:2:1=\($0)" })
+        #expect(plan.services.allSatisfy { !$0.isPrimary })
+        #expect(plan.services.contains { $0.type == .temperatureSensor })
+        let warm = try #require(switches.last?.1)
+        #expect(warm.iid == 32)
+        #expect(characteristic(warm, "25").iid == 33)
+        let menus = plan.bindings.values.compactMap { binding -> Int? in
+            if case .kettleMenu("a:2:1", "a:2:2", "p:2:3", let menu) = binding { menu } else { nil }
+        }
+        #expect(menus.sorted() == [0, 1, 2, 3, 4, 5])
+    }
+
+    @Test("A kettle menu switch starts that menu, reads on while it runs, and requests a stop for that menu")
+    func healthKettleMenus() throws {
         let model = HealthPotStatus.model
         let schema = try #require(DeviceSchema.bundled(model: model))
         var s = DeviceSnapshot(device: LocalDevice(did: "9", name: "Test", model: model, host: "test", token: ""),
                                schema: schema, capabilities: DeviceCapabilityCatalog.capabilities(schema: schema, model: model))
         let plan = try plan(s)
-        let service = try #require(plan.services.first { service in
-            service.characteristics.contains { if case .kettle = plan.bindings[$0.iid] { true } else { false } }
-        })
-        #expect(service.type == .switch && service.isPrimary)
-        #expect(plan.services.filter(\.isPrimary).count == 1)
-        // Start and stop are the main switch now, not momentary switches of their own.
-        #expect(actionSwitches(plan).isEmpty)
-        let menus = plan.bindings.values.compactMap { binding -> Double? in
-            if case .option("p:2:3", let v) = binding { v.doubleValue } else { nil }
+        func menu(_ n: Int) throws -> HAPService {
+            try #require(plan.services.first { service in
+                service.characteristics.contains { if case .kettleMenu(_, _, _, let m) = plan.bindings[$0.iid], m == n { true } else { false } }
+            })
         }
-        #expect(menus.sorted() == [0, 1, 2, 3, 4, 5, 6, 7])
-
-        // A selected next menu is not the kettle working.
+        let boil = try menu(4), warm = try menu(5)
         s.health = LANDeviceHealth(state: .online)
-        s.prepared["p:2:3"] = .number(5)
-        for (status, on) in [(1.0, false), (2, true), (3, true), (4, true), (5, false), (6, true), (8, true), (9, false), (11, false)] {
+        func read(status: Double, menuID: Double, recipeType: Double = 0) {
             s.readings["p:2:1"] = DeviceReading(value: .number(status), code: 0)
-            #expect(value(plan, service, "25", s) == .bool(on), "status \(status)")
+            s.readings["p:5:1"] = DeviceReading(value: .number(menuID), code: 0)
+            s.readings["p:5:9"] = DeviceReading(value: .number(recipeType), code: 0)
         }
-        s.readings["p:2:1"] = DeviceReading(value: .number(1), code: 0)
-        #expect(try commands(plan, service, "25", .bool(true), s) == [.invoke("a:2:1")])
-        #expect(try commands(plan, service, "25", .bool(false), s) == [])
-        s.readings["p:2:1"] = DeviceReading(value: .number(4), code: 0)
-        #expect(try commands(plan, service, "25", .bool(true), s) == [])
-        #expect(try commands(plan, service, "25", .bool(false), s) == [.invoke("a:2:2")])
-        // Lifted off its base, or a state the last read could not establish: nothing is started.
-        s.readings["p:2:1"] = DeviceReading(value: .number(5), code: 0)
-        #expect(throws: HAPError.self) { try commands(plan, service, "25", .bool(true), s) }
+
+        s.prepared["p:2:3"] = .number(5)
+        for (status, active) in [(1.0, false), (2, true), (3, true), (4, true), (5, false),
+                                 (6, true), (7, true), (8, true), (9, false), (10, false), (11, false)] {
+            read(status: status, menuID: 6)
+            #expect(value(plan, warm, "25", s) == .bool(active), "status \(status)")
+        }
+
+        read(status: 1, menuID: 5)
+        #expect(value(plan, boil, "25", s) == .bool(false) && value(plan, warm, "25", s) == .bool(false))
+        #expect(try commands(plan, boil, "25", .bool(true), s) == [.set("p:2:3", .number(4)), .invoke("a:2:1")])
+
+        // The firmware reports menu ID 5 for Boil Water, whose start argument is 4.
+        read(status: 2, menuID: 5)
+        #expect(value(plan, boil, "25", s) == .bool(true) && value(plan, warm, "25", s) == .bool(false))
+        #expect(try commands(plan, boil, "25", .bool(true), s).isEmpty)
+
+        read(status: 4, menuID: 6)
+        #expect(value(plan, warm, "25", s) == .bool(true) && value(plan, boil, "25", s) == .bool(false))
+        #expect(try commands(plan, warm, "25", .bool(true), s) == [])
+        #expect(try commands(plan, warm, "25", .bool(false), s) == [.stopHealthPotMenu(action: "a:2:2", menu: 5)])
+        #expect(try commands(plan, boil, "25", .bool(false), s) == [.stopHealthPotMenu(action: "a:2:2", menu: 4)])
+        #expect(throws: HAPError.self) { try commands(plan, boil, "25", .bool(true), s) }
+
+        // A Mi Home recipe has no standard menu switch.
+        read(status: 2, menuID: 6, recipeType: 2)
+        #expect(value(plan, warm, "25", s) == .bool(false))
+
+        read(status: 5, menuID: 5)
+        #expect(throws: HAPError.self) { try commands(plan, boil, "25", .bool(true), s) }
         s.readings["p:2:1"] = DeviceReading(value: .number(1), error: "no reply")
-        #expect(value(plan, service, "25", s) == nil)
-        #expect(throws: HAPError.self) { try commands(plan, service, "25", .bool(true), s) }
-        #expect(try commands(plan, service, "25", .bool(false), s) == [.invoke("a:2:2")])
+        #expect(value(plan, boil, "25", s) == nil)
+        #expect(throws: HAPError.self) { try commands(plan, boil, "25", .bool(true), s) }
+        #expect(try commands(plan, boil, "25", .bool(false), s) == [.stopHealthPotMenu(action: "a:2:2", menu: 4)])
         s.health = LANDeviceHealth(state: .offline)
-        s.readings["p:2:1"] = DeviceReading(value: .number(4), code: 0)
-        #expect(value(plan, service, "25", s) == nil)
+        read(status: 4, menuID: 6)
+        #expect(value(plan, warm, "25", s) == nil)
     }
 
     @Test("An old Roborock gets the same switch through its legacy miIO table")
