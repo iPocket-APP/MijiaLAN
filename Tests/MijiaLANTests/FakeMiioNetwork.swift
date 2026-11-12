@@ -146,6 +146,9 @@ final class FakeMiioNetwork: MiioTransport, @unchecked Sendable {
         case "action":
             device.receivedWrites.append(params)
             if device.actionTimeout { throw MiioError.timeout }
+            // Like chunmi.health_pot.a1 firmware: a bare argument (`"in": [5]`) gets no reply at all.
+            let arguments = params["in"]?.arrayValue ?? []
+            if arguments.contains(where: { $0["piid"]?.intValue == nil || $0["value"] == nil }) { throw MiioError.timeout }
             if params["aiid"]?.intValue == 1 { device.props["2.1"] = .number(device.model == "careli.fryer.maf07c" ? 4 : 2) }
             if params["aiid"]?.intValue == 2 { device.props["2.1"] = .number(1) }
             reply["result"] = .object(["code": .number(0), "out": .array([])])

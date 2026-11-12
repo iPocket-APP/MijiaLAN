@@ -56,14 +56,18 @@ struct ControlCenterSettings: View {
                         model.startCloudImport()
                         navigate(.settingsImport)
                     } label: {
-                        Label(model.config.devices.isEmpty ? L10n.tr("扫码导入设备", "Scan to Import Devices") : L10n.tr("重新扫码导入", "Re-import with QR Code"), systemImage: "viewfinder")
+                        Label(importButtonTitle, systemImage: model.canReuseRememberedLogin ? "arrow.clockwise" : "viewfinder")
                             .frame(maxWidth: .infinity).padding(.vertical, 3)
                     }
                     .buttonStyle(.borderedProminent).controlSize(.regular)
                     .padding(.horizontal, 10).padding(.bottom, 9)
+                    if let login = model.rememberedLogin {
+                        SettingsDivider()
+                        rememberedLoginRow(account: login.maskedAccount, region: login.region, expired: login.expired)
+                    }
                     SettingsDivider()
                     SettingsNavigationRow(L10n.tr("手动添加设备", "Add Device Manually"), symbol: "plus.circle") { navigate(.settingsManualAdd) }
-                    Text(L10n.tr("扫码读取设备信息，后续控制只走局域网。", "Scan to import. All later control stays on the LAN."))
+                    Text(L10n.tr("导入需要联网。日常控制走局域网。", "Importing requires internet access. Daily control stays on the LAN."))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 12).padding(.bottom, 11)
@@ -110,6 +114,33 @@ struct ControlCenterSettings: View {
         }
         .font(.system(size: 13))
         .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 14)
+    }
+
+    private var importButtonTitle: String {
+        if model.canReuseRememberedLogin { return L10n.tr("重新导入", "Re-import Devices") }
+        return model.config.devices.isEmpty
+            ? L10n.tr("扫码导入设备", "Scan to Import Devices")
+            : L10n.tr("重新扫码导入", "Re-import with QR Code")
+    }
+
+    private func rememberedLoginRow(account: String, region: String, expired: Bool) -> some View {
+        let regionName = SettingsImportFlow.regions.first { $0.0 == region }?.1 ?? region
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                SettingsSymbol("person.crop.circle")
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(expired ? L10n.tr("米家登录已过期", "Xiaomi Home Login Expired") : L10n.tr("已记住米家登录", "Xiaomi Home Login Remembered"))
+                    Text("\(regionName) · \(account)").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                Button(L10n.tr("忘记米家登录", "Forget Login"), action: model.forgetRememberedLogin)
+                    .controlSize(.small)
+            }
+            if let error = model.loginStorageError {
+                Text(error).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
     }
 }
 
@@ -552,7 +583,7 @@ struct SettingsDeviceManagement: View {
                 if let note = model.lastRediscoveryNote {
                     Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
-                Text(L10n.tr("扫描只更新已有设备的地址。添加新设备需要重新扫码导入，或手动填写 IP 和 token。", "Scanning updates addresses for existing devices. To add a new device, re-import with a QR code or enter its IP and token manually."))
+                Text(L10n.tr("扫描只更新已有设备的地址。添加新设备可以重新导入米家设备，或手动填写 IP 和 token。", "Scanning updates addresses for existing devices. To add a new device, re-import from Xiaomi Home or enter its IP and token manually."))
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -566,51 +597,74 @@ struct SettingsImportFlow: View {
     @Environment(\.panelPresented) private var panelPresented
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(L10n.tr("使用手机「米家」App 扫码确认", "Scan with the Mijia App"))
-                .font(.system(size: 14, weight: .semibold))
-            Text(L10n.tr("只读取设备的局域网 token、IP 和房间信息。导入完成后丢弃登录状态，后续控制只走局域网。", "Only the device's LAN token, IP, and room information are read. The login session is discarded after import. All later control stays on the LAN."))
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            SettingsGroup {
-                VStack(spacing: 14) {
-                    switch model.importState {
-                    case .loadingQR:
-                        ProgressView().controlSize(.small)
-                        Text(L10n.tr("正在获取登录二维码…", "Getting login QR code…"))
-                        cancelButton
-                    case .waitingForScan(let ticket, let expiresAt):
-                        if let image = QRCode.image(for: ticket.loginURL.absoluteString) {
-                            Image(nsImage: image).interpolation(.none).resizable().frame(width: 168, height: 168)
-                                .padding(8).background(.white, in: .rect(cornerRadius: 8))
-                        }
-                        TimelineView(PanelTimelineSchedule(interval: 1, isActive: panelPresented)) { context in
-                            Text(L10n.tr("二维码剩余 \(max(0, Int(expiresAt.timeIntervalSince(context.date)))) 秒", "QR code expires in \(max(0, Int(expiresAt.timeIntervalSince(context.date)))) s"))
-                                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                        }
-                        cancelButton
-                    case .fetching:
-                        ProgressView().controlSize(.small)
-                        Text(L10n.tr("正在导入设备信息…", "Importing device information…"))
-                        cancelButton
-                    case .failed(let message):
-                        Label(L10n.tr("导入未完成", "Import Unsuccessful"), systemImage: "exclamationmark.circle").foregroundStyle(.orange)
-                        Text(message).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                        Button(L10n.tr("重新获取二维码", "Get a New QR Code")) { model.startCloudImport() }.buttonStyle(.borderedProminent)
-                    case .idle:
-                        if let summary = model.lastImportSummary {
-                            Label(L10n.tr("设备导入完成", "Devices Imported"), systemImage: "checkmark.circle").foregroundStyle(.green)
-                            Text(summary).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                            Button(L10n.tr("查看设备", "View Devices")) { navigate(.settingsDevices) }.buttonStyle(.borderedProminent)
-                        } else {
-                            Text(L10n.tr("扫码读取米家设备", "Scan to Import Mijia Devices"))
-                            Button(L10n.tr("获取二维码", "Get QR Code")) { model.startCloudImport() }.buttonStyle(.borderedProminent)
-                        }
+        SettingsGroup {
+            VStack(spacing: 14) {
+                switch model.importState {
+                case .loadingQR:
+                    ProgressView().controlSize(.small)
+                    Text(L10n.tr("正在获取登录二维码…", "Getting login QR code…"))
+                    cancelButton
+                case .waitingForScan(let ticket, let expiresAt):
+                    Text(L10n.tr("使用手机「米家」App 扫码确认", "Scan with the Xiaomi Home App"))
+                        .font(.system(size: 14, weight: .semibold))
+                    if let image = QRCode.image(for: ticket.loginURL.absoluteString) {
+                        Image(nsImage: image).interpolation(.none).resizable().frame(width: 168, height: 168)
+                            .padding(8).background(.white, in: .rect(cornerRadius: 8))
+                            .accessibilityLabel(L10n.tr("米家登录二维码", "Xiaomi Home sign-in QR code"))
+                    }
+                    TimelineView(PanelTimelineSchedule(interval: 1, isActive: panelPresented)) { context in
+                        Text(L10n.tr("二维码剩余 \(max(0, Int(expiresAt.timeIntervalSince(context.date)))) 秒", "QR code expires in \(max(0, Int(expiresAt.timeIntervalSince(context.date)))) s"))
+                            .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    cancelButton
+                case .fetching:
+                    ProgressView().controlSize(.small)
+                    Text(L10n.tr("正在导入设备信息…", "Importing device information…"))
+                    cancelButton
+                case .needsScan:
+                    Label(L10n.tr("米家登录已过期", "Xiaomi Home Login Expired"), systemImage: "exclamationmark.circle").foregroundStyle(.orange)
+                    importButton(L10n.tr("重新扫码", "Scan Again"))
+                case .failed(let message):
+                    Label(L10n.tr("导入未完成", "Import Unsuccessful"), systemImage: "exclamationmark.circle").foregroundStyle(.orange)
+                    Text(message).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    importButton(model.canReuseRememberedLogin ? L10n.tr("重试导入", "Retry Import") : L10n.tr("重新获取二维码", "Get a New QR Code"))
+                case .idle:
+                    if let summary = model.lastImportSummary {
+                        importSuccess(summary)
+                    } else {
+                        importButton(model.canReuseRememberedLogin ? L10n.tr("重新导入", "Re-import Devices") : L10n.tr("获取二维码", "Get QR Code"))
                     }
                 }
-                .font(.callout).frame(maxWidth: .infinity).padding(18)
             }
+            .multilineTextAlignment(.center)
+            .font(.callout).frame(maxWidth: .infinity).padding(18)
         }
         .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 16)
+    }
+
+    @ViewBuilder private func importSuccess(_ summary: String) -> some View {
+        Label(L10n.tr("设备导入完成", "Devices Imported"), systemImage: "checkmark.circle").foregroundStyle(.green)
+        Text(summary).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        if model.canRememberImportedLogin {
+            VStack(spacing: 6) {
+                Button(L10n.tr("记住米家登录", "Remember Xiaomi Home Login"), action: model.rememberImportedLogin)
+                    .buttonStyle(.bordered)
+                Text(model.rememberedLogin == nil
+                     ? L10n.tr("将登录保存在此 Mac，下次可直接重新导入。", "Save this login on this Mac to re-import without scanning again.")
+                     : L10n.tr("将替换此 Mac 上之前保存的米家登录。", "This replaces the Xiaomi Home login saved on this Mac."))
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if let error = model.loginStorageError {
+                    Text(error).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        } else if model.canReuseRememberedLogin {
+            Text(L10n.tr("已记住米家登录", "Xiaomi Home login remembered")).font(.caption).foregroundStyle(.secondary)
+        }
+        Button(L10n.tr("查看设备", "View Devices")) { navigate(.settingsDevices) }.buttonStyle(.borderedProminent)
+    }
+
+    private func importButton(_ title: String) -> some View {
+        Button(title) { model.startCloudImport() }.buttonStyle(.borderedProminent)
     }
 
     private var cancelButton: some View {
@@ -658,7 +712,7 @@ struct SettingsManualDevice: View {
                 Label(confirmation, systemImage: "checkmark.circle").font(.caption).foregroundStyle(.green)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text(L10n.tr("设备和 Mac 需要在同一局域网。重新配网可能使旧 token 失效，可重新扫码导入。", "The device and Mac must be on the same LAN. Setting up the device again may invalidate its token; re-import it if needed."))
+            Text(L10n.tr("设备和 Mac 需要在同一局域网。重新配网可能使旧 token 失效，可从米家重新导入。", "The device and Mac must be on the same LAN. Setting up the device again may invalidate its token; re-import it from Xiaomi Home if needed."))
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 16)

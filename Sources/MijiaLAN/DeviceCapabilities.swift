@@ -14,7 +14,11 @@ public struct DeviceSchema: Codable, Equatable, Sendable {
         public var description: String
         public var comment: String?
         public var id: Int { value }
-        public var title: String { CapabilityNames.option(L10n.isEnglish ? description : (CapabilityNames.firstLine(comment) ?? description)) }
+        public var title: String { title(isMenuChoice: false) }
+        func title(isMenuChoice: Bool) -> String {
+            let label = L10n.isEnglish ? description : (CapabilityNames.firstLine(comment) ?? description)
+            return CapabilityNames.option(label, isMenuChoice: isMenuChoice)
+        }
     }
     public struct Property: Codable, Equatable, Sendable {
         public var iid: Int
@@ -123,7 +127,11 @@ public struct DeviceCapability: Equatable, Sendable, Identifiable {
     public var max: Double? { range.flatMap { $0.count >= 2 ? $0[1] : nil } }
     public var step: Double { range.flatMap { $0.count >= 3 ? $0[2] : nil } ?? 1 }
     public var isNumeric: Bool { format == "float" || format.hasPrefix("int") || format.hasPrefix("uint") }
-    public var displayTitle: String { prepared ? (["mode", "cook-mode"].contains(name) ? L10n.tr("下次菜单", "Next Menu") : L10n.tr("下次\(title)", "Next \(title)")) : title }
+    private var isNextMenu: Bool { prepared && ["mode", "cook-mode"].contains(name) }
+    public var displayTitle: String {
+        if isNextMenu { return L10n.tr("下次菜单", "Next Menu") }
+        return prepared ? L10n.tr("下次\(title)", "Next \(title)") : title
+    }
     public var displayUnit: String { CapabilityNames.unit(unit, name: name) }
 
     public static func propertyID(_ siid: Int, _ piid: Int) -> String { "p:\(siid):\(piid)" }
@@ -175,10 +183,14 @@ public struct DeviceCapability: Equatable, Sendable, Identifiable {
         throw DeviceControlError.unsupported(limitation ?? title)
     }
 
+    public func optionTitle(_ option: DeviceSchema.Option) -> String {
+        option.title(isMenuChoice: isNextMenu)
+    }
+
     public func formatted(_ value: JSONValue?) -> String {
         guard let value else { return L10n.tr("尚无读数", "No Reading") }
         if let n = value.doubleValue {
-            if let option = options.first(where: { Double($0.value) == n }) { return option.title }
+            if let option = options.first(where: { Double($0.value) == n }) { return optionTitle(option) }
             let text = n.rounded() == n ? String(format: "%.0f", n) : String(format: "%.1f", n)
             return text + displayUnit
         }
@@ -190,8 +202,14 @@ public struct DeviceCapability: Equatable, Sendable, Identifiable {
 public enum DeviceControlError: LocalizedError, Equatable, Sendable {
     case offline, unavailable(String), invalidValue(String), unsupported(String), missingInput(String)
     case notConfirmed, wrongDevice, busy
+    /// An action timed out while reads still succeed.
+    case unanswered
+    /// An action's arguments do not pair with its spec inputs; nothing was sent.
+    case argumentMismatch
     public var errorDescription: String? {
         switch self {
+        case .unanswered: return L10n.tr("设备在线，但没有回应这条指令。已重新读取当前状态。", "The device is online but did not answer this command. Its current state was read again.")
+        case .argumentMismatch: return L10n.tr("动作参数与设备规格不符，未发送指令", "The action's arguments do not match the device specification. No command was sent.")
         case .offline: return L10n.tr("设备离线，未执行操作", "The device is offline. No command was sent.")
         case .unavailable(let s): return L10n.tr("无法读取：\(s)", "Could not read: \(s)")
         case .invalidValue(let s): return L10n.tr("参数超出设备允许范围：\(s)", "Value outside the device's allowed range: \(s)")
@@ -228,6 +246,8 @@ public struct DeviceSnapshot: Equatable, Sendable, Identifiable {
     public var health = LANDeviceHealth()
     public var lastCommand: String?
     public var commandReceipt: DeviceCommandReceipt?
+    /// The menu from a local start confirmed to be running. Cleared when that run ends or can no longer be tracked.
+    var startedHealthPotMenu: Int?
     public init(device: LocalDevice, schema: DeviceSchema, capabilities: [DeviceCapability],
                 readings: [String: DeviceReading] = [:], prepared: [String: JSONValue] = [:], health: LANDeviceHealth = LANDeviceHealth()) {
         self.device = device; self.schema = schema; self.capabilities = capabilities
@@ -253,10 +273,56 @@ public struct DeviceSnapshot: Equatable, Sendable, Identifiable {
     }
     public func controlValue(_ c: DeviceCapability) -> JSONValue? { c.prepared ? prepared[c.id] : value(c.id) }
 
+    /// The kettle's reported state; nil for other models, and when the last read failed or is not one of its states.
+    public var healthPotStatus: HealthPotStatus? {
+        guard device.model == HealthPotStatus.model else { return nil }
+        return value("health-pot", "status")?.integer.flatMap(HealthPotStatus.init(rawValue:))
+    }
+
+    /// The built-in menu ID starts at 1 (Boil Water is 5, Keep Warm is 6).
+    /// Convert it to the zero-based index accepted by the start action.
+    public var healthPotMenu: Int? {
+        guard healthPotRecipeType == 0, let id = value("custom", "menu-id")?.integer, id > 0 else { return nil }
+        return id - 1
+    }
+
+    var healthPotRecipeType: Int? {
+        guard device.model == HealthPotStatus.model else { return nil }
+        return value("custom", "recipe-type")?.integer
+    }
+
+    public var activeHealthPotMenu: Int? {
+        guard healthPotStatus?.isActive == true, (healthPotRecipeType ?? 0) == 0 else { return nil }
+        return healthPotMenu ?? startedHealthPotMenu
+    }
+
+    mutating func reconcileHealthPotMenu() {
+        guard let startedHealthPotMenu else { return }
+        if !isOnline || healthPotStatus.map({ !$0.isActive }) == true || (healthPotRecipeType ?? 0) != 0
+            || healthPotMenu.map({ $0 != startedHealthPotMenu }) == true {
+            self.startedHealthPotMenu = nil
+        }
+    }
+
+    public func permitsHealthPotAction(_ action: DeviceCapability) -> Bool {
+        guard device.model == HealthPotStatus.model, action.service == "health-pot" else { return true }
+        let status = healthPotStatus
+        switch action.name {
+        case "start-cook":
+            return status?.canStart == true
+                && action.inputs.allSatisfy { prepared[DeviceCapability.propertyID(action.siid, $0)] != nil }
+        case "cancel-cooking":
+            return status?.isStopped != true && status != .updating
+        default:
+            return true
+        }
+    }
+
     /// Contact/read timestamps remain accurate without making a no-change poll a semantic update.
     func hasSameValues(as other: DeviceSnapshot?) -> Bool {
         guard let other, health.state == other.health.state, health.lastError == other.health.lastError,
-              prepared == other.prepared, readings.count == other.readings.count else { return false }
+              prepared == other.prepared, startedHealthPotMenu == other.startedHealthPotMenu,
+              readings.count == other.readings.count else { return false }
         return readings.allSatisfy { id, reading in
             guard let previous = other.readings[id] else { return false }
             return reading.value == previous.value && reading.code == previous.code && reading.error == previous.error
@@ -264,13 +330,71 @@ public struct DeviceSnapshot: Equatable, Sendable, Identifiable {
     }
 }
 
+/// States of the chunmi.health_pot.a1 health-pot service.
+public enum HealthPotStatus: Int, Sendable {
+    case idle = 1, running = 2, scheduled = 3, keepingWarm = 4
+    case potOutIdle = 5, potOutRunning = 6, potOutScheduled = 7, potOutKeepingWarm = 8
+    case fault = 9, updating = 10, finished = 11
+
+    /// The only model whose status numbers these are.
+    public static let model = "chunmi.health_pot.a1"
+
+    /// Cooking, scheduled or keeping warm, with the pot on its base or lifted off.
+    public var isActive: Bool {
+        switch self {
+        case .running, .scheduled, .keepingWarm, .potOutRunning, .potOutScheduled, .potOutKeepingWarm: true
+        default: false
+        }
+    }
+
+    public var isStopped: Bool { self == .idle || self == .potOutIdle || self == .finished }
+    /// At rest on its base: the only states a start is accepted from.
+    public var canStart: Bool { self == .idle || self == .finished }
+}
+
 public struct DeviceCommandReceipt: Equatable, Sendable {
     public var capabilityID: String
     public var requestedAt: Date
     public var acceptedAt: Date?
     public var confirmedAt: Date?
+    public var checkingStateAfterFailure = false
     public var error: String?
     public init(capabilityID: String) { self.capabilityID = capabilityID; requestedAt = Date() }
+}
+
+/// One command as the diagnostics file shows it: what was asked, the request that went out, and how it ended.
+public struct DeviceCommandRecord: Equatable, Sendable {
+    public enum Source: String, Sendable { case mac, appleHome }
+    public enum Outcome: String, Sendable {
+        /// A next-menu setting held on the Mac; nothing is sent until the action runs.
+        case prepared
+        /// The device accepted it; its state was not read back, or does not report it.
+        case accepted
+        /// The device accepted it and its state then showed the result.
+        case confirmed
+        case failed
+    }
+    public var at: Date
+    public var source: Source
+    public var capabilityID: String
+    /// The miIO method and params as sent, such as `action {"aiid":1,…,"in":[{"piid":3,"value":5}]}`. Nil when
+    /// nothing was sent: a held next-menu setting, or a command refused before sending.
+    public var request: String?
+    public var outcome: Outcome = .failed
+    public var error: String?
+    /// The error's case, such as `unanswered` or `deviceError(code: -4004, …)`, independent of the language.
+    public var errorCode: String?
+    public var milliseconds = 0
+    /// The device's status number before and after, where its category has one.
+    public var statusBefore: Int?
+    public var statusAfter: Int?
+    /// Whether reads still succeeded afterwards: a failed command on a device that answers reads was ignored, not lost.
+    public var onlineAfter = false
+
+    public init(at: Date, source: Source, capabilityID: String, request: String?, statusBefore: Int? = nil) {
+        self.at = at; self.source = source; self.capabilityID = capabilityID; self.request = request
+        self.statusBefore = statusBefore
+    }
 }
 
 /// Configuration by semantic service/property. Model-specific entries only express protocol differences.

@@ -7,6 +7,27 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct PanelMemoryTests {
+    @Test("Auto clears both explicit appearances on the hosted AppKit window")
+    func panelAppearanceFollowsSystem() async {
+        let app = NSApplication.shared
+        let window = NSWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
+        let view = PanelWindowAppearance.AppearanceView()
+        window.contentView = view
+        defer { window.contentView = nil }
+        let schemes: [NSAppearance.Name] = [.aqua, .darkAqua]
+
+        for (preference, name) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+            view.setPreference(preference)
+            await settle { window.appearance?.name == name }
+            #expect(window.effectiveAppearance.bestMatch(from: schemes) == name)
+
+            view.setPreference("system")
+            await settle { window.appearance == nil }
+            #expect(window.appearance == nil)
+            #expect(window.effectiveAppearance.bestMatch(from: schemes) == app.effectiveAppearance.bestMatch(from: schemes))
+        }
+    }
+
     @Test("Panel content is lazy, quick reopen retains it, idle releases it")
     func idleEviction() async throws {
         _ = NSApplication.shared

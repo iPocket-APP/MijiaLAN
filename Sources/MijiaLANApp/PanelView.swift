@@ -50,10 +50,10 @@ struct PanelView: View {
         .background(ControlCenterPalette(scheme: scheme).panel)
         .clipShape(.rect(cornerRadius: 18))
         .panelWindowBackground(ControlCenterPalette(scheme: scheme).panel)
+        .background(PanelWindowAppearance(preference: appearance).allowsHitTesting(false))
         .tint(.blue)
         .environmentObject(session)
         .environmentObject(model.devices)
-        .preferredColorScheme(appearance == "dark" ? .dark : appearance == "light" ? .light : nil)
         .onAppear { if scrolls { model.store.setPanelVisible(panelPresented) } }
         .onDisappear { if scrolls { model.store.setPanelVisible(false) } }
         .onValueChange(of: panelPresented) { presented in
@@ -210,7 +210,7 @@ private struct PanelPage: View {
         case .settingsDevices:
             detailHeader(title: L10n.tr("米家设备", "Mijia Devices"), backTitle: L10n.tr("设置", "Settings"), backRoute: .settings) { EmptyView() }
         case .settingsImport:
-            detailHeader(title: L10n.tr("扫码导入", "QR Import"), backTitle: L10n.tr("设置", "Settings"), backRoute: .settings) { EmptyView() }
+            detailHeader(title: L10n.tr("导入米家设备", "Import Mijia Devices"), backTitle: L10n.tr("设置", "Settings"), backRoute: .settings) { EmptyView() }
         case .settingsManualAdd:
             detailHeader(title: L10n.tr("手动添加设备", "Add Device Manually"), backTitle: L10n.tr("设置", "Settings"), backRoute: .settings) { EmptyView() }
         }

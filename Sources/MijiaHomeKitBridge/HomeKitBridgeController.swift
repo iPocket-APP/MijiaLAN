@@ -82,6 +82,8 @@ public final class HomeKitBridgeController: ObservableObject {
         var signature = ""
         /// Reusing the last port spares Apple Home a re-resolve after a restart.
         var port: UInt16?
+        /// Bonjour `s#`, continued across restarts so it never returns to a number a controller last saw.
+        var stateNumber: Int?
     }
 
     private struct ExposedAccessory {
@@ -286,6 +288,11 @@ public final class HomeKitBridgeController: ObservableObject {
             firmwareRevision: "1.0.0"
         ))
         for aid in layout.aids.values { await bridge.reserveAID(aid) }
+        // Before the first values: publishing them moves s# for controllers that were away while the app was not.
+        await bridge.restoreStateNumber(layout.stateNumber ?? 1)
+        await bridge.addStateNumberChangeHandler { [weak self] number in
+            await self?.stateNumberChanged(number)
+        }
 
         await bridge.beginBatchUpdate()
         await reconcile(bridge: bridge, store: store)
@@ -588,18 +595,97 @@ public final class HomeKitBridgeController: ObservableObject {
                 service.characteristics.compactMap { c -> ReadFailure? in
                     guard let published = publishedCapabilityValues[did]?[c.iid], published.status != HAPStatus.success.rawValue,
                           let binding = entry.plan.bindings[c.iid] else { return nil }
-                    let source = switch binding {
-                    case .property(let id, let conversion): "\(id) \(conversion)"
-                    case .option(let id, let value): "\(id)=\(value.compactJSONString)"
-                    case .legacy(let role): role.rawValue
-                    default: "\(binding)"
-                    }
                     return ReadFailure(deviceID: did, service: service.type.rawValue, characteristic: c.type.rawValue,
-                                       source: source, status: published.status)
+                                       source: Self.source(of: binding), status: published.status)
                 }
             }
         }.sorted { ($0.deviceID, $0.service, $0.characteristic, $0.source) < ($1.deviceID, $1.service, $1.characteristic, $1.source) }
     }
+
+    private static func source(of binding: CapabilityHAPBinding) -> String {
+        switch binding {
+        case .property(let id, let conversion): "\(id) \(conversion)"
+        case .option(let id, let value): "\(id)=\(value.compactJSONString)"
+        case .legacy(let role): role.rawValue
+        default: "\(binding)"
+        }
+    }
+
+    /// One service of a bridged accessory as Home sees it now.
+    public struct PublishedService: Equatable, Sendable {
+        public struct Characteristic: Equatable, Sendable {
+            /// A readable name such as `On`, or the HAP type code.
+            public var type: String
+            /// What the device or the Mac binds it to, as in `ReadFailure.source`.
+            public var source: String
+            /// The value last published, as JSON; nil before the first publish or while it fails.
+            public var value: JSONValue?
+            /// The HAP status last published: 0 is success, -70402 is the failure Home draws a warning for.
+            public var status: Int?
+            public init(type: String, source: String, value: JSONValue?, status: Int?) {
+                self.type = type; self.source = source; self.value = value; self.status = status
+            }
+        }
+        public var key: String
+        public var type: String
+        public var isPrimary: Bool
+        /// The name Home shows: the Configured Name, else the Name; nil for a service shown under the accessory's.
+        public var name: String?
+        public var characteristics: [Characteristic]
+        public init(key: String, type: String, isPrimary: Bool, name: String?, characteristics: [Characteristic]) {
+            self.key = key; self.type = type; self.isPrimary = isPrimary; self.name = name; self.characteristics = characteristics
+        }
+    }
+
+    /// The services the bridge publishes for a device, in plan order, with their last published values; nil when the
+    /// device is not bridged. Services left out in settings are absent here and listed in `excludedServices`.
+    public func publishedServices(for did: String) -> [PublishedService]? {
+        guard let entry = capabilityPlans[did] else { return nil }
+        let published = publishedCapabilityValues[did] ?? [:]
+        let names: Set<String> = [HAPCharacteristicType.name.rawValue, HomeKitAccessoryMapper.configuredNameType.rawValue]
+        return zip(entry.plan.serviceKeys, entry.plan.services).map { key, service in
+            let name = [HomeKitAccessoryMapper.configuredNameType, .name].lazy.compactMap { type -> String? in
+                guard let c = service.characteristics.first(where: { $0.type == type }),
+                      case .string(let text)? = published[c.iid]?.value else { return nil }
+                return text
+            }.first
+            let characteristics = service.characteristics.filter { !names.contains($0.type.rawValue) }.map { c in
+                PublishedService.Characteristic(type: Self.characteristicNames[c.type.rawValue] ?? c.type.rawValue,
+                                                source: entry.plan.bindings[c.iid].map(Self.source(of:)) ?? "",
+                                                value: published[c.iid]?.value.flatMap(Self.json), status: published[c.iid]?.status)
+            }
+            return PublishedService(key: key, type: Self.serviceNames[service.type.rawValue] ?? service.type.rawValue,
+                                    isPrimary: service.isPrimary, name: name, characteristics: characteristics)
+        }
+    }
+
+    private static func json(_ value: HAPCharacteristicValue) -> JSONValue? {
+        switch value {
+        case .bool(let b): .bool(b)
+        case .uint8(let n): .number(Double(n))
+        case .uint16(let n): .number(Double(n))
+        case .uint32(let n): .number(Double(n))
+        case .int32(let n): .number(Double(n))
+        case .float(let n): .number(n)
+        case .string(let s): .string(s)
+        case .data, .tlv8: nil
+        }
+    }
+
+    private static let serviceNames = [
+        "49": "Switch", "47": "Outlet", "43": "Lightbulb", "40": "Fan", "B7": "Fan v2", "BB": "Air Purifier",
+        "BC": "Heater Cooler", "BD": "Humidifier Dehumidifier", "8C": "Window Covering", "8A": "Temperature Sensor",
+        "82": "Humidity Sensor", "8D": "Air Quality Sensor", "BA": "Filter Maintenance",
+    ]
+    private static let characteristicNames = [
+        "25": "On", "B0": "Active", "8": "Brightness", "CE": "Color Temperature", "29": "Rotation Speed", "B6": "Swing Mode",
+        "11": "Current Temperature", "10": "Current Relative Humidity", "B1": "Current Heater Cooler State",
+        "B2": "Target Heater Cooler State", "D": "Cooling Threshold Temperature", "12": "Heating Threshold Temperature",
+        "36": "Temperature Display Units", "A7": "Lock Physical Controls", "26": "Outlet In Use", "95": "Air Quality",
+        "C6": "PM2.5 Density", "A9": "Current Air Purifier State", "A8": "Target Air Purifier State", "AB": "Filter Life Level",
+        "AC": "Filter Change Indication", "6D": "Current Position", "7C": "Target Position", "72": "Position State",
+        "AF": "Current Fan State", "BF": "Target Fan State",
+    ]
 
     private func commitCapabilityValues(bridge: HAPBridge) async {
         guard let capabilities else { return }
@@ -661,7 +747,7 @@ public final class HomeKitBridgeController: ObservableObject {
                     if settlingWrites[did] == 0 { settlingWrites[did] = nil }
                 }
                 try await MiioClient.$attemptTimeout.withValue(Self.writeAttemptTimeout) {
-                    try await capabilities.execute(did: did, .batch(commands))
+                    try await DeviceController.$commandSource.withValue(.appleHome) { try await capabilities.execute(did: did, .batch(commands)) }
                 }
             }
         } catch {
@@ -713,7 +799,7 @@ public final class HomeKitBridgeController: ObservableObject {
                 // Mapped again: an earlier write can change what this one needs, such as turning power on.
                 let commands = try CapabilityHomeKitMapper.commands(binding, value: value, snapshot: snapshot)
                 try await MiioClient.$attemptTimeout.withValue(Self.writeAttemptTimeout) {
-                    try await capabilities.execute(did: did, .batch(commands))
+                    try await DeviceController.$commandSource.withValue(.appleHome) { try await capabilities.execute(did: did, .batch(commands)) }
                 }
             } catch {
                 logger.error("A write from Apple Home failed: \(String(describing: error), privacy: .public)")
@@ -788,6 +874,11 @@ public final class HomeKitBridgeController: ObservableObject {
         saveLayout()
     }
 
+    private func stateNumberChanged(_ number: Int) {
+        layout.stateNumber = number
+        saveLayout()
+    }
+
     private func saveLayout() {
         guard savedLayout != layout else { return }
         if let data = try? JSONEncoder().encode(layout) {
@@ -836,7 +927,7 @@ public final class HomeKitBridgeController: ObservableObject {
             case .climateFanMode(let mode): .setClimateFanMode(entityId: entity, fanMode: mode)
             case .climateSwing(let mode): .setClimateSwingMode(entityId: entity, swingMode: mode)
             }
-            try await capabilities.executeCore(command)
+            try await DeviceController.$commandSource.withValue(.appleHome) { try await capabilities.executeCore(command) }
             return
         }
         logger.info("Apple Home → \(deviceId, privacy: .private): \(String(describing: write), privacy: .private)")

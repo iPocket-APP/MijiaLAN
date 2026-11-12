@@ -36,6 +36,9 @@ public enum CapabilityHAPBinding: Sendable {
     case action(String)
     /// A robot vacuum's switch: on invokes `start`, off invokes `dock`, and it reads on while `status` says cleaning.
     case cleaning(start: String, dock: String, status: String)
+    /// One menu of a health kettle, as Mi Home's menu buttons: on sets `mode` to `menu` and starts it, off stops it,
+    /// and it reads on while the kettle runs that menu.
+    case kettleMenu(start: String, stop: String, mode: String, menu: Int)
     case name(String, String)
     case legacy(HomeKitRole)
     case constant(HAPCharacteristicValue)
@@ -90,6 +93,9 @@ public struct CapabilityHomeKitService: Identifiable, Equatable, Sendable {
 public enum CapabilityHomeKitMapper {
     /// Includes the Accessory Information service added by HAPBridge.
     public static let maxServicesPerAccessory = 100
+    /// The health kettle's menus Home may start: 煮茶 to 保温. 火力 (6) and 自选 (7) run settings made in the Mi Home
+    /// app, which the Mac cannot read, so they start only from the Mac.
+    static let kettleMenus: Set<Int> = [0, 1, 2, 3, 4, 5]
 
     /// - Parameter excluded: service keys the user kept out of Home. They still get their identifiers, so leaving one
     ///   out or bringing it back never renumbers the rest of the accessory.
@@ -595,6 +601,20 @@ public enum CapabilityHomeKitMapper {
             builder.add(key, type: .on, format: .bool, binding: .cleaning(start: start.id, dock: dock.id, status: status.id), writable: true)
             consumed.formUnion([start.id, dock.id])
             return true
+        case "health-pot":
+            func action(_ name: String) -> DeviceCapability? {
+                s.capabilities.first { $0.kind == .action && $0.control == .button && $0.service == category && $0.name == name }
+            }
+            guard s.device.model == HealthPotStatus.model, let status = s.capability(category, "status"), status.readable,
+                  let start = action("start-cook"), let stop = action("cancel-cooking"),
+                  let mode = s.capability(category, "cook-mode"), mode.prepared else { return false }
+            // Keep the existing start/stop menu keys. Older select-only menu keys must never start heating.
+            for option in mode.options where kettleMenus.contains(option.value) {
+                builder.option(key: "\(start.id)=\(option.value)", title: option.title,
+                               binding: .kettleMenu(start: start.id, stop: stop.id, mode: mode.id, menu: option.value))
+            }
+            consumed.formUnion([start.id, stop.id, mode.id])
+            return true
         default:
             return false
         }
@@ -697,6 +717,9 @@ public enum CapabilityHomeKitMapper {
             return legacyValues[role]
         case .action: return .bool(false)
         case .cleaning(_, _, let status): return vacuumStatus(status, in: s).map { .bool(VacuumStatus.isCleaning($0)) }
+        case .kettleMenu(_, _, _, let menu):
+            guard s.isOnline, s.healthPotStatus != nil else { return nil }
+            return .bool(s.activeHealthPotMenu == menu)
         case .option(let id, let option):
             guard let c = s.capabilities.first(where: { $0.id == id }) else { return nil }
             if c.control == .button { return .bool(false) }
@@ -809,6 +832,12 @@ public enum CapabilityHomeKitMapper {
             let current = vacuumStatus(status, in: s)
             if n != 0 { return current.map(VacuumStatus.isCleaning) == true ? [] : [.invoke(start)] }
             return current.map(VacuumStatus.isDocking) == true ? [] : [.invoke(dock)]
+        case .kettleMenu(let start, let stop, let mode, let menu):
+            guard s.isOnline else { throw HAPError.unavailable }
+            if n == 0 { return [.stopHealthPotMenu(action: stop, menu: menu)] }
+            if s.activeHealthPotMenu == menu { return [] }
+            guard s.healthPotStatus?.canStart == true else { throw HAPError.busy }
+            return [.set(mode, .number(Double(menu))), .invoke(start)]
         case .option(let id, let v): return n == 0 ? [] : [.set(id, v)]
         case .property(let id, let conversion):
             guard let c = s.capabilities.first(where: { $0.id == id }) else { throw HAPError.notFound }

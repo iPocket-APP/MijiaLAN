@@ -29,6 +29,55 @@ public actor HAPBridge {
         configurationNumber = max(1, n)
     }
 
+    // MARK: - State number (s#)
+
+    /// Bonjour `s#`. Without a home hub, a controller that is not connected keeps showing the values it last saw and
+    /// does not reconnect when Home opens; a changed `s#` tells it to read again. Native accessories move it the
+    /// same way (a Mi Desk Lamp 1S advertised `s#=39`), while a constant `1` left bridged tiles stale for hours.
+    private var stateNumber = 1
+    /// Set when a controller leaves, so the next change moves `s#` once. More changes before anyone returns are
+    /// covered by that move, which keeps a busy device from re-announcing the bridge on every reading.
+    private var controllerLeftSinceStateChange = true
+    private var stateNumberHandlers: [@Sendable (Int) async -> Void] = []
+    private var stateNumberTail: Task<Void, Never>?
+
+    /// The current state number for mDNS advertisement.
+    public var currentStateNumber: Int { stateNumber }
+
+    /// Restore a previously persisted state number (call before adding accessories).
+    public func restoreStateNumber(_ n: Int) {
+        stateNumber = (1 ... 65_535).contains(n) ? n : 1
+    }
+
+    /// Register a handler called with the new state number each time it moves, in order.
+    public func addStateNumberChangeHandler(_ handler: @escaping @Sendable (Int) async -> Void) {
+        stateNumberHandlers.append(handler)
+    }
+
+    /// A controller session ended; it now relies on `s#` to learn about later changes.
+    public func controllerDisconnected() {
+        controllerLeftSinceStateChange = true
+    }
+
+    /// Only controls move `s#`: what Home shows as on, off, open or locked. A sensor reading that changes every few
+    /// seconds would otherwise re-announce the bridge each time a controller comes and goes.
+    private func noteStateChange(of characteristic: HAPCharacteristic) {
+        guard controllerLeftSinceStateChange, characteristic.supportsNotification,
+              characteristic.permissions.contains(.write) else { return }
+        controllerLeftSinceStateChange = false
+        stateNumber = stateNumber >= 65_535 ? 1 : stateNumber + 1
+        logger.debug("State number moved to \(stateNumber) by iid \(characteristic.iid)")
+        let number = stateNumber, handlers = stateNumberHandlers, previous = stateNumberTail
+        stateNumberTail = Task {
+            await previous?.value
+            for handler in handlers { await handler(number) }
+        }
+    }
+
+    private func characteristic(aid: UInt64, iid: UInt64) -> HAPCharacteristic? {
+        accessories[aid]?.services.lazy.flatMap(\.characteristics).first { $0.iid == iid }
+    }
+
     /// Reserve an AID so auto-assignment skips it.
     ///
     /// Call before provisioning to prevent new accessories from being
@@ -274,6 +323,7 @@ public actor HAPBridge {
         let previous = readStatuses[key] ?? .success
         readStatuses[key] = status
         if status != .success && status != previous {
+            if let c = characteristic(aid: aid, iid: iid) { noteStateChange(of: c) }
             notifySubscribers(aid: aid, iid: iid, value: nil, status: status)
         }
     }
@@ -380,6 +430,7 @@ public actor HAPBridge {
                     accessory.services[serviceIndex].characteristics[charIndex].value = normalized
                     accessories[aid] = accessory
 
+                    if recovered || oldValue != normalized { noteStateChange(of: char) }
                     // Notify subscribers if value changed
                     if forceNotify || recovered || oldValue != normalized {
                         notifySubscribers(aid: aid, iid: iid, value: normalized, includeOrigin: forceNotify || recovered)
@@ -419,6 +470,7 @@ public actor HAPBridge {
         for key in subscriptions.keys {
             subscriptions[key]?.remove(connectionID)
         }
+        controllerDisconnected()
     }
 
     private func notifySubscribers(aid: UInt64, iid: UInt64, value: HAPCharacteristicValue?,
