@@ -7,7 +7,7 @@ struct ControlCenterDevices: View {
     @ObservedObject var session: PanelSession
     @EnvironmentObject private var devices: DeviceController
     let openDevice: (String) -> Void
-    let openSettings: () -> Void
+    let openSetup: () -> Void
 
     var body: some View {
         let snapshots = devices.snapshots
@@ -20,7 +20,7 @@ struct ControlCenterDevices: View {
                     Text(L10n.tr("把设备带到控制中心", "Add Your Devices")).font(.headline)
                     Text(L10n.tr("导入米家设备后，即可在这里通过局域网控制。", "Import your Mijia devices to control them here over the LAN."))
                         .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    Button(L10n.tr("导入设备", "Import Devices"), action: openSettings).buttonStyle(.borderedProminent)
+                    Button(L10n.tr("导入设备", "Import Devices"), action: openSetup).buttonStyle(.borderedProminent)
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 30)
             } else if online.isEmpty {

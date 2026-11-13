@@ -70,7 +70,13 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate, NSMenuItemValida
             name: NSApplication.willTerminateNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(activeApplicationChanged),
             name: NSWorkspace.didActivateApplicationNotification, object: nil)
-        if ProcessInfo.processInfo.environment["MIJIALAN_PANEL_OPEN_ON_LAUNCH"] == "1" {
+        if model.opensSetupGuideOnLaunch {
+            let firstOpening = model.setupGuideProgress.begin()
+            session.route = .setupGuide
+            session.setupGuideUsesExistingDevices = !model.config.devices.isEmpty
+            if firstOpening { model.startCloudImport(requiresQRCode: true) }
+        }
+        if model.opensSetupGuideOnLaunch || ProcessInfo.processInfo.environment["MIJIALAN_PANEL_OPEN_ON_LAUNCH"] == "1" {
             DispatchQueue.main.async { [weak self] in self?.show() }
         }
     }
@@ -118,7 +124,7 @@ final class MenuBarPanelController: NSObject, NSWindowDelegate, NSMenuItemValida
     /// before it appears.
     @objc private func openSettings() {
         // Leaving the import page cancels the import, as the panel's own navigation does.
-        if session.route == .settingsImport { model.cancelImport() }
+        if session.route.ownsCloudImport { model.cancelImport() }
         session.route = .settings
         show()
     }

@@ -99,7 +99,8 @@ struct PanelView: View {
 
     private func navigate(_ destination: ControlCenterRoute) {
         guard destination != route else { return }
-        if route == .settingsImport { model.cancelImport() }
+        if route.ownsCloudImport { model.cancelImport() }
+        if destination == .setupGuide { session.setupGuideUsesExistingDevices = false }
         movesForward = destination.depth >= route.depth
         generation += 1
         let currentGeneration = generation
@@ -199,6 +200,10 @@ private struct PanelPage: View {
                 }
             }
             .padding(.leading, 16).padding(.trailing, 12).padding(.top, 14).padding(.bottom, 12)
+        case .setupGuide:
+            Text(L10n.tr("引导教程", "Setup Guide")).font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16).padding(.vertical, 12)
         case .device(let did):
             detailHeader(title: model.config.devices.first(where: { $0.did == did }).map(DevicePresentation.name) ?? L10n.tr("设备", "Devices")) {
                 if let snapshot = devices.snapshots[did] { ControlCenterPower(controller: devices, snapshot: snapshot) }
@@ -239,8 +244,10 @@ private struct PanelPage: View {
                     Label(L10n.tr("钥匙串暂时无法访问，请重新打开 App 并允许访问。", "Keychain access is unavailable. Reopen the app and allow access."), systemImage: ControlCenterSymbol.keychainUnavailable)
                         .font(.caption).foregroundStyle(.orange).padding(12)
                 }
-                ControlCenterDevices(model: model, session: session, openDevice: { navigate(.device($0)) }, openSettings: { navigate(.settings) })
+                ControlCenterDevices(model: model, session: session, openDevice: { navigate(.device($0)) }, openSetup: { navigate(.setupGuide) })
             }
+        case .setupGuide:
+            SetupGuide(model: model, bridge: model.bridge, session: session, navigate: navigate, onFinish: dismissSetupGuide)
         case .device(let did):
             if let device = model.config.devices.first(where: { $0.did == did }) {
                 ControlCenterDeviceDetail(model: model, device: device).id(did)
@@ -252,10 +259,16 @@ private struct PanelPage: View {
         case .settingsDevices:
             SettingsDeviceManagement(model: model)
         case .settingsImport:
-            SettingsImportFlow(model: model, navigate: navigate)
+            DeviceImportCard(model: model, onCancel: { navigate(.settings) }, onViewDevices: { navigate(.settingsDevices) })
+                .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 16)
         case .settingsManualAdd:
             SettingsManualDevice(model: model, draft: session.manual)
         }
+    }
+
+    private func dismissSetupGuide() {
+        model.setupGuideProgress.dismiss()
+        navigate(.home)
     }
 
     private var footer: some View {

@@ -22,6 +22,7 @@ final class AppModel: ObservableObject {
         case loadingQR
         case waitingForScan(QRLoginTicket, expiresAt: Date)
         case fetching
+        case completed(importedCount: Int, summary: String)
         case needsScan
         case failed(String)
     }
@@ -35,7 +36,7 @@ final class AppModel: ObservableObject {
     } }
     let devices: DeviceController
     @Published private(set) var importState: ImportState = .idle
-    @Published private(set) var lastImportSummary: String?
+    @Published private(set) var lastManualAddSummary: String?
     @Published var importRegion: String = "cn"
     @Published private(set) var loginStorageError: String?
     @Published private var rememberedSession: MiSession?
@@ -63,6 +64,8 @@ final class AppModel: ObservableObject {
 
     let store: HomeStore
     let bridge: HomeKitBridgeController
+    let setupGuideProgress: SetupGuideProgress
+    let opensSetupGuideOnLaunch: Bool
     private let vault: SecretVault
     private let cloudTransport: (any MiHTTPTransport)?
     private let configBox: ConfigBox
@@ -104,13 +107,18 @@ final class AppModel: ObservableObject {
         self.cloudTransport = cloudTransport
         var loaded = LocalHomeConfig()
         var unavailable = false
-        switch vault.lookup(Self.configAccount) {
+        let savedConfiguration = vault.lookup(Self.configAccount)
+        switch savedConfiguration {
         case .value(let data): loaded = LocalHomeConfig.decode(data) ?? LocalHomeConfig()
         case .missing: break
         case .unavailable: unavailable = true
         }
         config = loaded
         vaultUnavailable = unavailable
+        let setupGuide = SetupGuideProgress(defaults: bridgeDefaults)
+        setupGuideProgress = setupGuide
+        opensSetupGuideOnLaunch = !preview && environment["MIJIALAN_SNAPSHOT"] == nil
+            && setupGuide.shouldOpen(configuration: savedConfiguration)
         let box = ConfigBox(loaded)
         configBox = box
         let api: LANMiotAPI
@@ -127,7 +135,7 @@ final class AppModel: ObservableObject {
         bridge = HomeKitBridgeController(vault: HomeKitBridgeVault(
             load: { vault.lookup(AppModel.bridgeAccount) },
             save: { vault.set($0, for: AppModel.bridgeAccount) }
-        ), defaults: bridgeDefaults)
+        ), defaults: bridgeDefaults, loopbackOnly: preview)
         if !unavailable, case .value(let data) = vault.lookup(Self.rememberedSessionAccount),
            let session = try? JSONDecoder().decode(MiSession.self, from: data) {
             rememberedSession = session
@@ -238,11 +246,10 @@ final class AppModel: ObservableObject {
     }
 
     @discardableResult
-    func startCloudImport() -> Task<Void, Never> {
+    func startCloudImport(requiresQRCode: Bool = false) -> Task<Void, Never> {
         cancelImport()
-        lastImportSummary = nil
         loginStorageError = nil
-        let savedSession = reusableSession
+        let savedSession = requiresQRCode ? nil : reusableSession
         let region = importRegion
         importState = savedSession == nil ? .loadingQR : .fetching
         let task = Task { [weak self] in
@@ -331,10 +338,10 @@ final class AppModel: ObservableObject {
             scannedSession.region = result.region
             sessionToRemember = scannedSession
         }
-        lastImportSummary = L10n.tr("导入 \(result.devices.count) 台可走局域网的设备", "Imported LAN devices: \(result.devices.count)") +
+        let summary = L10n.tr("导入 \(result.devices.count) 台可走局域网的设备", "Imported LAN devices: \(result.devices.count)") +
             (result.skipped.isEmpty ? "" : L10n.tr("，\(result.skipped.count) 台不能（见下方）", "; skipped: \(result.skipped.count) (see device details)")) +
             (result.region == "cn" ? "" : L10n.tr("（服务器：\(result.region)）", " (server: \(result.region))"))
-        importState = .idle
+        importState = .completed(importedCount: result.devices.count, summary: summary)
         logger.info("Imported \(result.devices.count, privacy: .public) devices, skipped \(result.skipped.count, privacy: .public)")
     }
 
@@ -366,7 +373,7 @@ final class AppModel: ObservableObject {
                 var next = self.config
                 next.merge([device])
                 self.apply(next)
-                self.lastImportSummary = L10n.tr("已添加 \(device.name)（\(device.model)）", "Added \(device.name) (\(device.model)).")
+                self.lastManualAddSummary = L10n.tr("已添加 \(device.name)（\(device.model)）", "Added \(device.name) (\(device.model)).")
             } catch {
                 self?.manualAddError = Self.describe(error)
             }

@@ -29,6 +29,7 @@ enum DevSnapshot {
         let exits = environment["MIJIALAN_SNAPSHOT_EXIT"] != "0"
         let route: ControlCenterRoute = environment["MIJIALAN_UI_PAGE"].map {
             switch $0 {
+            case "setup-guide": .setupGuide
             case "settings": .settings
             case "settings-homekit": .settingsHomeKit
             case "settings-devices": .settingsDevices

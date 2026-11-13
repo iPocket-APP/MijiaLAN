@@ -8,6 +8,58 @@ import Testing
 
 @MainActor
 struct WireHomeKitIntegrationTests {
+    @Test("Refreshing an unused Home code keeps the bridge identity and preserves any completed pairing")
+    func refreshUnusedSetupCode() async throws {
+        let fixture = try await Fixture.make()
+        let bridge = fixture.bridge
+        do {
+            let original = try #require(fixture.storage.data.withLock { $0 }.flatMap(HomeKitBridgeSecrets.decode))
+            let originalURI = try #require(bridge.setupURI)
+            fixture.storage.rejectWrites.withLock { $0 = true }
+            bridge.refreshSetupCode()
+            await bridge.waitUntilIdle()
+            #expect(bridge.setupCodeRefreshError != nil)
+            #expect(bridge.status == .running(port: fixture.port))
+            #expect(bridge.setupURI == originalURI)
+
+            fixture.storage.rejectWrites.withLock { $0 = false }
+            bridge.refreshSetupCode()
+            await bridge.waitUntilIdle()
+            #expect(bridge.setupCodeRefreshError == nil)
+            guard case .running(let port) = bridge.status else { throw WireHAPController.Failure.closed }
+            let refreshed = try #require(fixture.storage.data.withLock { $0 }.flatMap(HomeKitBridgeSecrets.decode))
+            #expect(refreshed.setupCode != original.setupCode)
+            #expect(bridge.setupCode == refreshed.setupCode)
+            #expect(bridge.setupURI != originalURI)
+            #expect(refreshed.deviceID == original.deviceID)
+            #expect(refreshed.signingKey == original.signingKey)
+            #expect(refreshed.setupID == original.setupID)
+
+            let stale = WireHAPController(port: port)
+            try await stale.connect()
+            await #expect(throws: WireHAPController.Failure.self) { try await stale.pair(setupCode: original.setupCode) }
+            await stale.close()
+            #expect(!bridge.isPaired)
+
+            let client = WireHAPController(port: port)
+            try await client.connect()
+            try await client.pair(setupCode: refreshed.setupCode)
+            try await client.verify()
+            #expect(bridge.isPaired)
+            let pairedData = fixture.storage.data.withLock { $0 }
+            bridge.refreshSetupCode()
+            await bridge.waitUntilIdle()
+            #expect(fixture.storage.data.withLock { $0 } == pairedData)
+            #expect(bridge.setupCode == refreshed.setupCode)
+            #expect(try await client.request("GET", "/accessories").status == 200)
+            await client.close()
+        } catch {
+            await fixture.stop()
+            throw error
+        }
+        await fixture.stop()
+    }
+
     @Test("A brightness-only write turns on an off legacy lamp before applying its level")
     func lampBrightnessBeforePower() async throws {
         let fixture = try await Fixture.make(model: LoopbackMiioDevice.lampModel)
@@ -515,6 +567,7 @@ struct WireHomeKitIntegrationTests {
         let devices: DeviceController
         let store: HomeStore
         let bridge: HomeKitBridgeController
+        let storage: VaultStorage
         let suite: String
         let defaults: UserDefaults
         let originalName: String
@@ -537,7 +590,11 @@ struct WireHomeKitIntegrationTests {
             for _ in 0..<100 where !store.hasReceivedInitialSnapshot { try await MonotonicClock.sleep(for: .milliseconds(2)) }
             let storage = VaultStorage()
             let vault = HomeKitBridgeVault(load: { storage.data.withLock { $0.map { .value($0) } ?? .missing } },
-                save: { value in storage.data.withLock { $0 = value }; return true })
+                save: { value in
+                    guard !storage.rejectWrites.withLock({ $0 }) else { return false }
+                    storage.data.withLock { $0 = value }
+                    return true
+                })
             let bridge = HomeKitBridgeController(vault: vault, defaults: defaults, port: 0, loopbackOnly: true)
             bridge.attach(to: store, capabilities: devices)
             await bridge.waitUntilIdle()
@@ -550,7 +607,7 @@ struct WireHomeKitIntegrationTests {
                 defaults.removePersistentDomain(forName: suite)
                 throw WireHAPController.Failure.closed
             }
-            return Fixture(device: device, api: api, devices: devices, store: store, bridge: bridge,
+            return Fixture(device: device, api: api, devices: devices, store: store, bridge: bridge, storage: storage,
                            suite: suite, defaults: defaults, originalName: name, port: port, code: code)
         }
         func settle() async {
@@ -568,4 +625,7 @@ struct WireHomeKitIntegrationTests {
     }
 }
 
-private final class VaultStorage: Sendable { let data = LockedState<Data?>(initialState: nil) }
+private final class VaultStorage: Sendable {
+    let data = LockedState<Data?>(initialState: nil)
+    let rejectWrites = LockedState(initialState: false)
+}

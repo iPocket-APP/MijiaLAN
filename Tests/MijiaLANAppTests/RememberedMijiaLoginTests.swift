@@ -37,12 +37,20 @@ struct RememberedMijiaLoginTests {
 
         await transport.clearRequests()
         await reopened.startCloudImport().value
-        #expect(reopened.lastImportSummary != nil)
+        expectCompleted(reopened)
         #expect(!reopened.canRememberImportedLogin)
         let requests = await transport.requests
         #expect(requests.first?.host == "de.api.io.mi.com")
         #expect(requests.filter { $0.path.hasSuffix("/device_list") }.count == 1)
         #expect(!requests.contains { $0.path == "/longPolling/loginUrl" })
+
+        let rememberedLogin = SecretVault(storage: storage).lookup(AppModel.rememberedSessionAccount)
+        await transport.clearRequests()
+        await reopened.startCloudImport(requiresQRCode: true).value
+        expectCompleted(reopened)
+        #expect(await transport.requests.first?.path == "/longPolling/loginUrl")
+        #expect(reopened.canRememberImportedLogin)
+        #expect(SecretVault(storage: storage).lookup(AppModel.rememberedSessionAccount) == rememberedLogin)
 
         reopened.importRegion = "sg"
         #expect(!reopened.canReuseRememberedLogin)
@@ -81,7 +89,7 @@ struct RememberedMijiaLoginTests {
 
         await transport.setDeviceListResponse(.valid)
         await model.startCloudImport().value
-        #expect(model.lastImportSummary != nil)
+        expectCompleted(model)
         #expect(await transport.requests.allSatisfy { $0.host == "de.api.io.mi.com" })
 
         await transport.setDeviceListResponse(.expired)
@@ -99,6 +107,15 @@ struct RememberedMijiaLoginTests {
 
     private func makeModel(_ storage: SecretVault.Storage, _ transport: ImportTransport) -> AppModel {
         AppModel(environment: ["MIJIALAN_UI_PREVIEW": "1"], secretStorage: storage, cloudTransport: transport)
+    }
+
+    private func expectCompleted(_ model: AppModel) {
+        guard case .completed(let count, let summary) = model.importState else {
+            Issue.record("Expected an import result after fetching the device list")
+            return
+        }
+        #expect(count == 0)
+        #expect(!summary.isEmpty)
     }
 }
 
