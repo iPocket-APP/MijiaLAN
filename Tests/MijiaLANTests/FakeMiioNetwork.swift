@@ -23,6 +23,9 @@ final class FakeMiioNetwork: MiioTransport, @unchecked Sendable {
         var unreachable = false
         /// Set for a pre-MIoT device: it answers `get_prop` / `set_<name>` from these and `-9999` to MIoT methods.
         var legacyProps: [String: JSONValue]?
+        var rejectedProperties: Set<String> = []
+        var maxPropertiesPerRequest: Int?
+        var propertyBatchSizes: [Int] = []
         /// Further legacy methods a pre-MIoT device answers, with their replies (`get_status`, `app_start`).
         var legacyReplies: [String: JSONValue] = [:]
         /// Reply text after the id, sent as is: a number JSONValue cannot write, such as a 20-digit code.
@@ -124,7 +127,16 @@ final class FakeMiioNetwork: MiioTransport, @unchecked Sendable {
         case "miIO.info":
             reply["result"] = .object(["model": .string(device.model), "mac": .string("AA:BB:CC:00:11:22"), "fw_ver": .string("1.0.0")])
         case "get_properties":
-            reply["result"] = .array((params.arrayValue ?? []).map { item in
+            let properties = params.arrayValue ?? []
+            device.propertyBatchSizes.append(properties.count)
+            let rejected = properties.contains {
+                device.rejectedProperties.contains("\($0["siid"]?.integer ?? 0).\($0["piid"]?.integer ?? 0)")
+            }
+            if rejected || properties.count > (device.maxPropertiesPerRequest ?? .max) {
+                reply["error"] = .object(["code": .number(-9999), "message": .string("user ack timeout")])
+                break
+            }
+            reply["result"] = .array(properties.map { item in
                 let key = "\(item["siid"]?.intValue ?? 0).\(item["piid"]?.intValue ?? 0)"
                 guard let value = device.props[key] else {
                     return .object(["did": item["did"] ?? .null, "siid": item["siid"] ?? .null, "piid": item["piid"] ?? .null, "code": .number(-4003)])

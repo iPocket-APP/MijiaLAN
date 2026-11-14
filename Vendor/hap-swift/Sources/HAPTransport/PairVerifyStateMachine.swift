@@ -14,6 +14,7 @@ public actor PairVerifyStateMachine {
     private let identity: HAPIdentity
     private let pairingStore: any PairingStore
     private let deviceID: String
+    private let onHandshake: (@Sendable (HAPHandshakeEvent) -> Void)?
     private var state: State = .idle
 
     private enum State {
@@ -22,24 +23,44 @@ public actor PairVerifyStateMachine {
         case verified(readKey: SymmetricKey, writeKey: SymmetricKey)
     }
 
-    public init(identity: HAPIdentity, pairingStore: any PairingStore, deviceID: String) {
+    public init(identity: HAPIdentity, pairingStore: any PairingStore, deviceID: String,
+                onHandshake: (@Sendable (HAPHandshakeEvent) -> Void)? = nil) {
         self.identity = identity
         self.pairingStore = pairingStore
         self.deviceID = deviceID
+        self.onHandshake = onHandshake
     }
 
     public func handleRequest(_ data: Data) async throws -> Data {
-        let items = try TLV8.decode(data)
+        let items: [TLV8.Item]
+        do {
+            items = try TLV8.decode(data)
+        } catch {
+            onHandshake?(.init(.verify, message: nil, outcome: .rejected, reason: .malformedTLV))
+            throw error
+        }
 
         guard let stateItem = items.first(where: { $0.type == TLV8Type.state.rawValue }),
               let stateValue = stateItem.value.first else {
+            onHandshake?(.init(.verify, message: nil, outcome: .rejected, reason: .missingFields))
             throw HAPPairingError.invalidState
         }
 
         switch stateValue {
-        case 1: return try handleVerifyM1(items)
+        case 1:
+            do {
+                let response = try handleVerifyM1(items)
+                onHandshake?(.init(.verify, message: 1, outcome: .advanced))
+                return response
+            } catch {
+                onHandshake?(.init(.verify, message: 1, outcome: .rejected,
+                                  reason: error is HAPPairingError ? .missingFields : .internalError))
+                throw error
+            }
         case 3: return try await handleVerifyM3(items)
-        default: throw HAPPairingError.invalidState
+        default:
+            onHandshake?(.init(.verify, message: stateValue, outcome: .rejected, reason: .invalidSequence))
+            throw HAPPairingError.invalidState
         }
     }
 
@@ -105,12 +126,12 @@ public actor PairVerifyStateMachine {
 
     private func handleVerifyM3(_ items: [TLV8.Item]) async throws -> Data {
         guard case .awaitingM3(let sharedSecret, let accessoryEphemeralPublicKey, let controllerEphemeralPublicKey) = state else {
-            return errorResponse(state: 4, error: .authentication)
+            return authenticationError(.invalidSequence)
         }
 
         guard let encryptedData = items.first(where: { $0.type == TLV8Type.encryptedData.rawValue })?.value else {
             self.state = .idle
-            return errorResponse(state: 4, error: .authentication)
+            return authenticationError(.missingFields)
         }
 
         // Decrypt
@@ -122,23 +143,34 @@ public actor PairVerifyStateMachine {
             decrypted = try HAPEncryption.decrypt(ciphertext: encryptedData, key: encKey, nonce: nonce)
         } catch {
             self.state = .idle
-            return errorResponse(state: 4, error: .authentication)
+            return authenticationError(.decryptionFailed)
         }
 
         // Parse sub-TLV
-        let subItems = try TLV8.decode(decrypted)
+        guard let subItems = try? TLV8.decode(decrypted) else {
+            self.state = .idle
+            return authenticationError(.malformedTLV)
+        }
 
         guard let controllerIdentifier = subItems.first(where: { $0.type == TLV8Type.identifier.rawValue })?.value,
               let controllerSignature = subItems.first(where: { $0.type == TLV8Type.signature.rawValue })?.value else {
             self.state = .idle
-            return errorResponse(state: 4, error: .authentication)
+            return authenticationError(.missingFields)
         }
 
         // Look up controller public key
         let identifierString = String(data: controllerIdentifier, encoding: .utf8) ?? ""
-        guard let controllerPublicKey = try await pairingStore.publicKey(for: identifierString) else {
+        let knownKey: Data?
+        do {
+            knownKey = try await pairingStore.publicKey(for: identifierString)
+        } catch {
             self.state = .idle
-            return errorResponse(state: 4, error: .authentication)
+            onHandshake?(.init(.verify, message: 3, outcome: .rejected, reason: .pairingStoreFailed))
+            throw error
+        }
+        guard let controllerPublicKey = knownKey else {
+            self.state = .idle
+            return authenticationError(.controllerUnknown)
         }
 
         // Build controller info for verification.
@@ -149,15 +181,15 @@ public actor PairVerifyStateMachine {
         controllerInfo.append(accessoryEphemeralPublicKey)
 
         // Verify signature
-        let valid = try HAPIdentity.verify(
+        let valid = (try? HAPIdentity.verify(
             signature: controllerSignature,
             data: controllerInfo,
             publicKey: controllerPublicKey
-        )
+        )) == true
 
         guard valid else {
             self.state = .idle
-            return errorResponse(state: 4, error: .authentication)
+            return authenticationError(.signatureRejected)
         }
 
         // Derive session keys.
@@ -171,6 +203,7 @@ public actor PairVerifyStateMachine {
 
         self.state = .verified(readKey: derived.writeKey, writeKey: derived.readKey)
         self.verifiedControllerIdentifier = identifierString
+        onHandshake?(.init(.verify, message: 3, outcome: .completed))
 
         return TLV8.encode([
             (type: TLV8Type.state.rawValue, value: Data([0x04])),
@@ -179,10 +212,12 @@ public actor PairVerifyStateMachine {
 
     // MARK: - Helpers
 
-    private func errorResponse(state: UInt8, error: TLV8ErrorCode) -> Data {
-        TLV8.encode([
-            (type: TLV8Type.state.rawValue, value: Data([state])),
-            (type: TLV8Type.error.rawValue, value: Data([error.rawValue])),
+    private func authenticationError(_ reason: HAPHandshakeEvent.Reason) -> Data {
+        let code = TLV8ErrorCode.authentication.rawValue
+        onHandshake?(.init(.verify, message: 3, outcome: .rejected, reason: reason, tlvErrorCode: code))
+        return TLV8.encode([
+            (type: TLV8Type.state.rawValue, value: Data([4])),
+            (type: TLV8Type.error.rawValue, value: Data([code])),
         ])
     }
 }

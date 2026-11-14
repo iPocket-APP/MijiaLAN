@@ -13,10 +13,17 @@ public actor MiioClient {
     private let transport: any MiioTransport
     private let timeout: TimeSpan
     private let retries: Int
+    private let expectedDeviceID: UInt32?
 
     private var deviceID: UInt32?
     private var clock: (stamp: UInt32, at: MonotonicClock.Instant)?
     private var nextRequestID = Int.random(in: 1...9_000)
+    private var lastHelloAt: Date?
+    private var lastAuthenticatedReplyAt: Date?
+    private var batchLimit = MiioClient.propertiesPerRequest
+    private var unanswered: [MiotPropKey: MonotonicClock.Instant] = [:]
+    private var propertyRetryAt: MonotonicClock.Instant?
+    private var lastReadFallback: LANPropertyReadFallback?
     private var calling = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
@@ -48,7 +55,8 @@ public actor MiioClient {
         port: UInt16 = MiioPacket.port,
         transport: any MiioTransport = UDPMiioTransport(),
         timeout: TimeSpan = .seconds(2),
-        retries: Int = 2
+        retries: Int = 2,
+        expectedDeviceID: UInt32? = nil
     ) {
         self.host = host
         self.port = port
@@ -56,6 +64,7 @@ public actor MiioClient {
         self.transport = transport
         self.timeout = timeout
         self.retries = max(0, retries)
+        self.expectedDeviceID = expectedDeviceID
     }
 
     /// The hello reply's header: device ID and clock. Does not prove the token is right.
@@ -63,6 +72,11 @@ public actor MiioClient {
     public func handshake(timeout: TimeSpan? = nil) async throws -> MiioPacket.Header {
         let reply = try await transport.exchange(MiioPacket.hello, host: host, port: port, timeout: timeout ?? self.timeout)
         let header = try MiioPacket.parseHeader(reply)
+        lastHelloAt = Date()
+        if let expectedDeviceID, header.deviceID != expectedDeviceID {
+            deviceID = nil
+            throw MiioError.unexpectedDevice
+        }
         deviceID = header.deviceID
         clock = (header.stamp, .now)
         return header
@@ -140,6 +154,11 @@ public actor MiioClient {
 
         let reply = try await transport.exchange(packet, host: host, port: port, timeout: timeout)
         let (header, payload) = try MiioPacket.decode(reply, token: token)
+        if header.deviceID != deviceID {
+            self.deviceID = nil
+            throw MiioError.unexpectedDevice
+        }
+        lastAuthenticatedReplyAt = Date()
         self.clock = (header.stamp, .now)
         guard let json = Self.parseJSON(payload) else { throw MiioError.badResponse(L10n.tr("无法解析 JSON", "Could not parse JSON.")) }
         if let error = json["error"] {
@@ -172,6 +191,20 @@ public actor MiioClient {
         }
         return nil
     }
+
+    func resetPropertyReadBackoff() {
+        propertyRetryAt = nil
+        unanswered.removeAll()
+        batchLimit = Self.propertiesPerRequest
+    }
+
+    func diagnosticEvidence() -> LANClientEvidence {
+        let now = MonotonicClock.now
+        return .init(lastHelloAt: lastHelloAt, lastAuthenticatedReplyAt: lastAuthenticatedReplyAt,
+                     batchLimit: batchLimit, suppressedProperties: unanswered.values.filter { $0 > now }.count,
+                     backoffSeconds: propertyRetryAt.map { max(0, Int(($0 - now).timeInterval.rounded(.up))) } ?? 0,
+                     lastFallback: lastReadFallback)
+    }
 }
 
 // MARK: - MIoT over miIO
@@ -192,9 +225,14 @@ public struct MiioInfo: Equatable, Sendable {
 extension MiioClient {
     /// Firmware rejects long property lists; 15 is what the Mi Home app sends.
     public static let propertiesPerRequest = 15
+    private static let fallbackAttemptTimeout: TimeSpan = .milliseconds(300)
+    private static let fallbackBudget: TimeSpan = .milliseconds(1500)
+    private static let propertyRetryDelay: TimeSpan = .seconds(60)
+    private static let unansweredRetryDelay: TimeSpan = .seconds(600)
+    private typealias Property = (siid: Int, piid: Int)
 
-    public func info(timeout: TimeSpan? = nil) async throws -> MiioInfo {
-        let result = try await call("miIO.info", timeout: timeout)
+    public func info(timeout: TimeSpan? = nil, retryCount: Int? = nil) async throws -> MiioInfo {
+        let result = try await call("miIO.info", timeout: timeout, retryCount: retryCount)
         guard let model = result["model"]?.stringValue, !model.isEmpty else { throw MiioError.badResponse(L10n.tr("miIO.info 没有 model", "miIO.info did not include a model.")) }
         return MiioInfo(model: model, mac: result["mac"]?.stringValue, firmware: result["fw_ver"]?.stringValue)
     }
@@ -207,28 +245,109 @@ extension MiioClient {
 
     /// Every requested property has a result, including omissions and negative return codes.
     public func readProperties(did: String, _ props: [(siid: Int, piid: Int)]) async throws -> [MiotPropKey: DeviceReading] {
+        guard !props.isEmpty else { return [:] }
+        try Task.checkCancellation()
+        let now = MonotonicClock.now
+        if let propertyRetryAt, propertyRetryAt > now {
+            throw MiioError.propertyReadBackoff
+        }
+        propertyRetryAt = nil
+        unanswered = unanswered.filter { $0.value > now }
+
+        let rejected = DeviceReading(code: Self.userAckTimeoutCode, error: Self.propertyError(Self.userAckTimeoutCode))
+        let key: @Sendable (Property) -> MiotPropKey = { .init(did: did, siid: $0.siid, piid: $0.piid) }
+        let asked = props.filter { unanswered[key($0)] == nil }
+        guard !asked.isEmpty else { throw MiioError.propertyReadBackoff }
         var values: [MiotPropKey: DeviceReading] = [:]
+        for property in props where unanswered[key(property)] != nil { values[key(property)] = rejected }
+        var answered = false
+        var failedSingles: [MiotPropKey] = []
+        var fallback: LANPropertyReadFallback?
+        var fallbackDeadline: MonotonicClock.Instant?
+        var ackError: MiioError?
         var start = 0
-        while start < props.count {
+        while start < asked.count {
             try Task.checkCancellation()
-            let chunk = props[start..<min(start + Self.propertiesPerRequest, props.count)]
-            start += Self.propertiesPerRequest
-            let params = JSONValue.array(chunk.map {
-                .object(["did": .string(did), "siid": .number(Double($0.siid)), "piid": .number(Double($0.piid))])
-            })
-            let result = try await call("get_properties", params: params)
-            for p in chunk {
-                values[MiotPropKey(did: did, siid: p.siid, piid: p.piid)] = DeviceReading(error: L10n.tr("设备未返回此属性", "The device did not return this property."))
+            let chunk = asked[start..<min(start + batchLimit, asked.count)]
+            start += chunk.count
+            do {
+                values.merge(try await readChunk(did: did, chunk)) { _, new in new }
+                answered = true
+            } catch MiioError.deviceError(let code, let message) where code == Self.userAckTimeoutCode {
+                ackError = .deviceError(code: code, message: message)
+                if fallback == nil {
+                    fallback = .init(at: Date(), requested: props.count, rejectedBatchSize: chunk.count)
+                    fallbackDeadline = MonotonicClock.now + Self.fallbackBudget
+                }
+                for property in chunk { values[key(property)] = rejected }
+                if chunk.count == 1, let property = chunk.first {
+                    failedSingles.append(key(property))
+                    continue
+                }
+                var individuallyAnswered = 0
+                for index in chunk.indices {
+                    try Task.checkCancellation()
+                    let remaining = (fallbackDeadline ?? .now) - MonotonicClock.now
+                    guard remaining > .zero, (fallback?.singleAttempts ?? 0) < Self.propertiesPerRequest else {
+                        fallback?.stoppedEarly = true
+                        break
+                    }
+                    fallback?.singleAttempts += 1
+                    do {
+                        let wait = min(remaining, Self.fallbackAttemptTimeout, Self.attemptTimeout ?? timeout, timeout)
+                        let reading = try await readChunk(did: did, chunk[index...index], fallbackTimeout: wait)
+                        values.merge(reading) { _, new in new }
+                        individuallyAnswered += 1
+                        fallback?.singleReplies += 1
+                        answered = true
+                    } catch MiioError.deviceError(let code, _) where code == Self.userAckTimeoutCode {
+                        failedSingles.append(key(asked[index]))
+                        fallback?.singleAckTimeouts += 1
+                    } catch {
+                        if error is CancellationError { throw error }
+                        fallback?.stoppedEarly = true
+                        fallback?.lastSingleFailure = LANFailureEvidence(error)
+                        // Keep any values recovered before the short compatibility probe ran out.
+                        break
+                    }
+                }
+                if individuallyAnswered == chunk.count || (individuallyAnswered > 0 && fallback?.stoppedEarly == true) {
+                    batchLimit = min(batchLimit, max(1, chunk.count / 2))
+                }
             }
-            for item in result.arrayValue ?? [] {
-                guard let siid = item["siid"]?.integer, let piid = item["piid"]?.integer,
-                      chunk.contains(where: { $0.siid == siid && $0.piid == piid }) else { continue }
-                let code = item["code"]?.integer
-                let value = item["value"]
-                values[MiotPropKey(did: did, siid: siid, piid: piid)] = DeviceReading(
-                    value: code == 0 ? value : nil, updatedAt: Date(), code: code,
-                    error: code == 0 && value != nil ? nil : Self.propertyError(code))
-            }
+        }
+        if var fallback {
+            fallback.availableProperties = values.values.filter(\.isAvailable).count
+            lastReadFallback = fallback
+        }
+        if answered {
+            for property in failedSingles { unanswered[property] = MonotonicClock.now + Self.unansweredRetryDelay }
+        } else if let ackError {
+            propertyRetryAt = MonotonicClock.now + Self.propertyRetryDelay
+            throw ackError
+        }
+        return values
+    }
+
+    private func readChunk(did: String, _ chunk: ArraySlice<Property>, fallbackTimeout: TimeSpan? = nil) async throws -> [MiotPropKey: DeviceReading] {
+        let params = JSONValue.array(chunk.map {
+            .object(["did": .string(did), "siid": .number(Double($0.siid)), "piid": .number(Double($0.piid))])
+        })
+        let result = try await call("get_properties", params: params, timeout: fallbackTimeout, retryCount: fallbackTimeout.map { _ in 0 })
+        var values: [MiotPropKey: DeviceReading] = [:]
+        for property in chunk {
+            values[.init(did: did, siid: property.siid, piid: property.piid)] =
+                DeviceReading(error: L10n.tr("设备未返回此属性", "The device did not return this property."))
+        }
+        for item in result.arrayValue ?? [] {
+            guard let siid = item["siid"]?.integer, let piid = item["piid"]?.integer else { continue }
+            let key = MiotPropKey(did: did, siid: siid, piid: piid)
+            guard values[key] != nil else { continue }
+            let code = item["code"]?.integer
+            let value = item["value"]
+            values[key] = DeviceReading(
+                value: code == 0 ? value : nil, updatedAt: Date(), code: code,
+                error: code == 0 && value != nil ? nil : Self.propertyError(code))
         }
         return values
     }
@@ -281,6 +400,7 @@ extension MiioClient {
         switch code {
         case -4003: return L10n.tr("不支持或没有访问权限（-4003）", "Unsupported or access denied (-4003).")
         case -4004: return L10n.tr("参数错误（-4004）", "Invalid arguments (-4004).")
+        case userAckTimeoutCode: return L10n.tr("设备未应答此属性（-9999）", "The device did not answer this property (-9999).")
         case .some(let code): return L10n.tr("设备返回错误（\(code)）", "Device error (\(code)).")
         case nil: return L10n.tr("设备响应缺少返回码或读数", "The response is missing a result code or reading.")
         }

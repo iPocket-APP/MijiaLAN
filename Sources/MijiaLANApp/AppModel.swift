@@ -52,6 +52,15 @@ final class AppModel: ObservableObject {
     @Published private(set) var isRediscovering = false
     @Published private(set) var lastRediscoveryNote: String?
     @Published private(set) var lastRediscoveryAt: Date?
+    struct RediscoveryEvidence: Encodable {
+        var at: Date
+        var outcome: String
+        var respondingDevices: Int? = nil
+        var matchingDeviceIDs: [String]? = nil
+        var addressChangedDeviceIDs: [String]? = nil
+        var addressChangesSaved: Bool? = nil
+    }
+    private(set) var rediscoveryEvidence: RediscoveryEvidence?
     @Published private(set) var retryingDeviceIDs: Set<String> = []
 
     enum DiagnosticsExport: Equatable {
@@ -426,6 +435,7 @@ final class AppModel: ObservableObject {
     private func rediscover() async {
         if usesPreviewDevices {
             lastRediscoveryAt = Date()
+            rediscoveryEvidence = .init(at: Date(), outcome: "preview")
             lastRediscoveryNote = L10n.tr("预览环境使用模拟设备", "The preview uses simulated devices.")
             return
         }
@@ -436,18 +446,30 @@ final class AppModel: ObservableObject {
             let found = try await MiioDiscovery.discover()
             lastRediscoveryAt = Date()
             var next = config
-            let moved = next.updateHosts(from: found)
             let known = Set(config.devices.map(\.did))
-            let unknown = found.filter { !known.contains($0.did) }.count
+            let matches = Set(found.map(\.did)).intersection(known)
+            let hosts = Dictionary(config.devices.map { ($0.did, $0.host) }, uniquingKeysWith: { first, _ in first })
+            let changed = found.filter { device in hosts[device.did].map { $0 != device.host } == true }
+            let moved = next.updateHosts(from: found)
+            let unknown = found.count - matches.count
             lastRediscoveryNote = found.isEmpty
                 ? L10n.tr("局域网广播暂时没有设备回应（路由器的设备隔离也会拦住广播）", "No devices responded to the LAN broadcast. Router client isolation can also block discovery.")
                 : L10n.tr("局域网里找到 \(found.count) 台 miIO 设备", "miIO devices found on the LAN: \(found.count)") + (unknown > 0 ? L10n.tr("，其中 \(unknown) 台还没有 token", "; without a token: \(unknown)") : "")
+            var changesSaved: Bool?
             if moved {
                 logger.info("Device IPs changed; saving")
-                apply(next)
+                changesSaved = apply(next)
+                if changesSaved == false {
+                    lastRediscoveryNote = L10n.tr("找到设备的新地址，但无法写入钥匙串，请解锁后重新扫描。", "Found new device addresses but could not save them. Unlock the Keychain and scan again.")
+                }
             }
-            await api.retryDiscoveredDevices(Set(found.map(\.did)).intersection(known))
+            rediscoveryEvidence = .init(at: Date(), outcome: "completed", respondingDevices: found.count,
+                matchingDeviceIDs: matches.sorted(), addressChangedDeviceIDs: changed.map(\.did).sorted(),
+                addressChangesSaved: changesSaved)
+            await api.retryDiscoveredDevices(matches)
         } catch {
+            lastRediscoveryAt = Date()
+            rediscoveryEvidence = .init(at: Date(), outcome: "failed")
             lastRediscoveryNote = Self.describe(error)
         }
     }

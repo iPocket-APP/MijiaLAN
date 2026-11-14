@@ -193,7 +193,11 @@ public final class AppleServiceDiscovery: ServiceDiscovery, @unchecked Sendable 
         // Without this, mDNSResponder's keepalive timer fires (~30–60 s after
         // registration) and evicts the record — causing homed's operational
         // discovery to time out during CASE session establishment.
-        DNSServiceSetDispatchQueue(ref, queue)
+        let queueError = DNSServiceSetDispatchQueue(ref, queue)
+        guard queueError == kDNSServiceErr_NoError else {
+            DNSServiceRefDeallocate(ref)
+            throw ServiceDiscoveryError.registrationFailed(code: Int(queueError))
+        }
 
         withLock { advertisedRefs[service.name] = ref }
 

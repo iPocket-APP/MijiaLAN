@@ -37,6 +37,8 @@ public final class HomeKitBridgeController: ObservableObject {
     @Published public private(set) var isRefreshingSetupCode = false
     @Published public private(set) var setupCodeRefreshError: String?
     @Published public private(set) var isPaired = false
+    @Published public private(set) var pairingResetError: String?
+    @Published public private(set) var isResettingPairing = false
     @Published public private(set) var exposedDeviceCount = 0
     public struct ServiceLimitWarning: Identifiable, Equatable, Sendable {
         public let id: String
@@ -72,6 +74,7 @@ public final class HomeKitBridgeController: ObservableObject {
     static let enabledKey = "homekit_bridge_enabled"
     static let keepAwakeKey = "homekit_bridge_keep_awake"
     static let layoutKey = "homekit_bridge_layout_v1"
+    static let identityKey = "homekit_bridge_identity_v1"
     static let serviceNamesKey = "homekit_bridge_service_names_v1"
     static let excludedServicesKey = "homekit_bridge_excluded_services_v1"
     public static let bridgeName = "MijiaLAN Bridge"
@@ -161,6 +164,10 @@ public final class HomeKitBridgeController: ObservableObject {
     private var pairingSession: UUID?
     var bridge: HAPBridge?
     private var service: AppleHAPService?
+    private var listenerSequence = 0
+    private var failedStartupBonjour: AppleHAPService.BonjourDiagnostics?
+    private var pairingStartupFailure: PairingStartupFailure?
+    private let handshakes = LockedState<[Handshake]>(initialState: [])
     private var layout: Layout
     private var serviceNames: [String: [String: String]]
     private var exposed: [String: ExposedAccessory] = [:]
@@ -204,7 +211,8 @@ public final class HomeKitBridgeController: ObservableObject {
 
     /// Reissues the code for a running, unpaired bridge with the same accessory identity.
     public func refreshSetupCode() {
-        guard !isRefreshingSetupCode, isEnabled, case .running = status, secrets?.pairings.isEmpty == true else { return }
+        guard !isRefreshingSetupCode, !isResettingPairing, isEnabled, case .running = status,
+              secrets?.pairings.isEmpty == true else { return }
         isRefreshingSetupCode = true
         setupCodeRefreshError = nil
         enqueue { controller in
@@ -245,9 +253,18 @@ public final class HomeKitBridgeController: ObservableObject {
 
     /// Forgets every paired controller and the bridge identity; Apple Home then sees a new, unpaired bridge.
     public func resetPairing() {
+        guard canResetPairing else { return }
+        isResettingPairing = true
         enqueue { controller in
+            defer { controller.isResettingPairing = false }
+            let fresh = HomeKitBridgeSecrets.generate()
+            guard let data = fresh.encoded(), controller.vault.save(data) else {
+                controller.pairingResetError = L10n.tr("钥匙串无法保存新的桥身份，重置未完成。", "The Keychain could not save a new bridge identity. Pairing was not reset.")
+                return
+            }
+            controller.defaults.set(fresh.deviceID, forKey: Self.identityKey)
+            controller.pairingResetError = nil
             await controller.stopNow()
-            _ = controller.vault.save(nil)
             controller.secrets = nil
             controller.setupCode = nil
             controller.setupURI = nil
@@ -257,6 +274,56 @@ public final class HomeKitBridgeController: ObservableObject {
             if controller.isEnabled { await controller.startIfReady() }
         }
     }
+
+    public var canResetPairing: Bool {
+        guard !isResettingPairing, !isRefreshingSetupCode else { return false }
+        if isPaired { return true }
+        switch status {
+        case .running, .failed: return true
+        default: return false
+        }
+    }
+
+    public struct Handshake: Encodable, Sendable {
+        public let deviceID: String
+        public let listener: Int
+        public let connection: Int
+        public let event: HAPHandshakeEvent
+    }
+
+    public struct PairingDiagnostics: Encodable, Sendable {
+        public let sessionStartedAt: Date
+        public let deviceID: String?
+        public let pairedControllerCount: Int?
+        public let bonjour: AppleHAPService.BonjourDiagnostics?
+        public let failedStartupBonjour: AppleHAPService.BonjourDiagnostics?
+        public let localBonjourObservation: AppleHAPService.BonjourObservation?
+        public let recentHandshakes: [Handshake]
+        public let lastPairSetupRejection: Handshake?
+        public let resetFailed: Bool
+        public let startupFailure: PairingStartupFailure?
+    }
+
+    public enum PairingStartupFailure: String, Encodable, Sendable {
+        case vaultUnavailable, storedIdentityUnreadable, storedIdentityMissing, identityWriteFailed, listenerFailed, bonjourFailed
+    }
+
+    public func pairingDiagnostics() async -> PairingDiagnostics {
+        let running = service
+        let observed = await running?.observeBonjour()
+        let bonjour = await running?.bonjourDiagnostics()
+        let current = running === service
+        let recent = handshakes.withLock { $0 }
+        return .init(sessionStartedAt: diagnosticSessionStartedAt,
+                     deviceID: secrets?.deviceID ?? defaults.string(forKey: Self.identityKey),
+                     pairedControllerCount: secrets?.pairings.count,
+                     bonjour: current ? bonjour : nil, failedStartupBonjour: failedStartupBonjour,
+                     localBonjourObservation: current ? observed : nil, recentHandshakes: recent,
+                     lastPairSetupRejection: recent.last { $0.event.phase == .setup && $0.event.outcome == .rejected },
+                     resetFailed: pairingResetError != nil, startupFailure: pairingStartupFailure)
+    }
+
+    private let diagnosticSessionStartedAt = Date()
 
     /// Waits for pending start/stop and sync work (tests).
     public func waitUntilIdle() async {
@@ -296,12 +363,15 @@ public final class HomeKitBridgeController: ObservableObject {
             return
         }
         status = .starting
+        pairingStartupFailure = nil
+        failedStartupBonjour = nil
 
         guard let secrets = loadOrCreateSecrets() else { return }
         let identity: HAPIdentity
         do {
             identity = try HAPIdentity(privateKeyData: secrets.signingKey)
         } catch {
+            pairingStartupFailure = .storedIdentityUnreadable
             status = .failed(L10n.tr("HomeKit 桥身份密钥无效，请重置配对", "Invalid bridge key; reset pairing"))
             return
         }
@@ -349,27 +419,42 @@ public final class HomeKitBridgeController: ObservableObject {
 
         var started: AppleHAPService?
         for port in candidatePorts() {
+            listenerSequence += 1
+            let listener = listenerSequence
             let service = AppleHAPService(
                 bridge: bridge,
                 setupCode: secrets.setupCode,
                 deviceID: secrets.deviceID,
                 setupID: secrets.setupID,
                 identity: identity,
-                pairingStore: pairingStore
+                pairingStore: pairingStore,
+                onHandshake: { [handshakes, deviceID = secrets.deviceID] connection, event in
+                    handshakes.withLock { recent in
+                        // Pair Verify is routine; it must not evict Pair Setup evidence before an export.
+                        let samePhase = recent.indices.filter { recent[$0].event.phase == event.phase }
+                        if samePhase.count >= 24, let oldest = samePhase.first {
+                            recent.remove(at: oldest)
+                        }
+                        recent.append(.init(deviceID: deviceID, listener: listener, connection: connection, event: event))
+                    }
+                }
             )
             do {
                 try await service.start(port: port, loopbackOnly: loopbackOnly)
                 started = service
                 break
             } catch {
-                logger.error("HomeKit bridge failed to listen on port \(port): \(error.localizedDescription, privacy: .public)")
+                let attempted = await service.bonjourDiagnostics()
+                if attempted.lastFailure != nil { failedStartupBonjour = attempted }
                 await service.stop()
+                logger.error("HomeKit bridge failed to listen on port \(port): \(error.localizedDescription, privacy: .public)")
             }
         }
         guard let service = started else {
             self.pairingSession = nil
             exposed = [:]
             exposedDeviceCount = 0
+            pairingStartupFailure = failedStartupBonjour == nil ? .listenerFailed : .bonjourFailed
             status = .failed(L10n.tr("无法在局域网上启动 HomeKit 桥", "Could not start the HomeKit bridge on the network"))
             return
         }
@@ -417,19 +502,33 @@ public final class HomeKitBridgeController: ObservableObject {
     private func loadOrCreateSecrets() -> HomeKitBridgeSecrets? {
         switch vault.load() {
         case .unavailable:
+            pairingStartupFailure = .vaultUnavailable
             status = .failed(L10n.tr("无法读取钥匙串，HomeKit 桥未启动", "Keychain unavailable; bridge not started"))
             return nil
         case .value(let data):
-            if let secrets = HomeKitBridgeSecrets.decode(data) { return secrets }
-            logger.error("Stored HomeKit bridge secrets are unreadable; creating a new bridge identity")
+            guard let secrets = HomeKitBridgeSecrets.decode(data) else {
+                pairingStartupFailure = .storedIdentityUnreadable
+                status = .failed(L10n.tr("HomeKit 桥的配对信息无法读取。可在下方重置配对。", "The bridge’s pairing data is unreadable. You can reset pairing below."))
+                return nil
+            }
+            if defaults.string(forKey: Self.identityKey) != secrets.deviceID {
+                defaults.set(secrets.deviceID, forKey: Self.identityKey)
+            }
+            return secrets
         case .missing:
-            break
+            if defaults.string(forKey: Self.identityKey) != nil || layout.port != nil {
+                pairingStartupFailure = .storedIdentityMissing
+                status = .failed(L10n.tr("钥匙串中找不到已有桥的配对信息。可在下方重置配对。", "The existing bridge’s pairing data is missing. You can reset pairing below."))
+                return nil
+            }
         }
         let fresh = HomeKitBridgeSecrets.generate()
         guard let data = fresh.encoded(), vault.save(data) else {
+            pairingStartupFailure = .identityWriteFailed
             status = .failed(L10n.tr("无法写入钥匙串，HomeKit 桥未启动", "Could not save to the Keychain; bridge not started"))
             return nil
         }
+        defaults.set(fresh.deviceID, forKey: Self.identityKey)
         // A new identity is a new bridge to Apple Home; the old accessory IDs mean nothing to it.
         layout = Layout()
         saveLayout()
