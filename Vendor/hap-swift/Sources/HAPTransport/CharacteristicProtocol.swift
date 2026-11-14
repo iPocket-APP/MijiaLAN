@@ -16,6 +16,7 @@ public struct CharacteristicProtocol: Sendable {
     private let pairingStore: any PairingStore
     private let identity: HAPIdentity
     private let onPairingChange: (@Sendable () async -> Void)?
+    private let onHandshake: (@Sendable (HAPHandshakeEvent) -> Void)?
     let connectionID: Int
     private let logger = Logger(label: "hap.characteristic")
 
@@ -26,7 +27,8 @@ public struct CharacteristicProtocol: Sendable {
         pairingStore: any PairingStore,
         identity: HAPIdentity,
         connectionID: Int = 0,
-        onPairingChange: (@Sendable () async -> Void)? = nil
+        onPairingChange: (@Sendable () async -> Void)? = nil,
+        onHandshake: (@Sendable (HAPHandshakeEvent) -> Void)? = nil
     ) {
         self.bridge = bridge
         self.pairingStateMachine = pairingStateMachine
@@ -35,6 +37,7 @@ public struct CharacteristicProtocol: Sendable {
         self.identity = identity
         self.connectionID = connectionID
         self.onPairingChange = onPairingChange
+        self.onHandshake = onHandshake
     }
 
     public func handleRequest(_ request: HTTPRequest) async throws -> HTTPResponse {
@@ -73,12 +76,19 @@ public struct CharacteristicProtocol: Sendable {
     // MARK: - Pair Setup
 
     private func handlePairSetup(_ request: HTTPRequest) async throws -> HTTPResponse {
-        let wasPaired = await pairingStore.isPaired
-        guard !wasPaired else { return pairingsErrorResponse(error: .unavailable) }
+        guard await !pairingStore.isPaired else {
+            if let onHandshake {
+                let message = (try? TLV8.decode(request.body))?
+                    .first(where: { $0.type == TLV8Type.state.rawValue })?.value.first
+                onHandshake(.init(.setup, message: message, outcome: .rejected, reason: .alreadyPaired,
+                                  tlvErrorCode: TLV8ErrorCode.unavailable.rawValue))
+            }
+            return pairingsErrorResponse(error: .unavailable)
+        }
         let responseData = try await pairingStateMachine.handleRequest(request.body)
         // The first controller is stored: the Bonjour record must say "paired" (sf=0) now. iOS looks the
         // accessory up again to finish adding it, and an accessory still advertising sf=1 counts as reset.
-        if !wasPaired, await pairingStore.isPaired {
+        if await pairingStore.isPaired {
             logger.info("Pair-setup stored the first controller; advertising as paired")
             await onPairingChange?()
         }

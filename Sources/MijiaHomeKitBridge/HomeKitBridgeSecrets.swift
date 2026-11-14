@@ -109,6 +109,7 @@ actor HomeKitBridgePairingStore: PairingStore {
     private var pairings: [String: Data]
     private let persist: @Sendable ([String: Data]) async -> Bool
     private let onChange: @Sendable (Bool) async -> Void
+    private var mutation: Task<Void, Error>?
 
     init(
         pairings: [String: Data],
@@ -121,9 +122,7 @@ actor HomeKitBridgePairingStore: PairingStore {
     }
 
     func store(controllerIdentifier: String, publicKey: Data) async throws {
-        var next = pairings
-        next[controllerIdentifier] = publicKey
-        try await commit(next)
+        try await update(controllerIdentifier, key: publicKey)
     }
 
     func publicKey(for controllerIdentifier: String) -> Data? {
@@ -131,10 +130,7 @@ actor HomeKitBridgePairingStore: PairingStore {
     }
 
     func remove(controllerIdentifier: String) async throws {
-        guard pairings[controllerIdentifier] != nil else { return }
-        var next = pairings
-        next.removeValue(forKey: controllerIdentifier)
-        try await commit(next)
+        try await update(controllerIdentifier, key: nil)
     }
 
     func listPairings() -> [(identifier: String, publicKey: Data)] {
@@ -145,7 +141,24 @@ actor HomeKitBridgePairingStore: PairingStore {
         !pairings.isEmpty
     }
 
-    private func commit(_ next: [String: Data]) async throws {
+    private func update(_ identifier: String, key: Data?) async throws {
+        // Re-read the current pairings after the previous write. Persist crosses to the main actor and yields here.
+        let previous = mutation
+        let next = Task {
+            _ = try? await previous?.value
+            try await commit(identifier, key: key)
+        }
+        mutation = next
+        defer {
+            if mutation == next { mutation = nil }
+        }
+        try await next.value
+    }
+
+    private func commit(_ identifier: String, key: Data?) async throws {
+        guard pairings[identifier] != key else { return }
+        var next = pairings
+        next[identifier] = key
         guard await persist(next) else { throw PersistError.vaultUnavailable }
         pairings = next
         await onChange(!next.isEmpty)

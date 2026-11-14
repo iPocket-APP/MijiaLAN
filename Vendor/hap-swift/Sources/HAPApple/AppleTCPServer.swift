@@ -41,15 +41,17 @@ private actor HAPConnectionContext {
         deviceID: String,
         connectionID: Int,
         send: @escaping @Sendable (Data) -> Void,
-        onPairingChange: (@Sendable () async -> Void)? = nil
+        onPairingChange: (@Sendable () async -> Void)? = nil,
+        onHandshake: (@Sendable (HAPHandshakeEvent) -> Void)? = nil
     ) {
         self.connectionID = connectionID
         self.send = send
         let pairing = PairingStateMachine(
-            setupCode: setupCode, identity: identity, pairingStore: pairingStore, deviceID: deviceID
+            setupCode: setupCode, identity: identity, pairingStore: pairingStore, deviceID: deviceID,
+            onHandshake: onHandshake
         )
         let pairVerify = PairVerifyStateMachine(
-            identity: identity, pairingStore: pairingStore, deviceID: deviceID
+            identity: identity, pairingStore: pairingStore, deviceID: deviceID, onHandshake: onHandshake
         )
         self.pairVerifyStateMachine = pairVerify
         self.charProtocol = CharacteristicProtocol(
@@ -59,7 +61,8 @@ private actor HAPConnectionContext {
             pairingStore: pairingStore,
             identity: identity,
             connectionID: connectionID,
-            onPairingChange: onPairingChange
+            onPairingChange: onPairingChange,
+            onHandshake: onHandshake
         )
     }
 
@@ -214,6 +217,7 @@ public final class AppleTCPServer: HAPServer, @unchecked Sendable {
     private let identity: HAPIdentity
     private let pairingStore: any PairingStore
     private let deviceID: String
+    private let onHandshake: (@Sendable (Int, HAPHandshakeEvent) -> Void)?
     // Set after init by AppleHAPService.start() — must be configured before
     // any connection can trigger a pairing change.
     var onPairingChange: (@Sendable () async -> Void)?
@@ -230,7 +234,8 @@ public final class AppleTCPServer: HAPServer, @unchecked Sendable {
         identity: HAPIdentity,
         pairingStore: any PairingStore,
         deviceID: String,
-        logger: Logger = Logger(label: "hap.apple.tcp")
+        logger: Logger = Logger(label: "hap.apple.tcp"),
+        onHandshake: (@Sendable (Int, HAPHandshakeEvent) -> Void)? = nil
     ) {
         self.bridge = bridge
         self.setupCode = setupCode
@@ -238,6 +243,7 @@ public final class AppleTCPServer: HAPServer, @unchecked Sendable {
         self.pairingStore = pairingStore
         self.deviceID = deviceID
         self.logger = logger
+        self.onHandshake = onHandshake
     }
 
     // MARK: - HAPServer
@@ -317,6 +323,7 @@ public final class AppleTCPServer: HAPServer, @unchecked Sendable {
             let l = self.listener
             let c = self.connections
             self.listener = nil
+            _port = 0
             self.connections.removeAll()
             self.contexts.removeAll()
             return (l, c)
@@ -350,7 +357,8 @@ public final class AppleTCPServer: HAPServer, @unchecked Sendable {
                         else { logger.debug("Connection \(id): socket accepted \(count) bytes") }
                     })
                 },
-                onPairingChange: self.onPairingChange
+                onPairingChange: self.onPairingChange,
+                onHandshake: { [onHandshake] event in onHandshake?(id, event) }
             )
             return id
         }

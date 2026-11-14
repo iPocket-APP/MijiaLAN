@@ -8,7 +8,8 @@ import MijiaLAN
 /// The file a user attaches to a problem report: each device's health and readings, and the characteristics Home
 /// currently reads as failed, which are what put a warning on an accessory tile.
 ///
-/// Explicit allow-list: never serialize LocalDevice, tokens, IP or MAC addresses, pairing keys or setup codes.
+/// Explicit allow-list: never serialize LocalDevice, tokens, IP or hardware MAC addresses, pairing keys or setup
+/// codes. The generated HomeKit accessory ID is public in Bonjour and identifies only this bridge.
 @MainActor
 enum DiagnosticReport {
     struct Bridge {
@@ -19,7 +20,8 @@ enum DiagnosticReport {
     }
 
     /// `lan` comes from `LANMiotAPI.diagnostics()`, which asks devices for their firmware and so is awaited first.
-    static func json(model: AppModel, lan: [String: LANDeviceDiagnostics] = [:]) -> Data? {
+    static func json(model: AppModel, lan: [String: LANDeviceDiagnostics] = [:],
+                     pairing: HomeKitBridgeController.PairingDiagnostics? = nil) -> Data? {
         let snapshots = Array(model.devices.snapshots.values)
         return json(snapshots: snapshots, retryStates: model.devices.retryStates,
                     hidden: model.store.hiddenDeviceIds, failures: model.bridge.readFailures,
@@ -28,7 +30,8 @@ enum DiagnosticReport {
                     revisions: (model.devices.structureRevision, model.devices.valuesRevision),
                     commands: model.devices.commandLog, lan: lan,
                     home: Dictionary(uniqueKeysWithValues: snapshots.compactMap { s in model.bridge.publishedServices(for: s.id).map { (s.id, $0) } }),
-                    excludedServices: model.bridge.excludedServices)
+                    excludedServices: model.bridge.excludedServices, pairing: pairing,
+                    discovery: model.rediscoveryEvidence, configuredDevices: model.config.devices)
     }
 
     static func json(snapshots: [DeviceSnapshot], retryStates: [String: ProbeRetryState], hidden: Set<String>,
@@ -36,7 +39,10 @@ enum DiagnosticReport {
                      revisions: (structure: UInt64, values: UInt64), now: Date = Date(),
                      commands: [String: [DeviceCommandRecord]] = [:], lan: [String: LANDeviceDiagnostics] = [:],
                      home: [String: [HomeKitBridgeController.PublishedService]] = [:],
-                     excludedServices: [String: Set<String>] = [:]) -> Data? {
+                     excludedServices: [String: Set<String>] = [:],
+                     pairing: HomeKitBridgeController.PairingDiagnostics? = nil,
+                     discovery: AppModel.RediscoveryEvidence? = nil,
+                     configuredDevices: [LocalDevice] = []) -> Data? {
         let failuresByDevice = Dictionary(grouping: failures, by: \.deviceID)
         let rows: [[String: Any]] = snapshots.sorted { $0.id < $1.id }.map { s in
             var row: [String: Any] = [
@@ -71,16 +77,24 @@ enum DiagnosticReport {
             row["prepared"] = Dictionary(uniqueKeysWithValues: s.prepared.map { ($0.key, $0.value.compactJSONString) })
             row["commands"] = (commands[s.id] ?? []).map(commandRow)
             if let device = lan[s.id] {
-                row["firmware"] = device.firmware
-                if let link = device.link { row["link"] = linkRow(link) }
+                addLANEvidence(device, to: &row)
             }
             if let services = home[s.id] {
                 row["home"] = ["services": services.map(serviceRow), "excluded": (excludedServices[s.id] ?? []).sorted()]
             }
             return row
         }
+        let snapshotIDs = Set(snapshots.map(\.id))
+        let withoutSnapshot: [[String: Any]] = configuredDevices.filter { !snapshotIDs.contains($0.did) }
+            .sorted { $0.did < $1.did }.map { device in
+                var row: [String: Any] = ["did": device.did, "model": device.model, "name": device.name]
+                row["specType"] = device.specType
+                if let evidence = lan[device.did] { addLANEvidence(evidence, to: &row) }
+                return row
+            }
         let info = Bundle.main.infoDictionary
-        let output: [String: Any] = [
+        var output: [String: Any] = [
+            "schemaVersion": 2,
             "recordedAt": now.ISO8601Format(),
             "app": ["version": info?["CFBundleShortVersionString"] as? String ?? "", "build": info?["CFBundleVersion"] as? String ?? ""],
             "macOS": ProcessInfo.processInfo.operatingSystemVersionString,
@@ -90,8 +104,26 @@ enum DiagnosticReport {
             "structureRevision": revisions.structure, "valuesRevision": revisions.values,
             "findings": findings(snapshots: snapshots, failures: failuresByDevice, commands: commands, lan: lan, home: home),
             "devices": rows,
+            "configuredDevicesWithoutSnapshot": withoutSnapshot,
         ]
+        output["homeKitPairing"] = jsonObject(pairing)
+        output["lanDiscovery"] = jsonObject(discovery)
         return try? JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])
+    }
+
+    private static func addLANEvidence(_ device: LANDeviceDiagnostics, to row: inout [String: Any]) {
+        row["firmware"] = device.firmware
+        if let link = device.link { row["link"] = linkRow(link) }
+        row["lanReadMethod"] = device.readMethod
+        row["lanProbe"] = jsonObject(device.lastProbe)
+        row["lanEndpoint"] = jsonObject(device.endpoint)
+    }
+
+    private static func jsonObject(_ value: (some Encodable)?) -> Any? {
+        guard let value else { return nil }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return (try? encoder.encode(value)).flatMap { try? JSONSerialization.jsonObject(with: $0) }
     }
 
     private static func commandRow(_ r: DeviceCommandRecord) -> [String: Any] {
@@ -111,6 +143,7 @@ enum DiagnosticReport {
         row["p95Milliseconds"] = link.p95Milliseconds
         row["lastFailure"] = link.lastFailure
         row["lastFailureAt"] = link.lastFailureAt?.ISO8601Format()
+        row["lastFailureEvidence"] = jsonObject(link.lastFailureEvidence)
         return row
     }
 
@@ -150,6 +183,15 @@ enum DiagnosticReport {
                 found.append(base.merging(["kind": "readFailures", "reads": link.reads, "failures": link.failures,
                                            "timeouts": link.timeouts, "detail": link.lastFailure ?? ""]) { $1 })
             }
+            let ackTimeoutProperties = s.readings.filter { $0.value.code == -9999 && !$0.value.isAvailable }.keys.sorted()
+            let activeBackoff = (lan[s.id]?.endpoint?.backoffSeconds ?? 0) > 0
+            if !ackTimeoutProperties.isEmpty || activeBackoff {
+                found.append(base.merging(["kind": "propertyAckTimeout", "properties": ackTimeoutProperties,
+                                           "backoffActive": activeBackoff]) { $1 })
+            }
+            if s.health.state != .online, let probe = lan[s.id]?.lastProbe, probe.failure?.kind == .unexpectedDevice {
+                found.append(base.merging(["kind": "configuredAddressAnsweredByDifferentDevice", "at": probe.at.ISO8601Format()]) { $1 })
+            }
             if let services = home[s.id], !services.isEmpty {
                 // Without a main service Home builds the tile from the others: a switch that is on can read as the
                 // device being on, such as a kettle's selected next menu.
@@ -169,11 +211,12 @@ enum DiagnosticReport {
     /// Reads every device once more, then saves the report where the user can pick it up. `~/Library/Logs` needs no
     /// file-access prompt, unlike the Desktop or Downloads.
     static func export(model: AppModel) async throws -> URL {
+        async let pairing = model.bridge.pairingDiagnostics()
         await model.devices.refreshNow()
         let lan = await model.devices.lan.diagnostics()
         // Let the bridge publish what that read found before its read statuses are collected.
         try? await MonotonicClock.sleep(for: .milliseconds(300))
-        guard let data = json(model: model, lan: lan) else { throw CocoaError(.fileWriteUnknown) }
+        guard let data = json(model: model, lan: lan, pairing: await pairing) else { throw CocoaError(.fileWriteUnknown) }
         let directory = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Logs/MijiaLAN", isDirectory: true)
         let formatter = DateFormatter()

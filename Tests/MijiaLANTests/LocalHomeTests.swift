@@ -43,10 +43,39 @@ struct LANMiotAPITests {
         #expect(health["10"]?.state == .online)
         #expect(health["11"]?.state == .offline)
         #expect(health["12"]?.state == .tokenRejected)
+        let evidence = await api.diagnostics()
+        #expect(evidence["11"]?.lastProbe?.failure?.kind == .timeout)
+        #expect(evidence["11"]?.endpoint?.lastHelloAt == nil)
+        #expect(evidence["12"]?.lastProbe?.failure?.kind == .helloWithoutEncryptedReply)
+        #expect(evidence["12"]?.endpoint?.lastHelloAt != nil)
+        #expect(evidence["12"]?.endpoint?.lastAuthenticatedReplyAt == nil)
 
         let rooms = try await api.homeRooms()
         #expect(rooms.map(\.name) == ["书房", ""])
         #expect(rooms.first?.dids == ["10", "11"])
+    }
+
+    @Test("A DHCP address reused by a different device is diagnosed and a rediscovery restores the correct endpoint")
+    func addressReused() async throws {
+        let network = FakeMiioNetwork()
+        let reused = network.add(host: "192.0.2.4", token: tokenA, deviceID: 40)
+        network.add(host: "192.0.2.5", token: tokenA, deviceID: 50, props: ["2.1": .bool(true)])
+        let config = ConfigBox(LocalHomeConfig(devices: [lamp("50", host: reused.host)]))
+        let api = LANMiotAPI(config: { config.value }, transport: network)
+
+        #expect(try await api.deviceList().first?.isOnline == false)
+        #expect(await api.diagnostics()["50"]?.lastProbe?.failure?.kind == .unexpectedDevice)
+        #expect(reused.receivedMethods.isEmpty)
+        var next = config.value
+        let found = try await MiioDiscovery.discover(transport: network)
+        let changed = next.updateHosts(from: found)
+        #expect(changed)
+        config.value = next
+        await api.retryDiscoveredDevices(["50"])
+        #expect(try await api.deviceList().first?.isOnline == true)
+        #expect(try await api.getProps([.init(did: "50", siid: 2, piid: 1)]).values.first == .bool(true))
+        #expect(await api.diagnostics()["50"]?.lastProbe?.failure == nil)
+        await api.shutdown()
     }
 
     @Test("One silent device does not fail the poll, and goes offline after two misses")

@@ -271,6 +271,13 @@ struct SettingsHomeKitManagement: View {
                 if case .failed(let message) = bridge.status {
                     Text(message).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                 }
+                if let message = bridge.pairingResetError {
+                    Text(message).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                }
+                if bridge.canResetPairing {
+                    Button(L10n.tr("重置 HomeKit 配对…", "Reset HomeKit Pairing…"), role: .destructive) { confirmingReset = true }
+                        .controlSize(.small)
+                }
                 HomeKitServiceLimitNotice(warnings: bridge.serviceLimitWarnings)
             }
 
@@ -315,11 +322,6 @@ struct SettingsHomeKitManagement: View {
             SettingsSection(L10n.tr("连接说明", "Connection Details")) {
                 Text(L10n.tr("Mac 和 iPhone 需要连接同一局域网。离家控制和自动化需要家居中枢（HomePod 或 Apple TV）。", "Your Mac and iPhone must be on the same local network. Remote access and automations require a home hub (HomePod or Apple TV)."))
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-            if bridge.isPaired {
-                Divider()
-                Button(L10n.tr("重置 HomeKit 配对…", "Reset HomeKit Pairing…"), role: .destructive) { confirmingReset = true }
-                    .controlSize(.small)
             }
         }
         .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 16)
@@ -877,9 +879,8 @@ private struct DiagnosticsExportRow: View {
 
     private var subtitle: String {
         switch model.diagnosticsExport {
-        case .idle: L10n.tr("反馈问题时附上。包含设备名称和读数，不含 token、IP 地址和配对信息",
-                            "Attach it to a problem report. It has device names and readings, no tokens, IP addresses or pairing keys.")
-        case .collecting: L10n.tr("正在读取每台设备…", "Reading every device…")
+        case .idle: L10n.tr("反馈问题时附上。包含设备名称、读数和桥接状态。", "Attach to a problem report. Includes device names, readings, and bridge status.")
+        case .collecting: L10n.tr("正在收集设备和桥接诊断…", "Collecting device and bridge diagnostics…")
         case .exported(let url): L10n.tr("已保存 \(url.lastPathComponent)", "Saved \(url.lastPathComponent)")
         case .failed(let message): L10n.tr("导出失败：\(message)", "Could not export: \(message)")
         }

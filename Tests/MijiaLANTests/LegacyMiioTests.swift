@@ -135,7 +135,7 @@ struct LegacyLANTests {
         #expect(await api.currentHealth()["306"]?.state == .online)
     }
 
-    @Test("Repeated unsupported commands do not permanently exclude an answering device")
+    @Test("Authenticated -9999 replies keep a device reachable without repeatedly probing its address")
     func unknownLegacyModel() async throws {
         let network = FakeMiioNetwork()
         let old = network.add(host: "192.168.1.30", token: token, deviceID: 30)
@@ -148,13 +148,14 @@ struct LegacyLANTests {
         _ = try await api.getProps(keys)
         _ = try await api.getProps(keys)
         let health = try #require(await api.currentHealth()["30"])
-        #expect(health.state == .offline)
+        #expect(health.state == .online)
         #expect(health.lastError != nil)
 
-        // The next scheduled device probe may recover it; a timeout is not proof of a legacy dialect.
         let probes = old.receivedMethods.filter { $0 == "miIO.info" }.count
         #expect(try await api.deviceList().first?.isOnline == true)
-        #expect(old.receivedMethods.filter { $0 == "miIO.info" }.count == probes + 1)
+        #expect(old.receivedMethods.filter { $0 == "miIO.info" }.count == probes)
+        #expect(await api.diagnostics()["30"]?.readMethod == "get_properties")
+        await api.shutdown()
     }
 
     @Test("An imported table reads in its chunk size and writes through a method per value")

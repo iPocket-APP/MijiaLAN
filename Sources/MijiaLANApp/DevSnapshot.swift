@@ -17,9 +17,10 @@ enum DevSnapshot {
         if let path = environment["MIJIALAN_DIAGNOSTICS_OUTPUT"] {
             Task { @MainActor in
                 try? await MonotonicClock.sleep(for: .seconds(12))
+                async let pairing = model.bridge.pairingDiagnostics()
                 await model.devices.refreshNow()
                 let lan = await model.devices.lan.diagnostics()
-                if let data = DiagnosticReport.json(model: model, lan: lan) {
+                if let data = DiagnosticReport.json(model: model, lan: lan, pairing: await pairing) {
                     diagnosticWriter.submit(data, to: URL(fileURLWithPath: path))
                 }
             }
