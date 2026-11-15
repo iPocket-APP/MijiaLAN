@@ -4,6 +4,7 @@ import HAPApple
 import HAPCore
 import MijiaCore
 @testable import MijiaLAN
+import Network
 import Testing
 @testable import MijiaHomeKitBridge
 
@@ -73,11 +74,16 @@ struct WireHomeKitIntegrationTests {
         let controller = WireHAPController(port: service.port)
         do {
             let unpaired = try #require(await service.observeBonjour())
-            #expect(try Self.observedFlags(unpaired) == [1])
+            #expect(unpaired.matchingInstances == 1)
+            #expect(Set(unpaired.records.compactMap(\.sf)) == [1])
+            #expect(!unpaired.records.isEmpty && unpaired.records.allSatisfy { $0.setupHashMatches == true && $0.resolvedPort == service.port })
             try await controller.connect()
             try await controller.pair(setupCode: identity.setupCode)
             let paired = try #require(await service.observeBonjour())
-            #expect(try Self.observedFlags(paired) == [0])
+            #expect(paired.matchingInstances == 1)
+            #expect(Set(paired.records.compactMap(\.sf)) == [0])
+            #expect(!paired.records.isEmpty && paired.records.allSatisfy { $0.setupHashMatches == true && $0.resolvedPort == service.port })
+            #expect(await service.bonjourDiagnostics().lastPairingPublication?.sf == 0)
             try await controller.verify()
         } catch {
             await controller.close()
@@ -88,11 +94,149 @@ struct WireHomeKitIntegrationTests {
         await service.stop()
     }
 
-    private static func observedFlags(_ observation: AppleHAPService.BonjourObservation) throws -> Set<Int> {
-        let data = try JSONEncoder().encode(observation)
-        let row = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        #expect(row["matchingInstances"] as? Int == 1)
-        return Set((row["records"] as? [[String: Int]] ?? []).compactMap { $0["sf"] })
+    @Test("One pairing report keeps the interrupted TCP exchange and the verified accessory list")
+    func connectionDiagnosticEvidence() async throws {
+        let fixture = try await Fixture.make()
+        let interrupted = WireHAPController(port: fixture.port)
+        let completed = WireHAPController(port: fixture.port)
+        var verifiedController: WireHAPController?
+        do {
+            try await interrupted.connect()
+            fixture.bridge.beginSetupDiagnostics()
+            let m1 = TLV8.encode([(6, Data([1])), (0, Data([0]))])
+            #expect(try await interrupted.request("POST", "/pair-setup", body: m1).status == 200)
+            try await interrupted.finishSending()
+            try await completed.connect()
+            try await completed.pair(setupCode: fixture.code)
+            try await completed.finishSending()
+            let reopened = try await completed.openNewConnection(port: fixture.port)
+            verifiedController = reopened
+            try await reopened.verify()
+            #expect(try await reopened.request("GET", "/accessories").status == 200)
+            // Exercise a normal read for an accessory that has since been removed.
+            #expect(try await reopened.request("GET", "/characteristics?id=999.1").status == 207)
+            fixture.bridge.recordSetupResult(.added)
+
+            var report = await fixture.bridge.pairingDiagnostics()
+            for _ in 0..<100 {
+                if report.recentConnections.contains(where: { $0.transport.close?.reason == .peerClosed }),
+                   report.recentConnections.contains(where: { $0.transport.requests["characteristicRead"]?.acceptedBySocketAt != nil }) { break }
+                try await MonotonicClock.sleep(for: .milliseconds(10))
+                report = await fixture.bridge.pairingDiagnostics()
+            }
+            let attempt = try #require(report.setupAttempt)
+            #expect(attempt.homeResult == .added)
+            #expect(attempt.homeResultAt != nil)
+            let dropped = try #require(report.recentConnections.first { $0.transport.pairSetup?.outcome == .advanced }?.transport)
+            #expect(dropped.pairSetup?.message == 1)
+            #expect(dropped.close?.reason == .peerClosed)
+            #expect(dropped.close?.pendingBytes == 0)
+            #expect(dropped.requests["pairSetup"]?.acceptedBySocketAt != nil)
+            let verified = try #require(report.recentConnections.first { $0.transport.encryptedAt != nil }?.transport)
+            let setup = try #require(report.recentConnections.first { $0.transport.completedPairSetup != nil }?.transport)
+            #expect(setup.pairSetup?.outcome == .completed)
+            #expect(verified.connection != setup.connection)
+            #expect(verified.verifiesPairSetupOnConnection == setup.connection)
+            #expect(verified.pairVerify?.outcome == .completed)
+            let list = try #require(verified.requests["accessoryDatabase"])
+            #expect(list.status == 200)
+            #expect((list.responseBodyBytes ?? 0) > 0)
+            #expect(list.acceptedBySocketAt != nil)
+            #expect(verified.requests["characteristicRead"]?.characteristicFailures == ["-70409": 1])
+            let json = String(decoding: try JSONEncoder().encode(report), as: UTF8.self)
+            for value in [fixture.code, completed.identifier, "127.0.0.1", "999.1"] {
+                #expect(!json.contains(value))
+            }
+        } catch {
+            await interrupted.close()
+            await completed.close()
+            await verifiedController?.close()
+            await fixture.stop()
+            throw error
+        }
+        await interrupted.close()
+        await completed.close()
+        await verifiedController?.close()
+        await fixture.stop()
+    }
+
+    @Test("Reset withdraws the old Bonjour identity and the new code pairs and lists devices",
+          .enabled(if: ProcessInfo.processInfo.environment["MIJIALAN_TEST_BONJOUR"] == "1"))
+    func resetAndPairOverBonjour() async throws {
+        let fixture = try await Fixture.make(loopbackOnly: false)
+        let bridge = fixture.bridge
+        let browser = NWBrowser(for: .bonjourWithTXTRecord(type: "_hap._tcp", domain: "local."), using: .tcp)
+        browser.start(queue: DispatchQueue(label: "test.mijialan.reset.bonjour"))
+        defer { browser.cancel() }
+        let old = WireHAPController(port: fixture.port)
+        var fresh: WireHAPController?
+        var verified: WireHAPController?
+        do {
+            let oldCode = try #require(bridge.pairingCodeForDisplay)
+            let oldURI = try #require(bridge.setupURI)
+            try await old.connect()
+            try await old.pair(setupCode: oldCode)
+            try await old.verify()
+            let oldID = await old.accessoryIdentifier
+            let oldKey = await old.accessoryKey
+            try await requireBonjourFlags([0], for: oldID, browser: browser)
+
+            bridge.resetPairing()
+            #expect(bridge.isResettingPairing && bridge.pairingCodeForDisplay == nil)
+            await bridge.waitUntilIdle()
+            guard case .running(let port) = bridge.status else { throw WireHAPController.Failure.closed }
+            let reset = await bridge.pairingDiagnostics()
+            let newID = try #require(reset.deviceID)
+            let newCode = try #require(bridge.pairingCodeForDisplay)
+            #expect(reset.pairedControllerCount == 0)
+            #expect(reset.lastReset?.outcome == .bridgeRunning)
+            #expect(reset.lastReset?.previousBridgeID == oldID)
+            #expect(reset.lastReset?.newBridgeID == newID)
+            #expect(newID != oldID && newCode != oldCode && bridge.setupURI != oldURI)
+            await #expect(throws: (any Error).self) { try await old.request("GET", "/accessories") }
+            try await requireBonjourFlags([], for: oldID, browser: browser)
+            try await requireBonjourFlags([1], for: newID, browser: browser)
+            let observation = try #require(reset.localBonjourObservation)
+            #expect(observation.records.allSatisfy { $0.setupHashMatches == true && $0.resolvedPort == port })
+            #expect(observation.matchingInstances == 1)
+            #expect(observation.previousBridgeVisible == false)
+
+            bridge.beginSetupDiagnostics()
+            let controller = WireHAPController(port: port)
+            fresh = controller
+            try await controller.connect()
+            try await controller.pair(setupCode: newCode)
+            #expect(await controller.accessoryIdentifier == newID)
+            #expect(await controller.accessoryKey != oldKey)
+            #expect(bridge.pairingCodeForDisplay == nil)
+            try await requireBonjourFlags([0], for: newID, browser: browser)
+            try await controller.finishSending()
+            let session = try await controller.openNewConnection(port: port)
+            verified = session
+            try await session.verify()
+            let response = try await session.request("GET", "/accessories")
+            #expect(response.status == 200)
+            #expect(try json(response)["accessories"]?.arrayValue?.count == 2)
+        } catch {
+            await old.close(); await fresh?.close(); await verified?.close()
+            await fixture.stop()
+            throw error
+        }
+        await old.close(); await fresh?.close(); await verified?.close()
+        await fixture.stop()
+    }
+
+    private func requireBonjourFlags(_ expected: Set<Int>, for id: String, browser: NWBrowser) async throws {
+        var actual = Set<Int>()
+        for _ in 0..<100 {
+            actual = Set(browser.browseResults.compactMap { result in
+                guard case .bonjour(let txt) = result.metadata, txt["id"] == id else { return nil }
+                return txt["sf"].flatMap { Int($0) } ?? -1
+            })
+            if case .ready = browser.state, actual == expected { return }
+            try await MonotonicClock.sleep(for: .milliseconds(50))
+        }
+        #expect(actual == expected)
     }
 
     @Test("A refused proof, a failed Keychain write, and an already paired bridge have distinct setup evidence")
@@ -108,6 +252,7 @@ struct WireHomeKitIntegrationTests {
             await #expect(throws: WireHAPController.Failure.self) { try await first.pair(setupCode: wrongCode) }
             var diagnostics = await fixture.bridge.pairingDiagnostics()
             #expect(diagnostics.lastPairSetupRejection?.event.reason == .proofRejected)
+            #expect(diagnostics.recentConnections.contains { $0.transport.pairSetup?.reason == .proofRejected })
             #expect(diagnostics.lastPairSetupRejection?.event.message == 3)
             #expect(diagnostics.pairedControllerCount == 0)
             await first.close()
@@ -124,6 +269,7 @@ struct WireHomeKitIntegrationTests {
             await rejected.close()
             diagnostics = await fixture.bridge.pairingDiagnostics()
             #expect(diagnostics.lastPairSetupRejection?.event.reason == .pairingStoreFailed)
+            #expect(diagnostics.recentConnections.contains { $0.transport.pairSetup?.reason == .pairingStoreFailed })
             #expect(diagnostics.lastPairSetupRejection?.event.message == 5)
             #expect(diagnostics.pairedControllerCount == 0)
             fixture.storage.rejectWrites.withLock { $0 = false }
@@ -136,6 +282,7 @@ struct WireHomeKitIntegrationTests {
             #expect(try TLV8.decode(refused.body).first { $0.type == 7 }?.value == Data([6]))
             diagnostics = await fixture.bridge.pairingDiagnostics()
             #expect(diagnostics.lastPairSetupRejection?.event.reason == .alreadyPaired)
+            #expect(diagnostics.recentConnections.contains { $0.transport.pairSetup?.reason == .alreadyPaired })
             #expect(diagnostics.recentHandshakes.contains { $0.event.phase == .verify && $0.event.outcome == .completed })
             #expect(diagnostics.pairedControllerCount == 1)
             let exported = String(decoding: try JSONEncoder().encode(diagnostics), as: UTF8.self)
@@ -151,6 +298,8 @@ struct WireHomeKitIntegrationTests {
             diagnostics = await fixture.bridge.pairingDiagnostics()
             #expect(diagnostics.deviceID == originalID)
             #expect(diagnostics.pairedControllerCount == 1)
+            #expect(diagnostics.lastReset?.outcome == .keychainWriteFailed)
+            #expect(diagnostics.lastReset?.newBridgeID == nil)
 
             fixture.storage.rejectWrites.withLock { $0 = false }
             fixture.bridge.resetPairing()
@@ -682,7 +831,7 @@ struct WireHomeKitIntegrationTests {
         let port: UInt16
         let code: String
 
-        static func make(model: String = LoopbackMiioDevice.model) async throws -> Fixture {
+        static func make(model: String = LoopbackMiioDevice.model, loopbackOnly: Bool = true) async throws -> Fixture {
             let device = try LoopbackMiioDevice(model: model)
             let name = String(repeating: "测试空气净化器🙂", count: 12)
             let local = LocalDevice(did: "77", name: name, model: model, host: "127.0.0.1", token: LoopbackMiioDevice.token)
@@ -703,7 +852,7 @@ struct WireHomeKitIntegrationTests {
                     storage.data.withLock { $0 = value }
                     return true
                 })
-            let bridge = HomeKitBridgeController(vault: vault, defaults: defaults, port: 0, loopbackOnly: true)
+            let bridge = HomeKitBridgeController(vault: vault, defaults: defaults, port: 0, loopbackOnly: loopbackOnly)
             bridge.attach(to: store, capabilities: devices)
             await bridge.waitUntilIdle()
             guard case .running(let port) = bridge.status, let code = bridge.setupCode else {

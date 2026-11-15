@@ -164,9 +164,11 @@ public final class HomeKitBridgeController: ObservableObject {
     private var pairingSession: UUID?
     var bridge: HAPBridge?
     private var service: AppleHAPService?
+    private var lastStoppedConnections: [ConnectionDiagnostic] = []
     private var listenerSequence = 0
     private var failedStartupBonjour: AppleHAPService.BonjourDiagnostics?
     private var pairingStartupFailure: PairingStartupFailure?
+    private var lastPairingReset: PairingResetDiagnostics?
     private let handshakes = LockedState<[Handshake]>(initialState: [])
     private var layout: Layout
     private var serviceNames: [String: [String: String]]
@@ -255,10 +257,17 @@ public final class HomeKitBridgeController: ObservableObject {
     public func resetPairing() {
         guard canResetPairing else { return }
         isResettingPairing = true
+        let startedAt = Date()
         enqueue { controller in
             defer { controller.isResettingPairing = false }
-            let fresh = HomeKitBridgeSecrets.generate()
+            let previous = controller.secrets
+            let previousID = previous?.deviceID ?? controller.defaults.string(forKey: Self.identityKey)
+            var fresh: HomeKitBridgeSecrets
+            repeat { fresh = .generate() }
+            while fresh.deviceID == previousID || fresh.setupCode == previous?.setupCode || fresh.setupID == previous?.setupID
             guard let data = fresh.encoded(), controller.vault.save(data) else {
+                controller.lastPairingReset = .init(startedAt: startedAt, finishedAt: Date(), previousBridgeID: previousID,
+                                                     newBridgeID: nil, outcome: .keychainWriteFailed)
                 controller.pairingResetError = L10n.tr("钥匙串无法保存新的桥身份，重置未完成。", "The Keychain could not save a new bridge identity. Pairing was not reset.")
                 return
             }
@@ -272,6 +281,14 @@ public final class HomeKitBridgeController: ObservableObject {
             controller.layout = Layout()
             controller.saveLayout()
             if controller.isEnabled { await controller.startIfReady() }
+            let outcome: PairingResetDiagnostics.Outcome = switch controller.status {
+            case .running: .bridgeRunning
+            case .failed: .bridgeStartFailed
+            case .waitingForDevices, .starting: .bridgeWaiting
+            case .stopped: .bridgeStopped
+            }
+            controller.lastPairingReset = .init(startedAt: startedAt, finishedAt: Date(), previousBridgeID: previousID,
+                                                 newBridgeID: fresh.deviceID, outcome: outcome)
         }
     }
 
@@ -282,6 +299,11 @@ public final class HomeKitBridgeController: ObservableObject {
         case .running, .failed: return true
         default: return false
         }
+    }
+
+    public var pairingCodeForDisplay: String? {
+        guard case .running = status, isEnabled, !isPaired, !isResettingPairing, !isRefreshingSetupCode else { return nil }
+        return setupCode
     }
 
     public struct Handshake: Encodable, Sendable {
@@ -295,13 +317,67 @@ public final class HomeKitBridgeController: ObservableObject {
         public let sessionStartedAt: Date
         public let deviceID: String?
         public let pairedControllerCount: Int?
+        public let listenerAtExport: Int?
+        public let listenerChangedDuringBrowse: Bool
         public let bonjour: AppleHAPService.BonjourDiagnostics?
         public let failedStartupBonjour: AppleHAPService.BonjourDiagnostics?
         public let localBonjourObservation: AppleHAPService.BonjourObservation?
         public let recentHandshakes: [Handshake]
         public let lastPairSetupRejection: Handshake?
+        public let recentConnections: [ConnectionDiagnostic]
+        public let setupAttempt: SetupAttempt?
         public let resetFailed: Bool
+        public let resetInProgress: Bool
+        public let lastReset: PairingResetDiagnostics?
         public let startupFailure: PairingStartupFailure?
+    }
+
+    public struct PairingResetDiagnostics: Encodable, Sendable {
+        public enum Outcome: String, Encodable, Sendable {
+            case keychainWriteFailed, bridgeRunning, bridgeStartFailed, bridgeWaiting, bridgeStopped
+        }
+
+        public let startedAt: Date
+        public let finishedAt: Date
+        public let previousBridgeID: String?
+        public let newBridgeID: String?
+        public let outcome: Outcome
+    }
+
+    public struct ConnectionDiagnostic: Encodable, Sendable {
+        public let listener: Int
+        public let deviceID: String
+        public let transport: HAPConnectionDiagnostic
+    }
+
+    public struct SetupAttempt: Encodable, Sendable {
+        public enum HomeResult: String, CaseIterable, Encodable, Sendable {
+            case alreadyInAnotherHome, otherError, added
+        }
+
+        public let startedAt: Date
+        public let bridgeID: String?
+        public let pairedAtStart: Bool
+        public let setupCodeAvailable: Bool
+        public let listenerAtStart: Int?
+        public fileprivate(set) var homeResult: HomeResult?
+        public fileprivate(set) var homeResultAt: Date?
+    }
+
+    @Published public private(set) var setupAttempt: SetupAttempt?
+
+    /// Mark an upcoming scan without changing the bridge identity, pairing, or network.
+    public func beginSetupDiagnostics() {
+        setupAttempt = .init(startedAt: Date(), bridgeID: secrets?.deviceID, pairedAtStart: isPaired,
+                             setupCodeAvailable: pairingCodeForDisplay != nil,
+                             listenerAtStart: service == nil ? nil : listenerSequence)
+    }
+
+    public func recordSetupResult(_ result: SetupAttempt.HomeResult?) {
+        guard var attempt = setupAttempt else { return }
+        attempt.homeResult = result
+        attempt.homeResultAt = result == nil ? nil : Date()
+        setupAttempt = attempt
     }
 
     public enum PairingStartupFailure: String, Encodable, Sendable {
@@ -309,21 +385,40 @@ public final class HomeKitBridgeController: ObservableObject {
     }
 
     public func pairingDiagnostics() async -> PairingDiagnostics {
-        let running = service
-        let observed = await running?.observeBonjour()
+        var running = service
+        var observed = await running?.observeBonjour(previousDeviceID: previousResetBridgeID)
+        let changed = running !== service
+        if changed {
+            running = service
+            observed = await running?.observeBonjour(previousDeviceID: previousResetBridgeID)
+        }
         let bonjour = await running?.bonjourDiagnostics()
         let current = running === service
         let recent = handshakes.withLock { $0 }
+        let active: [ConnectionDiagnostic]
+        if let service, let deviceID = secrets?.deviceID {
+            active = service.diagnosticConnections().map { .init(listener: listenerSequence, deviceID: deviceID, transport: $0) }
+        } else {
+            active = []
+        }
         return .init(sessionStartedAt: diagnosticSessionStartedAt,
                      deviceID: secrets?.deviceID ?? defaults.string(forKey: Self.identityKey),
                      pairedControllerCount: secrets?.pairings.count,
+                     listenerAtExport: service == nil ? nil : listenerSequence, listenerChangedDuringBrowse: changed || !current,
                      bonjour: current ? bonjour : nil, failedStartupBonjour: failedStartupBonjour,
                      localBonjourObservation: current ? observed : nil, recentHandshakes: recent,
                      lastPairSetupRejection: recent.last { $0.event.phase == .setup && $0.event.outcome == .rejected },
-                     resetFailed: pairingResetError != nil, startupFailure: pairingStartupFailure)
+                     recentConnections: lastStoppedConnections + active, setupAttempt: setupAttempt,
+                     resetFailed: pairingResetError != nil, resetInProgress: isResettingPairing,
+                     lastReset: lastPairingReset, startupFailure: pairingStartupFailure)
     }
 
     private let diagnosticSessionStartedAt = Date()
+
+    private var previousResetBridgeID: String? {
+        guard let reset = lastPairingReset, let newID = reset.newBridgeID, newID == secrets?.deviceID else { return nil }
+        return reset.previousBridgeID
+    }
 
     /// Waits for pending start/stop and sync work (tests).
     public func waitUntilIdle() async {
@@ -473,6 +568,8 @@ public final class HomeKitBridgeController: ObservableObject {
     private func stopNow() async {
         pairingSession = nil
         let running = service
+        let listener = listenerSequence
+        let deviceID = secrets?.deviceID
         service = nil
         bridge = nil
         await syncTask?.value
@@ -487,6 +584,16 @@ public final class HomeKitBridgeController: ObservableObject {
         exposedDeviceCount = 0
         serviceLimitWarnings = []
         await running?.stop()
+        if let running, let deviceID {
+            lastStoppedConnections += running.diagnosticConnections().map {
+                .init(listener: listener, deviceID: deviceID, transport: $0)
+            }
+            let setup = lastStoppedConnections.filter { $0.transport.pairSetup != nil }.suffix(24)
+            let other = lastStoppedConnections.filter { $0.transport.pairSetup == nil }.suffix(24)
+            lastStoppedConnections = (Array(setup) + Array(other)).sorted {
+                ($0.listener, $0.transport.connection) < ($1.listener, $1.transport.connection)
+            }
+        }
         status = .stopped
         updateSleepAssertion()
     }

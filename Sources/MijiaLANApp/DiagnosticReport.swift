@@ -19,9 +19,9 @@ enum DiagnosticReport {
         var keepsMacAwake: Bool
     }
 
-    /// `lan` comes from `LANMiotAPI.diagnostics()`, which asks devices for their firmware and so is awaited first.
     static func json(model: AppModel, lan: [String: LANDeviceDiagnostics] = [:],
-                     pairing: HomeKitBridgeController.PairingDiagnostics? = nil) -> Data? {
+                     pairing: HomeKitBridgeController.PairingDiagnostics? = nil,
+                     exportDiscovery: AppModel.RediscoveryEvidence? = nil) -> Data? {
         let snapshots = Array(model.devices.snapshots.values)
         return json(snapshots: snapshots, retryStates: model.devices.retryStates,
                     hidden: model.store.hiddenDeviceIds, failures: model.bridge.readFailures,
@@ -31,7 +31,8 @@ enum DiagnosticReport {
                     commands: model.devices.commandLog, lan: lan,
                     home: Dictionary(uniqueKeysWithValues: snapshots.compactMap { s in model.bridge.publishedServices(for: s.id).map { (s.id, $0) } }),
                     excludedServices: model.bridge.excludedServices, pairing: pairing,
-                    discovery: model.rediscoveryEvidence, configuredDevices: model.config.devices)
+                    discovery: model.rediscoveryEvidence, exportDiscovery: exportDiscovery,
+                    configuredDevices: model.config.devices)
     }
 
     static func json(snapshots: [DeviceSnapshot], retryStates: [String: ProbeRetryState], hidden: Set<String>,
@@ -42,8 +43,11 @@ enum DiagnosticReport {
                      excludedServices: [String: Set<String>] = [:],
                      pairing: HomeKitBridgeController.PairingDiagnostics? = nil,
                      discovery: AppModel.RediscoveryEvidence? = nil,
+                     exportDiscovery: AppModel.RediscoveryEvidence? = nil,
                      configuredDevices: [LocalDevice] = []) -> Data? {
         let failuresByDevice = Dictionary(grouping: failures, by: \.deviceID)
+        let exportMatches = exportDiscovery?.matchingDeviceIDs.map { Set($0) }
+        let addressChanges = Set(exportDiscovery?.addressChangedDeviceIDs ?? [])
         let rows: [[String: Any]] = snapshots.sorted { $0.id < $1.id }.map { s in
             var row: [String: Any] = [
                 "did": s.id, "model": s.device.model, "name": s.device.name, "health": String(describing: s.health.state),
@@ -57,6 +61,7 @@ enum DiagnosticReport {
                         entry["code"] = reading.code
                         entry["error"] = reading.error
                         entry["updatedAt"] = reading.updatedAt?.ISO8601Format()
+                        entry["validation"] = jsonObject(reading.validation)
                     }
                     return entry
                 },
@@ -79,6 +84,7 @@ enum DiagnosticReport {
             if let device = lan[s.id] {
                 addLANEvidence(device, to: &row)
             }
+            row["exportDiscoveryMatched"] = exportMatches?.contains(s.id)
             if let services = home[s.id] {
                 row["home"] = ["services": services.map(serviceRow), "excluded": (excludedServices[s.id] ?? []).sorted()]
             }
@@ -89,12 +95,13 @@ enum DiagnosticReport {
             .sorted { $0.did < $1.did }.map { device in
                 var row: [String: Any] = ["did": device.did, "model": device.model, "name": device.name]
                 row["specType"] = device.specType
+                row["exportDiscoveryMatched"] = exportMatches?.contains(device.did)
                 if let evidence = lan[device.did] { addLANEvidence(evidence, to: &row) }
                 return row
             }
         let info = Bundle.main.infoDictionary
         var output: [String: Any] = [
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "recordedAt": now.ISO8601Format(),
             "app": ["version": info?["CFBundleShortVersionString"] as? String ?? "", "build": info?["CFBundleVersion"] as? String ?? ""],
             "macOS": ProcessInfo.processInfo.operatingSystemVersionString,
@@ -102,12 +109,15 @@ enum DiagnosticReport {
             "bridge": bridge.status, "accessories": bridge.accessories, "paired": bridge.paired,
             "keepsMacAwake": bridge.keepsMacAwake,
             "structureRevision": revisions.structure, "valuesRevision": revisions.values,
-            "findings": findings(snapshots: snapshots, failures: failuresByDevice, commands: commands, lan: lan, home: home),
+            "findings": (pairing.map { homeKitFindings($0, paired: bridge.paired) } ?? [])
+                + findings(snapshots: snapshots, failures: failuresByDevice, commands: commands, lan: lan, home: home,
+                           discoveryMatched: exportMatches, addressesChanged: addressChanges),
             "devices": rows,
             "configuredDevicesWithoutSnapshot": withoutSnapshot,
         ]
         output["homeKitPairing"] = jsonObject(pairing)
         output["lanDiscovery"] = jsonObject(discovery)
+        output["lanExportDiscovery"] = jsonObject(exportDiscovery)
         return try? JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])
     }
 
@@ -116,13 +126,17 @@ enum DiagnosticReport {
         if let link = device.link { row["link"] = linkRow(link) }
         row["lanReadMethod"] = device.readMethod
         row["lanProbe"] = jsonObject(device.lastProbe)
+        row["lanExportProbe"] = jsonObject(device.exportProbe)
         row["lanEndpoint"] = jsonObject(device.endpoint)
     }
 
     private static func jsonObject(_ value: (some Encodable)?) -> Any? {
         guard let value else { return nil }
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(date.ISO8601Format(.init(includingFractionalSeconds: true)))
+        }
         return (try? encoder.encode(value)).flatMap { try? JSONSerialization.jsonObject(with: $0) }
     }
 
@@ -162,13 +176,20 @@ enum DiagnosticReport {
     /// Patterns worth a look before reading the rest, each traced to the field that shows it.
     static func findings(snapshots: [DeviceSnapshot], failures: [String: [HomeKitBridgeController.ReadFailure]],
                          commands: [String: [DeviceCommandRecord]], lan: [String: LANDeviceDiagnostics],
-                         home: [String: [HomeKitBridgeController.PublishedService]]) -> [[String: Any]] {
+                         home: [String: [HomeKitBridgeController.PublishedService]],
+                         discoveryMatched: Set<String>? = nil, addressesChanged: Set<String> = []) -> [[String: Any]] {
         var found: [[String: Any]] = []
         for s in snapshots.sorted(by: { $0.id < $1.id }) {
             let base: [String: Any] = ["did": s.id, "model": s.device.model]
             if s.health.state != .online {
-                found.append(base.merging(["kind": "deviceNotOnline", "health": String(describing: s.health.state),
-                                           "detail": s.health.lastError ?? ""]) { $1 })
+                var entry = base.merging(["kind": "deviceNotOnline", "health": String(describing: s.health.state),
+                                          "detail": s.health.lastError ?? ""]) { $1 }
+                let probe = lan[s.id]?.exportProbe ?? lan[s.id]?.lastProbe
+                entry["probeFailure"] = probe?.failure?.kind.rawValue
+                entry["probeAt"] = probe?.at.ISO8601Format()
+                entry["probeTrigger"] = probe?.trigger
+                entry["discoveryMatched"] = discoveryMatched?.contains(s.id)
+                found.append(entry)
             }
             // Sent, unanswered, and the device still answered reads: it ignored this request, which points at the
             // request (its arguments, its method) rather than the network.
@@ -189,8 +210,30 @@ enum DiagnosticReport {
                 found.append(base.merging(["kind": "propertyAckTimeout", "properties": ackTimeoutProperties,
                                            "backoffActive": activeBackoff]) { $1 })
             }
-            if s.health.state != .online, let probe = lan[s.id]?.lastProbe, probe.failure?.kind == .unexpectedDevice {
-                found.append(base.merging(["kind": "configuredAddressAnsweredByDifferentDevice", "at": probe.at.ISO8601Format()]) { $1 })
+            let invalid = s.readings.compactMap { key, reading in
+                reading.validation.map { ["property": key, "reason": $0.reason.rawValue] }
+            }.sorted { ($0["property"] ?? "") < ($1["property"] ?? "") }
+            if !invalid.isEmpty {
+                found.append(base.merging(["kind": "deviceReadingValidationFailed", "properties": invalid]) { $1 })
+            }
+            if addressesChanged.contains(s.id) {
+                found.append(base.merging(["kind": "deviceFoundAtDifferentAddress"]) { $1 })
+            }
+            if let probe = lan[s.id]?.exportProbe ?? (s.isOnline ? nil : lan[s.id]?.lastProbe) {
+                let failure = probe.failure?.kind
+                let kind: String? = switch failure {
+                case .unexpectedDevice: "configuredAddressAnsweredByDifferentDevice"
+                case .helloWithoutEncryptedReply: "deviceHelloAnsweredWithoutAuthenticatedReply"
+                case .checksumMismatch: "deviceReplyFailedAuthentication"
+                case .invalidToken: "deviceTokenInvalidFormat"
+                case .timeout, .hostUnreachable:
+                    discoveryMatched?.contains(s.id) == false ? "deviceSilentOnUnicastAndDiscovery" : nil
+                case nil where probe.trigger == "export" && !s.isOnline: "deviceAnsweredExportProbe"
+                default: nil
+                }
+                if let kind {
+                    found.append(base.merging(["kind": kind, "at": probe.at.ISO8601Format(), "probeTrigger": probe.trigger]) { $1 })
+                }
             }
             if let services = home[s.id], !services.isEmpty {
                 // Without a main service Home builds the tile from the others: a switch that is on can read as the
@@ -208,15 +251,21 @@ enum DiagnosticReport {
         return found
     }
 
-    /// Reads every device once more, then saves the report where the user can pick it up. `~/Library/Logs` needs no
+    static func collect(model: AppModel) async throws -> Data {
+        async let discovery = model.diagnosticDiscovery()
+        await model.devices.refreshForDiagnostics()
+        let lan = await model.devices.lan.diagnostics(probeOffline: true)
+        let pairing = await model.bridge.pairingDiagnostics()
+        guard let data = json(model: model, lan: lan, pairing: pairing, exportDiscovery: await discovery) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        return data
+    }
+
+    /// Saves the report where the user can pick it up. `~/Library/Logs` needs no
     /// file-access prompt, unlike the Desktop or Downloads.
     static func export(model: AppModel) async throws -> URL {
-        async let pairing = model.bridge.pairingDiagnostics()
-        await model.devices.refreshNow()
-        let lan = await model.devices.lan.diagnostics()
-        // Let the bridge publish what that read found before its read statuses are collected.
-        try? await MonotonicClock.sleep(for: .milliseconds(300))
-        guard let data = json(model: model, lan: lan, pairing: await pairing) else { throw CocoaError(.fileWriteUnknown) }
+        let data = try await collect(model: model)
         let directory = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Logs/MijiaLAN", isDirectory: true)
         let formatter = DateFormatter()

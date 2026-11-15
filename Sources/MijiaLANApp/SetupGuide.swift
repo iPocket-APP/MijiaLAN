@@ -43,8 +43,8 @@ struct SetupGuide: View {
     var body: some View {
         let home = SetupGuideHomeState(
             status: bridge.status, enabled: bridge.isEnabled, paired: bridge.isPaired,
-            refreshingCode: bridge.isRefreshingSetupCode, accessories: bridge.exposedDeviceCount,
-            uri: bridge.setupURI, code: bridge.setupCode
+            resetting: bridge.isResettingPairing, refreshingCode: bridge.isRefreshingSetupCode,
+            accessories: bridge.exposedDeviceCount, uri: bridge.setupURI, code: bridge.pairingCodeForDisplay
         )
         VStack(alignment: .leading, spacing: 14) {
             progress(imported: showsHome)
@@ -108,6 +108,7 @@ struct SetupGuide: View {
 enum SetupGuideHomeState: Equatable {
     case bridgeOff
     case preparing
+    case resetting
     case refreshingCode
     case failed(String)
     case noAccessories
@@ -115,8 +116,9 @@ enum SetupGuideHomeState: Equatable {
     case paired
 
     init(status: HomeKitBridgeController.Status, enabled: Bool, paired: Bool,
-         refreshingCode: Bool, accessories: Int, uri: String?, code: String?) {
+         resetting: Bool, refreshingCode: Bool, accessories: Int, uri: String?, code: String?) {
         guard enabled else { self = .bridgeOff; return }
+        if resetting { self = .resetting; return }
         if refreshingCode { self = .refreshingCode; return }
         switch status {
         case .running where paired:
@@ -141,7 +143,7 @@ private struct SetupGuideHomeStep: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(state == .paired ? L10n.tr("家庭桥接已配对", "Home Bridge Paired") : L10n.tr("添加到 Apple「家庭」", "Add to Apple Home"))
+            Text(state == .paired ? L10n.tr("Mac 已保存家庭配对", "Mac Saved the Home Pairing") : L10n.tr("添加到 Apple「家庭」", "Add to Apple Home"))
                 .font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
 
             SettingsGroup {
@@ -157,6 +159,9 @@ private struct SetupGuideHomeStep: View {
                         Text(L10n.tr("请保持 Mac 与设备连接同一局域网，并在 macOS 提示时允许本地网络访问。",
                                      "Keep your Mac and devices on the same local network. Allow local network access if macOS asks."))
                             .font(.caption).foregroundStyle(.secondary)
+                    case .resetting:
+                        ProgressView().controlSize(.small)
+                        Text(L10n.tr("正在重置家庭配对…", "Resetting Home pairing…"))
                     case .refreshingCode:
                         ProgressView().controlSize(.small)
                         Text(L10n.tr("正在更新家庭配对码…", "Updating the Home pairing code…"))
@@ -182,9 +187,11 @@ private struct SetupGuideHomeStep: View {
                     case .paired:
                         Image(systemName: "checkmark.circle.fill").font(.system(size: 32)).foregroundStyle(.green)
                             .accessibilityHidden(true)
-                        Text(L10n.tr("可以在 iPhone 或 iPad 的「家庭」中查看配件并分配房间。",
-                                     "Open Home on your iPhone or iPad to see accessories and assign them to rooms."))
+                        Text(L10n.tr("请在 iPhone 或 iPad 的「家庭」中确认配件已出现。若添加失败，可在「管理家庭设备」导出配对诊断。",
+                                     "Confirm that the accessories appear in Home on your iPhone or iPad. If adding failed, export pairing diagnostics from Manage Home Devices."))
                             .foregroundStyle(.secondary)
+                        Button(L10n.tr("管理家庭设备", "Manage Home Devices"), action: manageDevices)
+                            .buttonStyle(.bordered)
                         primaryButton(L10n.tr("完成", "Done"), action: onFinish)
                     }
                 }

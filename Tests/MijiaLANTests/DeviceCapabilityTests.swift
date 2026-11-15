@@ -143,6 +143,32 @@ struct DeviceCapabilityTests {
         #expect(!requested.isEmpty && requested.allSatisfy { $0 <= 15 })
     }
 
+    @Test("Successful wire replies can fail spec validation with the exact value shape or bound")
+    func diagnosticValidation() async throws {
+        let (controller, fake, api) = try makeController(model: HealthPotStatus.model)
+        await controller.refreshNow()
+        let original = try #require(controller.snapshots["123"]?.value("p:5:31"))
+        let cap = try #require(controller.snapshots["123"]?.capabilitiesByID["p:5:33"])
+        let maximum = try #require(cap.max)
+        fake.props["5.31"] = .string("private device text")
+        fake.props["5.33"] = .number(maximum + 1)
+        await controller.refreshForDiagnostics()
+        let snapshot = try #require(controller.snapshots["123"])
+        let type = try #require(snapshot.readings["p:5:31"])
+        #expect(type.code == 0)
+        #expect(type.value == original && !type.isAvailable)
+        #expect(type.validation?.reason == .typeMismatch)
+        #expect(type.validation?.actualType == "string")
+        #expect(type.validation?.actualNumber == nil)
+        let range = try #require(snapshot.readings["p:5:33"]?.validation)
+        #expect(range.reason == .aboveMaximum)
+        #expect(range.maximum == maximum)
+        #expect(range.actualNumber == maximum + 1)
+        let text = String(decoding: try JSONEncoder().encode(type.validation), as: UTF8.self)
+        #expect(!text.contains("private device text"))
+        await api.shutdown()
+    }
+
     @Test("Health kettle controls use its reported status and a separately selected menu")
     func healthPotControls() async throws {
         let (controller, _, _) = try makeController(model: "chunmi.health_pot.a1")

@@ -78,6 +78,25 @@ struct LANMiotAPITests {
         await api.shutdown()
     }
 
+    @Test("An export rechecks an offline device even while scheduled retries are in backoff")
+    func exportProbe() async throws {
+        let network = FakeMiioNetwork()
+        let unit = network.add(host: "192.0.2.8", token: tokenA, deviceID: 8)
+        unit.offline = true
+        let config = LocalHomeConfig(devices: [lamp("8", host: unit.host)])
+        let api = LANMiotAPI(config: { config }, transport: network)
+        _ = try await api.deviceList()
+        let before = await api.retryStates()["8"]
+        unit.offline = false
+        let evidence = await api.diagnostics(probeOffline: true)["8"]
+        #expect(evidence?.lastProbe?.failure?.kind == .timeout)
+        #expect(evidence?.exportProbe?.trigger == "export")
+        #expect(evidence?.exportProbe?.failure == nil)
+        #expect(evidence?.endpoint?.lastAuthenticatedReplyAt != nil)
+        #expect(await api.retryStates()["8"] == before)
+        await api.shutdown()
+    }
+
     @Test("One silent device does not fail the poll, and goes offline after two misses")
     func partialPoll() async throws {
         let network = FakeMiioNetwork()

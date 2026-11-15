@@ -15,6 +15,7 @@ public actor PairingStateMachine {
     private let pairingStore: any PairingStore
     private let deviceID: String
     private let onHandshake: (@Sendable (HAPHandshakeEvent) -> Void)?
+    private let onCompleted: (@Sendable (String) -> Void)?
     private var state: State = .idle
     private let logger = Logger(label: "hap.pairing")
 
@@ -37,7 +38,8 @@ public actor PairingStateMachine {
     }
 
     public init(setupCode: String, identity: HAPIdentity, pairingStore: any PairingStore, deviceID: String,
-                onHandshake: (@Sendable (HAPHandshakeEvent) -> Void)? = nil) {
+                onHandshake: (@Sendable (HAPHandshakeEvent) -> Void)? = nil,
+                onCompleted: (@Sendable (String) -> Void)? = nil) {
         // HAP SRP uses the setup code in its display format (XXX-XX-XXX) including
         // dashes as the SRP password. All reference implementations (hap-nodejs,
         // HAP-python, esp-homekit) pass the formatted string with dashes to SRP.
@@ -46,6 +48,7 @@ public actor PairingStateMachine {
         self.pairingStore = pairingStore
         self.deviceID = deviceID
         self.onHandshake = onHandshake
+        self.onCompleted = onCompleted
     }
 
     public func handleRequest(_ data: Data) async throws -> Data {
@@ -297,6 +300,7 @@ public actor PairingStateMachine {
         }
 
         self.state = .paired
+        onCompleted?(identifierString)
         onHandshake?(.init(.setup, message: 5, outcome: .completed))
         logger.info("Pair-setup complete — controller \(identifierString)")
 

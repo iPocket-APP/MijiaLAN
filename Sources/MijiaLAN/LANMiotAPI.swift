@@ -56,13 +56,15 @@ public struct LANDeviceDiagnostics: Equatable, Sendable {
     public var link: LANLinkStats?
     public var readMethod: String?
     public var lastProbe: LANProbeEvidence?
+    public var exportProbe: LANProbeEvidence?
     public var endpoint: LANClientEvidence?
     public init(firmware: String? = nil, link: LANLinkStats? = nil, readMethod: String? = nil,
-                lastProbe: LANProbeEvidence? = nil, endpoint: LANClientEvidence? = nil) {
+                lastProbe: LANProbeEvidence? = nil, exportProbe: LANProbeEvidence? = nil, endpoint: LANClientEvidence? = nil) {
         self.firmware = firmware
         self.link = link
         self.readMethod = readMethod
         self.lastProbe = lastProbe
+        self.exportProbe = exportProbe
         self.endpoint = endpoint
     }
 }
@@ -401,14 +403,39 @@ public actor LANMiotAPI: MiCloudAPI {
         links[did] = link
     }
 
-    /// Each device's read record and firmware for the diagnostics file. A device that answers is asked for its
-    /// firmware once per endpoint; nothing else is sent.
-    public func diagnostics(timeout: TimeSpan = .seconds(2)) async -> [String: LANDeviceDiagnostics] {
+    /// Export can sample offline endpoints once using the ordinary, serialized miIO.info read. This does not
+    /// consume a scheduled retry, clear a backoff, or change the configured address.
+    public func diagnostics(timeout: TimeSpan = .seconds(2), probeOffline: Bool = false) async -> [String: LANDeviceDiagnostics] {
         let devices = config().devices
         for device in devices where firmware[device.did] == nil && health[device.did]?.state == .online {
             let client = client(for: device)
             guard let info = try? await client.info(timeout: timeout, retryCount: 0), isCurrent(device, client: client) else { continue }
             firmware[device.did] = info.firmware
+        }
+        var exportProbes: [String: LANProbeEvidence] = [:]
+        if probeOffline {
+            let offline = devices.filter { health[$0.did]?.state != .online }
+            let limit = 8
+            for start in stride(from: 0, to: offline.count, by: limit) {
+                await withTaskGroup(of: (LocalDevice, MiioClient, LANProbeEvidence).self) { group in
+                    for device in offline[start..<min(start + limit, offline.count)] {
+                        let client = client(for: device)
+                        group.addTask {
+                            let failure: LANFailureEvidence?
+                            do {
+                                _ = try await client.info(timeout: timeout, retryCount: 0)
+                                failure = nil
+                            } catch {
+                                failure = LANFailureEvidence(error)
+                            }
+                            return (device, client, .init(at: Date(), trigger: "export", failure: failure))
+                        }
+                    }
+                    for await (device, client, evidence) in group where isCurrent(device, client: client) {
+                        exportProbes[device.did] = evidence
+                    }
+                }
+            }
         }
         var result: [String: LANDeviceDiagnostics] = [:]
         for device in devices {
@@ -417,7 +444,7 @@ public actor LANMiotAPI: MiCloudAPI {
             if let client, !isCurrent(device, client: client) { continue }
             result[device.did] = LANDeviceDiagnostics(firmware: firmware[device.did], link: links[device.did],
                 readMethod: legacyProfile(for: device) == nil ? "get_properties" : "legacyMiio",
-                lastProbe: probeEvidence[device.did], endpoint: endpoint)
+                lastProbe: probeEvidence[device.did], exportProbe: exportProbes[device.did], endpoint: endpoint)
         }
         return result
     }

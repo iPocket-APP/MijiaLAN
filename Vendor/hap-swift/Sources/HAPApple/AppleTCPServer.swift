@@ -27,7 +27,9 @@ private actor HAPConnectionContext {
     let charProtocol: CharacteristicProtocol
     let pairVerifyStateMachine: PairVerifyStateMachine
     let connectionID: Int
-    let send: @Sendable (Data) -> Void
+    nonisolated let trace: HAPConnectionTrace
+    let pairingConnections: HAPPairingConnectionIndex
+    let send: @Sendable (Data, HAPConnectionDiagnostic.RequestID?) -> Void
     /// Keep EVENTs behind the HTTP response, including while a fragmented request is still arriving.
     /// Actor isolation alone does not prevent an event from entering while a request handler awaits I/O.
     private var responsePending = false
@@ -40,18 +42,27 @@ private actor HAPConnectionContext {
         pairingStore: any PairingStore,
         deviceID: String,
         connectionID: Int,
-        send: @escaping @Sendable (Data) -> Void,
+        trace: HAPConnectionTrace,
+        pairingConnections: HAPPairingConnectionIndex,
+        send: @escaping @Sendable (Data, HAPConnectionDiagnostic.RequestID?) -> Void,
         onPairingChange: (@Sendable () async -> Void)? = nil,
         onHandshake: (@Sendable (HAPHandshakeEvent) -> Void)? = nil
     ) {
         self.connectionID = connectionID
+        self.trace = trace
+        self.pairingConnections = pairingConnections
         self.send = send
+        let recordHandshake: @Sendable (HAPHandshakeEvent) -> Void = { event in
+            trace.handshake(event)
+            onHandshake?(event)
+        }
         let pairing = PairingStateMachine(
             setupCode: setupCode, identity: identity, pairingStore: pairingStore, deviceID: deviceID,
-            onHandshake: onHandshake
+            onHandshake: recordHandshake,
+            onCompleted: { pairingConnections.record($0, connection: connectionID) }
         )
         let pairVerify = PairVerifyStateMachine(
-            identity: identity, pairingStore: pairingStore, deviceID: deviceID, onHandshake: onHandshake
+            identity: identity, pairingStore: pairingStore, deviceID: deviceID, onHandshake: recordHandshake
         )
         self.pairVerifyStateMachine = pairVerify
         self.charProtocol = CharacteristicProtocol(
@@ -62,7 +73,7 @@ private actor HAPConnectionContext {
             identity: identity,
             connectionID: connectionID,
             onPairingChange: onPairingChange,
-            onHandshake: onHandshake
+            onHandshake: recordHandshake
         )
     }
 
@@ -83,7 +94,7 @@ private actor HAPConnectionContext {
         while !responsePending, !pendingEvents.isEmpty {
             let data = pendingEvents.removeFirst()
             do {
-                try await session.encryptAndSend(data, send: send)
+                try await session.encryptAndSend(data) { [send] in send($0, nil) }
                 logger.debug("Connection \(connectionID): submitted event (\(data.count) plaintext bytes)")
             } catch {
                 logger.debug("Connection \(connectionID): event encryption failed: \(error)")
@@ -96,10 +107,12 @@ private actor HAPConnectionContext {
 
     /// Append newly-received bytes to the buffer and process as many complete
     /// frames as possible. The receive loop awaits this before requesting more bytes.
-    /// Returns false for an unusable session; its caller closes TCP so the controller can reconnect.
-    func process(incoming data: Data, logger: Logger, connectionID: Int) async -> Bool {
+    /// Returns the reason TCP must close when the session can no longer process requests.
+    func process(incoming data: Data, logger: Logger, connectionID: Int) async -> HAPConnectionDiagnostic.CloseReason? {
         responsePending = true
         buffer.append(data)
+        trace.buffering(buffer.count + pendingPlaintext.count)
+        defer { trace.buffering(buffer.count + pendingPlaintext.count) }
 
         while !buffer.isEmpty {
             if await session.isEncrypted {
@@ -119,7 +132,7 @@ private actor HAPConnectionContext {
                     plaintext = decrypted
                 } catch {
                     logger.error("Connection \(connectionID): session decrypt failed (frame format or key mismatch): \(error)")
-                    return false
+                    return .invalidFrame
                 }
                 let consumed = bytesAvailable - localBuffer.count
                 buffer.removeFirst(consumed)
@@ -130,16 +143,18 @@ private actor HAPConnectionContext {
                 pendingPlaintext.append(plaintext)
                 guard pendingPlaintext.count <= Self.maxPendingPlaintext else {
                     logger.error("Connection \(connectionID): no complete request in \(pendingPlaintext.count) decrypted bytes, closing connection")
-                    return false
+                    return .requestTooLarge
                 }
                 while let length = HTTPProtocol.requestLength(in: pendingPlaintext) {
                     let requestData = Data(pendingPlaintext.prefix(length))
                     pendingPlaintext.removeFirst(length)
                     guard let request = HTTPProtocol.parseRequest(from: requestData) else {
                         logger.debug("Connection \(connectionID): failed to parse decrypted request (\(requestData.count) bytes plaintext)")
-                        return false
+                        return .invalidRequest
                     }
 
+                    let diagnosticRequest = trace.receive(request)
+                    trace.buffering(buffer.count + pendingPlaintext.count)
                     let started = MonotonicClock.now
                     let response: HTTPResponse
                     do {
@@ -150,12 +165,13 @@ private actor HAPConnectionContext {
                     }
 
                     let responseData = HTTPProtocol.serializeResponse(response)
+                    if let diagnosticRequest { trace.response(diagnosticRequest, response) }
                     logger.debug("Connection \(connectionID): response \(response.statusCode), \(response.body.count) body bytes after \(started.duration(to: .now))")
                     do {
-                        try await session.encryptAndSend(responseData, send: send)
+                        try await session.encryptAndSend(responseData) { [send] in send($0, diagnosticRequest) }
                     } catch {
                         logger.error("Connection \(connectionID): response encryption failed: \(error)")
-                        return false
+                        return .responseEncryptionFailed
                     }
                 }
                 if !pendingPlaintext.isEmpty {
@@ -174,6 +190,8 @@ private actor HAPConnectionContext {
                 // exactly one request and waits for a full response before sending the next.
                 buffer.removeAll()
 
+                let diagnosticRequest = trace.receive(request)
+                trace.buffering(pendingPlaintext.count)
                 let response: HTTPResponse
                 do {
                     response = try await charProtocol.handleRequest(request)
@@ -183,12 +201,17 @@ private actor HAPConnectionContext {
                 }
 
                 let responseData = HTTPProtocol.serializeResponse(response)
-                send(responseData)
+                if let diagnosticRequest { trace.response(diagnosticRequest, response) }
+                send(responseData, diagnosticRequest)
 
                 // If pair-verify just completed (M4 sent), promote this connection
                 // to encrypted mode.  All subsequent data from iOS will be encrypted.
                 if let keys = await pairVerifyStateMachine.sessionKeys() {
+                    if let controller = await pairVerifyStateMachine.verifiedControllerIdentifier {
+                        trace.linkToPairSetup(pairingConnections.connection(for: controller))
+                    }
                     await session.establishSession(readKey: keys.readKey, writeKey: keys.writeKey)
+                    trace.encrypted()
                     logger.info("Connection \(connectionID): session encryption established")
                 }
             }
@@ -197,7 +220,7 @@ private actor HAPConnectionContext {
         // HTTP request still owns the next response slot; resume event delivery after its final fragment.
         responsePending = !buffer.isEmpty || !pendingPlaintext.isEmpty
         await flushEvents(logger: logger, connectionID: connectionID)
-        return true
+        return nil
     }
 }
 
@@ -208,6 +231,8 @@ public final class AppleTCPServer: HAPServer, @unchecked Sendable {
     private var listener: NWListener?
     private var connections: [Int: NWConnection] = [:]
     private var contexts: [Int: HAPConnectionContext] = [:]
+    private var closedTraces: [HAPConnectionTrace] = []
+    private let pairingConnections = HAPPairingConnectionIndex()
     private var nextConnectionID = 0
     private let logger: Logger
 
@@ -226,6 +251,12 @@ public final class AppleTCPServer: HAPServer, @unchecked Sendable {
 
     public var port: UInt16 {
         lock.withLock { _port }
+    }
+
+    public func diagnosticConnections() -> [HAPConnectionDiagnostic] {
+        let (closed, open) = lock.withLock { (closedTraces, contexts.values.map(\.trace)) }
+        let active = open.map { $0.snapshot() }.sorted { $0.connection < $1.connection }
+        return (closed.map { $0.snapshot() } + Array(active.suffix(24))).sorted { $0.connection < $1.connection }
     }
 
     public init(
@@ -324,6 +355,9 @@ public final class AppleTCPServer: HAPServer, @unchecked Sendable {
             let c = self.connections
             self.listener = nil
             _port = 0
+            for context in contexts.values {
+                retainClosed(context.trace, reason: .bridgeStopped)
+            }
             self.connections.removeAll()
             self.contexts.removeAll()
             return (l, c)
@@ -342,6 +376,7 @@ public final class AppleTCPServer: HAPServer, @unchecked Sendable {
         let connectionID = lock.withLock {
             let id = nextConnectionID
             nextConnectionID += 1
+            let trace = HAPConnectionTrace(connection: id)
             connections[id] = connection
             contexts[id] = HAPConnectionContext(
                 bridge: bridge,
@@ -350,9 +385,12 @@ public final class AppleTCPServer: HAPServer, @unchecked Sendable {
                 pairingStore: pairingStore,
                 deviceID: deviceID,
                 connectionID: id,
-                send: { [logger = self.logger] data in
+                trace: trace,
+                pairingConnections: pairingConnections,
+                send: { [logger = self.logger] data, requestKind in
                     let count = data.count
                     connection.send(content: data, completion: .contentProcessed { error in
+                        if let requestKind { trace.sent(requestKind, error: error) }
                         if let error { logger.debug("Connection \(id) send error: \(error)") }
                         else { logger.debug("Connection \(id): socket accepted \(count) bytes") }
                     })
@@ -370,13 +408,14 @@ public final class AppleTCPServer: HAPServer, @unchecked Sendable {
             switch state {
             case .ready:
                 self.logger.debug("Connection \(connectionID) ready")
+                self.lock.withLock { self.contexts[connectionID]?.trace.ready() }
                 self.receiveData(connection: connection, connectionID: connectionID)
             case .failed(let error):
                 self.logger.debug("Connection \(connectionID) failed: \(error)")
-                self.removeConnection(connectionID)
+                self.removeConnection(connectionID, reason: .networkError, error: error)
             case .cancelled:
                 self.logger.debug("Connection \(connectionID) cancelled")
-                self.removeConnection(connectionID)
+                self.removeConnection(connectionID, reason: .cancelled)
             default:
                 break
             }
@@ -393,18 +432,19 @@ public final class AppleTCPServer: HAPServer, @unchecked Sendable {
             // suspensions and prevents two tasks from decrypting the same buffer.
             Task { @concurrent in
                 if let data = content, !data.isEmpty {
-                    guard await self.processData(data: data, connection: connection, connectionID: connectionID) else {
-                        self.removeConnection(connectionID)
+                    guard let context = self.lock.withLock({ self.contexts[connectionID] }) else { return }
+                    if let reason = await context.process(incoming: data, logger: self.logger, connectionID: connectionID) {
+                        self.removeConnection(connectionID, reason: reason)
                         return
                     }
                 }
 
-                if isComplete {
-                    self.logger.debug("Connection \(connectionID): peer ended receive stream")
-                    self.removeConnection(connectionID)
-                } else if let error {
+                if let error {
                     self.logger.debug("Connection \(connectionID) receive error: \(error)")
-                    self.removeConnection(connectionID)
+                    self.removeConnection(connectionID, reason: .networkError, error: error)
+                } else if isComplete {
+                    self.logger.debug("Connection \(connectionID): peer ended receive stream")
+                    self.removeConnection(connectionID, reason: .peerClosed)
                 } else {
                     self.receiveData(connection: connection, connectionID: connectionID)
                 }
@@ -412,23 +452,29 @@ public final class AppleTCPServer: HAPServer, @unchecked Sendable {
         }
     }
 
-    private func processData(data: Data, connection: NWConnection, connectionID: Int) async -> Bool {
-        guard let context = lock.withLock({ contexts[connectionID] }) else { return false }
-
-        return await context.process(incoming: data, logger: logger, connectionID: connectionID)
-    }
-
-    private func removeConnection(_ connectionID: Int) {
+    private func removeConnection(_ connectionID: Int, reason: HAPConnectionDiagnostic.CloseReason, error: NWError? = nil) {
         let connection = lock.withLock {
-            contexts.removeValue(forKey: connectionID)
+            if let context = contexts.removeValue(forKey: connectionID) {
+                retainClosed(context.trace, reason: reason, error: error)
+            }
             return connections.removeValue(forKey: connectionID)
         }
-        connection?.cancel()
+        guard let connection else { return }
+        connection.cancel()
 
         // Clean up event subscriptions for this connection
         Task {
             await bridge.unsubscribeAll(connectionID: connectionID)
         }
+    }
+
+    /// Called under the server lock. Ordinary reconnects and unrelated traffic must not evict Pair Setup.
+    private func retainClosed(_ trace: HAPConnectionTrace, reason: HAPConnectionDiagnostic.CloseReason, error: NWError? = nil) {
+        trace.end(reason, error: error)
+        let setup = trace.snapshot().pairSetup != nil
+        let sameKind = closedTraces.indices.filter { (closedTraces[$0].snapshot().pairSetup != nil) == setup }
+        if sameKind.count >= 24, let oldest = sameKind.first { closedTraces.remove(at: oldest) }
+        closedTraces.append(trace)
     }
 
     // MARK: - Event Notifications

@@ -52,13 +52,22 @@ final class AppModel: ObservableObject {
     @Published private(set) var isRediscovering = false
     @Published private(set) var lastRediscoveryNote: String?
     @Published private(set) var lastRediscoveryAt: Date?
-    struct RediscoveryEvidence: Encodable {
+    struct RediscoveryEvidence: Encodable, Sendable {
         var at: Date
         var outcome: String
         var respondingDevices: Int? = nil
         var matchingDeviceIDs: [String]? = nil
         var addressChangedDeviceIDs: [String]? = nil
         var addressChangesSaved: Bool? = nil
+        var failure: LANFailureEvidence? = nil
+
+        static func completed(_ found: [MiioDiscoveredDevice], devices: [LocalDevice]) -> Self {
+            let hosts = Dictionary(devices.map { ($0.did, $0.host) }, uniquingKeysWith: { first, _ in first })
+            let matches = found.filter { hosts[$0.did] != nil }
+            let changed = matches.filter { hosts[$0.did] != $0.host }
+            return .init(at: Date(), outcome: "completed", respondingDevices: found.count,
+                         matchingDeviceIDs: matches.map(\.did).sorted(), addressChangedDeviceIDs: changed.map(\.did).sorted())
+        }
     }
     private(set) var rediscoveryEvidence: RediscoveryEvidence?
     @Published private(set) var retryingDeviceIDs: Set<String> = []
@@ -423,6 +432,17 @@ final class AppModel: ObservableObject {
         Task { await rediscover() }
     }
 
+    /// A report samples broadcasts without applying newly discovered addresses.
+    func diagnosticDiscovery() async -> RediscoveryEvidence {
+        if usesPreviewDevices { return .init(at: Date(), outcome: "preview") }
+        do {
+            let found = try await MiioDiscovery.discover()
+            return .completed(found, devices: config.devices)
+        } catch {
+            return .init(at: Date(), outcome: "failed", failure: LANFailureEvidence(error))
+        }
+    }
+
     private func startRediscoveryLoop() {
         rediscoveryTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -446,10 +466,8 @@ final class AppModel: ObservableObject {
             let found = try await MiioDiscovery.discover()
             lastRediscoveryAt = Date()
             var next = config
-            let known = Set(config.devices.map(\.did))
-            let matches = Set(found.map(\.did)).intersection(known)
-            let hosts = Dictionary(config.devices.map { ($0.did, $0.host) }, uniquingKeysWith: { first, _ in first })
-            let changed = found.filter { device in hosts[device.did].map { $0 != device.host } == true }
+            var evidence = RediscoveryEvidence.completed(found, devices: config.devices)
+            let matches = Set(evidence.matchingDeviceIDs ?? [])
             let moved = next.updateHosts(from: found)
             let unknown = found.count - matches.count
             lastRediscoveryNote = found.isEmpty
@@ -463,13 +481,12 @@ final class AppModel: ObservableObject {
                     lastRediscoveryNote = L10n.tr("找到设备的新地址，但无法写入钥匙串，请解锁后重新扫描。", "Found new device addresses but could not save them. Unlock the Keychain and scan again.")
                 }
             }
-            rediscoveryEvidence = .init(at: Date(), outcome: "completed", respondingDevices: found.count,
-                matchingDeviceIDs: matches.sorted(), addressChangedDeviceIDs: changed.map(\.did).sorted(),
-                addressChangesSaved: changesSaved)
+            evidence.addressChangesSaved = changesSaved
+            rediscoveryEvidence = evidence
             await api.retryDiscoveredDevices(matches)
         } catch {
             lastRediscoveryAt = Date()
-            rediscoveryEvidence = .init(at: Date(), outcome: "failed")
+            rediscoveryEvidence = .init(at: Date(), outcome: "failed", failure: LANFailureEvidence(error))
             lastRediscoveryNote = Self.describe(error)
         }
     }

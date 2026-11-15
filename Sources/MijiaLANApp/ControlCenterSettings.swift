@@ -277,6 +277,10 @@ struct SettingsHomeKitManagement: View {
                 if let message = bridge.pairingResetError {
                     Text(message).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                 }
+                if case .failed = bridge.status, bridge.isEnabled, !bridge.isResettingPairing, !bridge.isRefreshingSetupCode {
+                    Button(L10n.tr("重试启动桥接", "Retry Starting Bridge"), action: bridge.retryStart)
+                        .controlSize(.small)
+                }
                 if bridge.canResetPairing {
                     Button(L10n.tr("重置 HomeKit 配对…", "Reset HomeKit Pairing…"), role: .destructive) { confirmingReset = true }
                         .controlSize(.small)
@@ -284,18 +288,51 @@ struct SettingsHomeKitManagement: View {
                 HomeKitServiceLimitNotice(warnings: bridge.serviceLimitWarnings)
             }
 
-            if case .running = bridge.status, !bridge.isPaired, !bridge.isRefreshingSetupCode,
-               let uri = bridge.setupURI, let code = bridge.setupCode {
+            if let code = bridge.pairingCodeForDisplay {
                 SettingsSection(L10n.tr("添加到「家庭」", "Add to Home")) {
                     SettingsGroup {
                         VStack(spacing: 10) {
-                            HomePairingCode(uri: uri, code: code)
-                            Text(L10n.tr("打开 iPhone「家庭」App，点 + → 添加配件，扫描二维码。", "Open Home on your iPhone, tap + → Add Accessory, then scan this code."))
+                            HomePairingCode(uri: bridge.setupURI, code: code)
+                            Text(L10n.tr("在 iPhone「家庭」中点 + → 添加配件。扫描二维码，或手动输入 8 位设置码。",
+                                         "In Home on your iPhone, tap + → Add Accessory. Scan the QR code or enter the 8-digit setup code."))
                                 .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                             Text(L10n.tr("提示「未认证配件」时，选择「仍然添加」。", "If an uncertified accessory warning appears, choose Add Anyway."))
                                 .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         }
                         .frame(maxWidth: .infinity).padding(14)
+                    }
+                }
+            }
+
+            SettingsSection(L10n.tr("配对诊断", "Pairing Diagnostics")) {
+                Button(bridge.setupAttempt == nil
+                    ? L10n.tr("开始记录配对尝试", "Mark a Pairing Attempt")
+                    : L10n.tr("标记下一次尝试", "Mark Another Attempt"), action: bridge.beginSetupDiagnostics)
+                    .controlSize(.small)
+                    .disabled(model.diagnosticsExport == .collecting || bridge.isResettingPairing || bridge.isRefreshingSetupCode)
+                if bridge.setupAttempt != nil {
+                    Text(L10n.tr("在 iPhone「家庭」里重试添加，选择看到的结果后导出。", "Retry adding the bridge in Home on your iPhone, then select the result and export."))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Picker(L10n.tr("iPhone「家庭」结果", "Result in iPhone Home"), selection: Binding(
+                        get: { bridge.setupAttempt?.homeResult },
+                        set: { bridge.recordSetupResult($0) }
+                    )) {
+                        Text(L10n.tr("未记录", "Unrecorded")).tag(nil as HomeKitBridgeController.SetupAttempt.HomeResult?)
+                        Text(L10n.tr("配件已加入另一个家", "Accessory Already in Another Home"))
+                            .tag(Optional(HomeKitBridgeController.SetupAttempt.HomeResult.alreadyInAnotherHome))
+                        Text(L10n.tr("其他错误", "Other Error")).tag(Optional(HomeKitBridgeController.SetupAttempt.HomeResult.otherError))
+                        Text(L10n.tr("添加成功", "Added")).tag(Optional(HomeKitBridgeController.SetupAttempt.HomeResult.added))
+                    }
+                    .controlSize(.small)
+                    .disabled(model.diagnosticsExport == .collecting)
+                    Button(model.diagnosticsExport == .collecting
+                        ? L10n.tr("正在收集诊断…", "Collecting Diagnostics…")
+                        : L10n.tr("导出诊断", "Export Diagnostics"), action: model.exportDiagnostics)
+                        .controlSize(.small)
+                        .disabled(model.diagnosticsExport == .collecting)
+                    if case .failed(let message) = model.diagnosticsExport {
+                        Text(message).font(.caption).foregroundStyle(.red)
                     }
                 }
             }
@@ -328,7 +365,8 @@ struct SettingsHomeKitManagement: View {
             Button(L10n.tr("重置", "Reset"), role: .destructive) { bridge.resetPairing() }
             Button(L10n.tr("取消", "Cancel"), role: .cancel) {}
         } message: {
-            Text(L10n.tr("「家庭」App 会把这个桥当成新配件：房间、场景和自动化需要重新设置。", "Home will treat this bridge as a new accessory. Rooms, scenes, and automations will need to be set up again."))
+            Text(L10n.tr("重置会生成新的桥身份和配对码。若 iPhone「家庭」仍显示旧桥，请移除旧桥后再扫描新码。旧桥配件的房间、场景和自动化需要重新设置。",
+                         "Resetting generates a new bridge identity and pairing code. If the old bridge is still in Home, remove it before scanning the new code. Set up its accessories’ rooms, scenes, and automations again."))
         }
     }
 }
@@ -808,17 +846,24 @@ private struct HomeKitSettingsStatus {
     let bridge: HomeKitBridgeController
 
     var text: String {
-        switch bridge.status {
+        if bridge.isResettingPairing {
+            return L10n.tr("正在重置家庭配对…", "Resetting Home pairing…")
+        }
+        if bridge.isRefreshingSetupCode {
+            return L10n.tr("正在更新家庭配对码…", "Updating the Home pairing code…")
+        }
+        return switch bridge.status {
         case .stopped: L10n.tr("已关闭", "Off")
         case .waitingForDevices: L10n.tr("等待设备导入或连接", "Waiting for devices to be imported or connected")
         case .starting: L10n.tr("正在启动…", "Starting…")
-        case .running: bridge.isPaired ? L10n.tr("已配对 · \(bridge.exposedDeviceCount) 个配件", "Paired · \(bridge.exposedDeviceCount) \(bridge.exposedDeviceCount == 1 ? "accessory" : "accessories")") : L10n.tr("尚未配对 · 请打开管理家庭设备", "Not paired · Open Manage Home Devices")
+        case .running: bridge.isPaired ? L10n.tr("桥接已配对 · \(bridge.exposedDeviceCount) 个配件", "Bridge paired · \(bridge.exposedDeviceCount) \(bridge.exposedDeviceCount == 1 ? "accessory" : "accessories")") : L10n.tr("尚未配对 · 请打开管理家庭设备", "Not paired · Open Manage Home Devices")
         case .failed: L10n.tr("启动失败 · 请打开管理家庭设备", "Could not start · Open Manage Home Devices")
         }
     }
 
     var color: Color {
-        switch bridge.status {
+        if bridge.isResettingPairing || bridge.isRefreshingSetupCode { return .secondary }
+        return switch bridge.status {
         case .running: .green
         case .failed: .orange
         default: .secondary

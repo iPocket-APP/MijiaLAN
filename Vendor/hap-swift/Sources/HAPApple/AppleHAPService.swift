@@ -20,6 +20,7 @@ public actor AppleHAPService {
     private let bridge: HAPBridge
     private let server: AppleTCPServer
     private let advertiser: HAPAdvertiser
+    private let discovery: AppleServiceDiscovery
     private let identity: HAPIdentity
     private let pairingStore: any PairingStore
     private let deviceID: String
@@ -29,13 +30,14 @@ public actor AppleHAPService {
     private var publication: Task<Void, Error>?
     private var lastAcceptedPublication: BonjourPublication?
     private var lastFailedPublication: BonjourPublication?
+    private var lastPairingPublication: BonjourPublication?
 
     public struct BonjourPublication: Encodable, Sendable {
-        enum Operation: String, Encodable, Sendable { case start, pairing, configuration, state, refresh }
-        let at: Date
-        let operation: Operation
+        public enum Operation: String, Encodable, Sendable { case start, pairing, configuration, state, refresh }
+        public let at: Date
+        public let operation: Operation
         let port: UInt16
-        let sf: Int
+        public let sf: Int
         let configurationNumber: Int
         let stateNumber: Int
         let dnsServiceError: Int?
@@ -43,23 +45,30 @@ public actor AppleHAPService {
 
     public struct BonjourDiagnostics: Encodable, Sendable {
         let publishingEnabled: Bool
-        let lastAccepted: BonjourPublication?
+        public let lastAccepted: BonjourPublication?
         public let lastFailure: BonjourPublication?
+        public let lastPairingPublication: BonjourPublication?
     }
 
     public struct BonjourObservation: Encodable, Sendable {
-        struct Record: Encodable, Sendable {
-            let sf: Int?
+        public struct Record: Encodable, Sendable {
+            public let sf: Int?
             let configurationNumber: Int?
             let stateNumber: Int?
+            public let setupHashMatches: Bool?
+            let interfaces: [String]
+            public fileprivate(set) var resolvedPort: UInt16?
         }
         let at: Date
-        let browserState: String
-        let dnsError: Int?
-        let posixError: Int?
-        let matchingInstances: Int
-        let records: [Record]
-        let otherMijiaLANInstances: Int
+        public let browserState: String
+        public let dnsError: Int?
+        public let posixError: Int?
+        public let listenerPort: UInt16
+        public let matchingInstances: Int
+        public let previousBridgeVisible: Bool?
+        public let records: [Record]
+        public let otherMijiaLANInstances: Int
+        public let otherInstancesMatchingSetupHash: Int
     }
 
     public init(
@@ -83,6 +92,7 @@ public actor AppleHAPService {
         self.deviceID = deviceID
         self.setupID = setupID
         self.logger = logger
+        self.discovery = discovery
         self.advertiser = HAPAdvertiser(discovery: discovery, deviceID: deviceID)
         self.server = AppleTCPServer(
             bridge: bridge,
@@ -116,6 +126,7 @@ public actor AppleHAPService {
         self.deviceID = deviceID
         self.setupID = setupID
         self.logger = logger
+        self.discovery = discovery
 
         let advertiser = HAPAdvertiser(discovery: discovery, deviceID: deviceID)
         self.advertiser = advertiser
@@ -135,6 +146,10 @@ public actor AppleHAPService {
 
     /// The TCP port the server is listening on. Zero until ``start(port:)`` completes.
     public nonisolated var port: UInt16 { server.port }
+
+    public nonisolated func diagnosticConnections() -> [HAPConnectionDiagnostic] {
+        server.diagnosticConnections()
+    }
 
     // MARK: - Lifecycle
 
@@ -232,6 +247,7 @@ public actor AppleHAPService {
             }
             lastAcceptedPublication = .init(at: Date(), operation: operation, port: port, sf: sf,
                 configurationNumber: configNumber, stateNumber: stateNumber, dnsServiceError: nil)
+            if operation == .pairing { lastPairingPublication = lastAcceptedPublication }
         } catch {
             let code: Int?
             if case ServiceDiscoveryError.registrationFailed(let value) = error { code = value } else { code = nil }
@@ -243,18 +259,30 @@ public actor AppleHAPService {
     }
 
     public func bonjourDiagnostics() -> BonjourDiagnostics {
-        .init(publishingEnabled: advertising, lastAccepted: lastAcceptedPublication, lastFailure: lastFailedPublication)
+        .init(publishingEnabled: advertising, lastAccepted: lastAcceptedPublication, lastFailure: lastFailedPublication,
+              lastPairingPublication: lastPairingPublication)
     }
 
     /// A bounded snapshot of the local Mac's browse results, only on diagnostic export.
     /// Bonjour names, addresses and TXT fields for neighboring devices stay out of the report.
-    public func observeBonjour() async -> BonjourObservation? {
+    public func observeBonjour(previousDeviceID: String? = nil) async -> BonjourObservation? {
         guard advertising else { return nil }
         let name = await bridge.accessoryDatabase().first?.name ?? "HAP Bridge"
         let browser = NWBrowser(for: .bonjourWithTXTRecord(type: "_hap._tcp", domain: "local."), using: .tcp)
         browser.start(queue: DispatchQueue(label: "hap.diagnostic.bonjour"))
         defer { browser.cancel() }
-        do { try await MonotonicClock.sleep(for: .milliseconds(1500)) } catch { return nil }
+        let deadline = MonotonicClock.now + .seconds(5)
+        do {
+            try await MonotonicClock.sleep(for: .milliseconds(1500))
+            // A new registration or a name conflict can take longer than a single browse interval.
+            while MonotonicClock.now < deadline && !browser.browseResults.contains(where: { result in
+                guard case .bonjour(let txt) = result.metadata else { return false }
+                return txt["id"]?.caseInsensitiveCompare(deviceID) == .orderedSame
+            }) {
+                if case .failed = browser.state { break }
+                try await MonotonicClock.sleep(for: .milliseconds(150))
+            }
+        } catch { return nil }
         let state: String
         let error: NWError?
         switch browser.state {
@@ -269,23 +297,54 @@ public actor AppleHAPService {
 
         var matching = Set<String>()
         var other = Set<String>()
-        var records: [BonjourObservation.Record] = []
+        var otherWithSameSetupHash = Set<String>()
+        var previousBridgeVisible = false
+        var ownRecords: [(name: String, type: String, domain: String, index: UInt32, record: BonjourObservation.Record)] = []
+        let listenerPort = server.port
+        let expectedSetupHash = HAPKeyDerivation.setupHash(setupID: setupID, deviceID: deviceID)
         for result in browser.browseResults {
-            guard case .service(let instance, _, let domain, _) = result.endpoint,
+            guard case .service(let instance, let type, let domain, let interface) = result.endpoint,
                   case .bonjour(let txt) = result.metadata else { continue }
             let service = instance + "." + domain
+            let setupHashMatches = txt["sh"].map { $0 == expectedSetupHash }
             if txt["id"]?.caseInsensitiveCompare(deviceID) == .orderedSame {
                 matching.insert(service)
-                records.append(.init(sf: txt["sf"].flatMap { UInt8($0) }.map(Int.init),
-                    configurationNumber: txt["c#"].flatMap { UInt16($0) }.map(Int.init),
-                    stateNumber: txt["s#"].flatMap { UInt16($0) }.map(Int.init)))
-            } else if txt["md"] == name {
-                other.insert(service)
+                if ownRecords.count < 8 {
+                    let sf = txt["sf"].flatMap { Int($0) }
+                    let configurationNumber = txt["c#"].flatMap { Int($0) }
+                    let stateNumber = txt["s#"].flatMap { Int($0) }
+                    let interfaces = Set(result.interfaces.map { String(describing: $0.type) }).sorted()
+                    let record = BonjourObservation.Record(sf: sf, configurationNumber: configurationNumber,
+                        stateNumber: stateNumber, setupHashMatches: setupHashMatches, interfaces: interfaces)
+                    ownRecords.append((instance, type, domain, UInt32(interface?.index ?? 0), record))
+                }
+            } else {
+                if let previousDeviceID, txt["id"]?.caseInsensitiveCompare(previousDeviceID) == .orderedSame {
+                    previousBridgeVisible = true
+                }
+                if txt["md"] == name { other.insert(service) }
+                if setupHashMatches == true { otherWithSameSetupHash.insert(service) }
             }
         }
-        return .init(at: Date(), browserState: state, dnsError: dnsError, posixError: posixError,
-                     matchingInstances: matching.count,
-                     records: Array(records.prefix(16)), otherMijiaLANInstances: other.count)
+        let observedAt = Date()
+        let records = await withTaskGroup(of: BonjourObservation.Record.self, returning: [BonjourObservation.Record].self) { group in
+            for item in ownRecords {
+                group.addTask { [discovery] in
+                    var record = item.record
+                    record.resolvedPort = try? await discovery.resolveServicePort(name: item.name, type: item.type,
+                        domain: item.domain, interfaceIndex: item.index)
+                    return record
+                }
+            }
+            var result: [BonjourObservation.Record] = []
+            for await record in group { result.append(record) }
+            return result
+        }
+        return .init(at: observedAt, browserState: state, dnsError: dnsError, posixError: posixError,
+                     listenerPort: listenerPort, matchingInstances: matching.count,
+                     previousBridgeVisible: previousDeviceID != nil && state == "ready" ? previousBridgeVisible : nil,
+                     records: records, otherMijiaLANInstances: other.count,
+                     otherInstancesMatchingSetupHash: otherWithSameSetupHash.count)
     }
 
     // MARK: - Batch Updates

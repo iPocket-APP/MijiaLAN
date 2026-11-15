@@ -222,6 +222,19 @@ public final class DeviceController: ObservableObject {
         }
     }
 
+    /// An explicit export also samples slow properties. It waits for any read already using the same device.
+    public func refreshForDiagnostics() async {
+        reconcileConfiguration()
+        await withTaskGroup(of: Void.self) { group in
+            for (did, snapshot) in snapshots where snapshot.isOnline {
+                let capabilities = snapshot.capabilities.filter(\.readable)
+                group.addTask { await self.refresh(did: did, capabilities: capabilities) }
+            }
+            for await _ in group { schedulePublication() }
+        }
+        publish()
+    }
+
     private func schedulePublication() {
         guard publicationTask == nil, !Task.isCancelled else { return }
         publicationTask = Task { [weak self] in
@@ -260,9 +273,10 @@ public final class DeviceController: ObservableObject {
     }
 
     private func refresh(did: String, capabilities: [DeviceCapability], joinExisting: Bool = false) async {
-        if let prior = readTasks[did] {
+        while let prior = readTasks[did] {
             await prior.task.value
             if joinExisting { return }
+            if readTasks[did]?.id == prior.id { readTasks[did] = nil }
         }
         guard !Task.isCancelled, let device = snapshots[did]?.device else { return }
         let id = UUID()
@@ -279,8 +293,10 @@ public final class DeviceController: ObservableObject {
         guard !Task.isCancelled, var snapshot = snapshots[did], ProbeScheduler.sameEndpoint(snapshot.device, device) else { return }
         for (key, var reading) in readings {
             if let value = reading.value, reading.isAvailable, let cap = snapshot.capabilitiesByID[key] {
-                if let checked = try? cap.validatedReading(value) { reading.value = checked }
-                else {
+                switch cap.validateReading(value) {
+                case .success(let checked): reading.value = checked
+                case .failure(let reason):
+                    reading.validation = .init(at: reading.updatedAt ?? Date(), reason: reason, capability: cap, value: value)
                     reading.error = L10n.tr("设备返回的数据类型或取值不符合规格", "The returned value or data type does not match the device specification.")
                     reading.value = nil
                 }

@@ -8,7 +8,7 @@ public struct LANFailureEvidence: Equatable, Encodable, Sendable {
     public let kind: Kind
     public let deviceCode: Int?
 
-    init(_ error: any Error) {
+    public init(_ error: any Error) {
         let miio = error as? MiioError
         deviceCode = switch miio {
         case .deviceError(let code, _): code

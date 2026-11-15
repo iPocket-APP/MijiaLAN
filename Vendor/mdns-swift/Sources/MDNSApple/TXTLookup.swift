@@ -8,7 +8,7 @@ import MDNSCore
 
 // MARK: - TXTLookup
 
-/// One `DNSServiceResolve` lookup of an instance's TXT record, bridged to async.
+/// One `DNSServiceResolve` lookup of an instance's SRV port and TXT record, bridged to async.
 ///
 /// The reply callback is a C function pointer, so it reaches this object
 /// through a retained context pointer. Whichever of the reply, a failure or
@@ -18,25 +18,34 @@ import MDNSCore
 /// releasing the context.
 final class TXTLookup: @unchecked Sendable {
 
+    struct Reply: Sendable {
+        let port: UInt16
+        let txt: [String: String]
+    }
+
     let name: String
     let type: String
+    private let domain: String
+    private let interfaceIndex: UInt32
     private let queue: DispatchQueue
 
     // `continuation`, `ref` and `finished` are guarded by `lock`.
     private let lock = NSLock()
-    private var continuation: CheckedContinuation<[String: String], Error>?
+    private var continuation: CheckedContinuation<Reply, Error>?
     private var ref: DNSServiceRef?
     private var finished = false
 
-    init(name: String, type: String, queue: DispatchQueue) {
+    init(name: String, type: String, domain: String, interfaceIndex: UInt32, queue: DispatchQueue) {
         self.name = name
         self.type = type
+        self.domain = domain
+        self.interfaceIndex = interfaceIndex
         self.queue = queue
     }
 
-    func run() async throws -> [String: String] {
+    func run() async throws -> Reply {
         try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[String: String], Error>) in
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Reply, Error>) in
                 lock.lock()
                 if finished {
                     lock.unlock()
@@ -58,10 +67,10 @@ final class TXTLookup: @unchecked Sendable {
         let err = DNSServiceResolve(
             &sdRef,
             0,          // flags
-            0,          // any interface
+            interfaceIndex,
             name,
             type,
-            "local.",
+            domain,
             TXTLookup.reply,
             context.toOpaque()
         )
@@ -87,7 +96,7 @@ final class TXTLookup: @unchecked Sendable {
         lock.unlock()
     }
 
-    private func finish(_ result: Result<[String: String], Error>) {
+    private func finish(_ result: Result<Reply, Error>) {
         lock.lock()
         guard !finished else {
             lock.unlock()
@@ -119,7 +128,7 @@ final class TXTLookup: @unchecked Sendable {
         }
     }
 
-    private static let reply: DNSServiceResolveReply = { _, _, _, errorCode, _, _, _, txtLen, txtRecord, context in
+    private static let reply: DNSServiceResolveReply = { _, _, _, errorCode, _, _, port, txtLen, txtRecord, context in
         guard let context else { return }
         let lookup = Unmanaged<TXTLookup>.fromOpaque(context).takeUnretainedValue()
         guard errorCode == kDNSServiceErr_NoError else {
@@ -127,7 +136,7 @@ final class TXTLookup: @unchecked Sendable {
             return
         }
         let bytes = txtRecord.map { UnsafeBufferPointer(start: $0, count: Int(txtLen)) }
-        lookup.finish(.success(bytes.map { TXTRecord.decode(wireFormat: $0) } ?? [:]))
+        lookup.finish(.success(Reply(port: UInt16(bigEndian: port), txt: bytes.map { TXTRecord.decode(wireFormat: $0) } ?? [:])))
     }
 }
 #endif
