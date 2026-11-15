@@ -7,6 +7,28 @@ import Testing
 
 @MainActor
 struct DiagnosticReportTests {
+    @Test("An iPhone alert without a server request is preserved as client-side evidence in the same export")
+    func homeResultWithoutTraffic() async throws {
+        let suite = "test.mijialan.report.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let bridge = HomeKitBridgeController(vault: .init(load: { .missing }, save: { _ in false }), defaults: defaults, loopbackOnly: true)
+        bridge.beginSetupDiagnostics()
+        bridge.recordSetupResult(.alreadyInAnotherHome)
+        let pairing = await bridge.pairingDiagnostics()
+        let data = try #require(DiagnosticReport.json(
+            snapshots: [], retryStates: [:], hidden: [], failures: [],
+            bridge: .init(status: "stopped", paired: false, accessories: 0, keepsMacAwake: false),
+            revisions: (structure: 0, values: 0), pairing: pairing))
+        let report = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let findings = try #require(report["findings"] as? [[String: Any]])
+        let attempt = try #require(findings.first { $0["kind"] as? String == "homeKitPairingAttempt" })
+        #expect(attempt["homeResult"] as? String == "alreadyInAnotherHome")
+        #expect(attempt["stage"] as? String == "noSetupOrNewTCPObserved")
+        #expect(attempt["newTCPConnectionsSeen"] as? Int == 0)
+        #expect(!findings.contains { $0["kind"] as? String == "homeKitHandshakeRejected" })
+    }
+
     @Test("A report names the Home characteristics that fail to read and never carries a token or address")
     func allowList() throws {
         let token = "00112233445566778899aabbccddeeff"
@@ -21,12 +43,19 @@ struct DiagnosticReportTests {
         let data = try #require(DiagnosticReport.json(
             snapshots: [s], retryStates: [:], hidden: [], failures: [failure],
             bridge: .init(status: "running(port: 51826)", paired: true, accessories: 1, keepsMacAwake: false),
-            revisions: (structure: 1, values: 2)))
+            revisions: (structure: 1, values: 2),
+            discovery: .init(at: Date(), outcome: "completed", respondingDevices: 1, matchingDeviceIDs: ["123"],
+                             addressChangedDeviceIDs: ["123"], addressChangesSaved: true),
+            configuredDevices: [device, .init(did: "987", name: "no spec", model: "test.unknown.1",
+                                                host: "192.168.31.58", token: token)]))
 
         let text = String(decoding: data, as: UTF8.self)
-        for secret in [token, "192.168.31.57", "AA:BB:CC:DD:EE:FF"] { #expect(!text.contains(secret)) }
+        for secret in [token, "192.168.31.57", "192.168.31.58", "AA:BB:CC:DD:EE:FF"] { #expect(!text.contains(secret)) }
         let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(json["paired"] as? Bool == true)
+        #expect(json["schemaVersion"] as? Int == 3)
+        #expect((json["lanDiscovery"] as? [String: Any])?["addressChangedDeviceIDs"] as? [String] == ["123"])
+        #expect((json["configuredDevicesWithoutSnapshot"] as? [[String: Any]])?.first?["did"] as? String == "987")
         let row = try #require((json["devices"] as? [[String: Any]])?.first)
         #expect(row["specType"] as? String == schema.type)
         #expect(row["homeKitSupported"] as? Bool == true)

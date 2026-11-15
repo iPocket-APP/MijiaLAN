@@ -17,9 +17,7 @@ enum DevSnapshot {
         if let path = environment["MIJIALAN_DIAGNOSTICS_OUTPUT"] {
             Task { @MainActor in
                 try? await MonotonicClock.sleep(for: .seconds(12))
-                await model.devices.refreshNow()
-                let lan = await model.devices.lan.diagnostics()
-                if let data = DiagnosticReport.json(model: model, lan: lan) {
+                if let data = try? await DiagnosticReport.collect(model: model) {
                     diagnosticWriter.submit(data, to: URL(fileURLWithPath: path))
                 }
             }
@@ -29,6 +27,7 @@ enum DevSnapshot {
         let exits = environment["MIJIALAN_SNAPSHOT_EXIT"] != "0"
         let route: ControlCenterRoute = environment["MIJIALAN_UI_PAGE"].map {
             switch $0 {
+            case "setup-guide": .setupGuide
             case "settings": .settings
             case "settings-homekit": .settingsHomeKit
             case "settings-devices": .settingsDevices

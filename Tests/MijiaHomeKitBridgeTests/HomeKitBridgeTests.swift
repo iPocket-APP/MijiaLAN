@@ -481,6 +481,39 @@ struct HomeKitBridgeControllerTests {
         }
         #expect(probe.saves == 0)
         #expect(controller.exposedDeviceCount == 0)
+        #expect(await controller.pairingDiagnostics().startupFailure == .vaultUnavailable)
+    }
+
+    @Test("A missing or unreadable existing identity requires an explicit reset", arguments: [false, true])
+    @MainActor
+    func lostIdentity(_ corrupt: Bool) async throws {
+        let suite = "test.homekit.lost-identity.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defaults.set(false, forKey: HomeKitBridgeController.keepAwakeKey)
+        // Older installations may only have a saved listening port.
+        defaults.set(try JSONEncoder().encode(HomeKitBridgeController.Layout(port: 51826)),
+                     forKey: HomeKitBridgeController.layoutKey)
+        let (store, _) = try await HomeKitWriteRoutingTests().makeStore([HomeKitAccessoryMapperTests.light()])
+        let data = LockedState<Data?>(initialState: corrupt ? Data("unreadable".utf8) : nil)
+        let saves = VaultProbe()
+        let vault = HomeKitBridgeVault(load: { data.withLock { $0.map { .value($0) } ?? .missing } },
+                                       save: { value in saves.recordSave(); data.withLock { $0 = value }; return true })
+        let controller = HomeKitBridgeController(vault: vault, defaults: defaults, port: 0, loopbackOnly: true)
+        controller.attach(to: store)
+        await controller.waitUntilIdle()
+        let diagnostics = await controller.pairingDiagnostics()
+        #expect(diagnostics.startupFailure == (corrupt ? .storedIdentityUnreadable : .storedIdentityMissing))
+        #expect(controller.canResetPairing && controller.setupCode == nil && saves.saves == 0)
+
+        controller.resetPairing()
+        await controller.waitUntilIdle()
+        let recovered = await controller.pairingDiagnostics()
+        #expect(recovered.startupFailure == nil)
+        #expect(recovered.pairedControllerCount == 0)
+        #expect(recovered.deviceID != nil && controller.setupCode != nil && saves.saves == 1)
+        controller.isEnabled = false
+        await controller.waitUntilIdle()
+        defaults.removePersistentDomain(forName: suite)
     }
 }
 

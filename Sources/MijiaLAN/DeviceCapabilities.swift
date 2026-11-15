@@ -140,21 +140,32 @@ public struct DeviceCapability: Equatable, Sendable, Identifiable {
     /// Readings retain their precision until the destination (such as HAP) applies its advertised step.
     /// Command validation below remains strict: read normalization must never weaken device writes.
     public func validatedReading(_ value: JSONValue) throws -> JSONValue {
+        switch validateReading(value) {
+        case .success(let normalized): return normalized
+        case .failure: throw DeviceControlError.invalidValue(title)
+        }
+    }
+
+    func validateReading(_ value: JSONValue) -> Result<JSONValue, DeviceReading.ValidationFailure> {
         if format == "bool" {
-            if case .bool = value { return value }
-            if case .number(let n) = value, n == 0 || n == 1 { return .bool(n == 1) }
-            throw DeviceControlError.invalidValue(title)
+            if case .bool = value { return .success(value) }
+            if case .number(let n) = value {
+                return n == 0 || n == 1 ? .success(.bool(n == 1)) : .failure(.invalidBoolean)
+            }
+            return .failure(.typeMismatch)
         }
         if isNumeric {
-            guard case .number(let n) = value, n.isFinite else { throw DeviceControlError.invalidValue(title) }
-            if let min, n < min { throw DeviceControlError.invalidValue(title) }
-            if let max, n > max { throw DeviceControlError.invalidValue(title) }
+            guard case .number(let n) = value else { return .failure(.typeMismatch) }
+            guard n.isFinite else { return .failure(.nonFiniteNumber) }
+            if let min, n < min { return .failure(.belowMinimum) }
+            if let max, n > max { return .failure(.aboveMaximum) }
             // Specs often list fewer options than the firmware reports, such as a fan whose mode list holds only
             // Auto. An unlisted number is still what the device says: it matches none of the options.
-            return value
+            return .success(value)
         }
-        if format == "string", case .string = value { return value }
-        throw DeviceControlError.invalidValue(title)
+        guard format == "string" else { return .failure(.unsupportedFormat) }
+        if case .string = value { return .success(value) }
+        return .failure(.typeMismatch)
     }
 
     /// Whether `value` is one of the spec's options, or the property has no option list.
@@ -223,10 +234,42 @@ public enum DeviceControlError: LocalizedError, Equatable, Sendable {
 }
 
 public struct DeviceReading: Equatable, Sendable {
+    public enum ValidationFailure: String, Encodable, Sendable, Error {
+        case typeMismatch, invalidBoolean, nonFiniteNumber, belowMinimum, aboveMaximum, unsupportedFormat
+    }
+
+    public struct Validation: Equatable, Encodable, Sendable {
+        public let at: Date
+        public let reason: ValidationFailure
+        public let expectedFormat: String
+        public let actualType: String
+        public let actualNumber: Double?
+        public let minimum: Double?
+        public let maximum: Double?
+
+        init(at: Date, reason: ValidationFailure, capability: DeviceCapability, value: JSONValue) {
+            self.at = at
+            self.reason = reason
+            expectedFormat = capability.format
+            minimum = capability.min
+            maximum = capability.max
+            // Rejected strings and compound values may contain arbitrary device data.
+            switch value {
+            case .number(let number): (actualType, actualNumber) = ("number", number.isFinite ? number : nil)
+            case .string: (actualType, actualNumber) = ("string", nil)
+            case .bool: (actualType, actualNumber) = ("boolean", nil)
+            case .null: (actualType, actualNumber) = ("null", nil)
+            case .array: (actualType, actualNumber) = ("array", nil)
+            case .object: (actualType, actualNumber) = ("object", nil)
+            }
+        }
+    }
+
     public var value: JSONValue?
     public var updatedAt: Date?
     public var code: Int?
     public var error: String?
+    public internal(set) var validation: Validation?
     public init(value: JSONValue? = nil, updatedAt: Date? = nil, code: Int? = nil, error: String? = nil) {
         self.value = value; self.updatedAt = updatedAt; self.code = code; self.error = error
     }

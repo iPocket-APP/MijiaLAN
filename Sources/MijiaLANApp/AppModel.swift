@@ -22,6 +22,7 @@ final class AppModel: ObservableObject {
         case loadingQR
         case waitingForScan(QRLoginTicket, expiresAt: Date)
         case fetching
+        case completed(importedCount: Int, summary: String)
         case needsScan
         case failed(String)
     }
@@ -35,7 +36,7 @@ final class AppModel: ObservableObject {
     } }
     let devices: DeviceController
     @Published private(set) var importState: ImportState = .idle
-    @Published private(set) var lastImportSummary: String?
+    @Published private(set) var lastManualAddSummary: String?
     @Published var importRegion: String = "cn"
     @Published private(set) var loginStorageError: String?
     @Published private var rememberedSession: MiSession?
@@ -51,6 +52,24 @@ final class AppModel: ObservableObject {
     @Published private(set) var isRediscovering = false
     @Published private(set) var lastRediscoveryNote: String?
     @Published private(set) var lastRediscoveryAt: Date?
+    struct RediscoveryEvidence: Encodable, Sendable {
+        var at: Date
+        var outcome: String
+        var respondingDevices: Int? = nil
+        var matchingDeviceIDs: [String]? = nil
+        var addressChangedDeviceIDs: [String]? = nil
+        var addressChangesSaved: Bool? = nil
+        var failure: LANFailureEvidence? = nil
+
+        static func completed(_ found: [MiioDiscoveredDevice], devices: [LocalDevice]) -> Self {
+            let hosts = Dictionary(devices.map { ($0.did, $0.host) }, uniquingKeysWith: { first, _ in first })
+            let matches = found.filter { hosts[$0.did] != nil }
+            let changed = matches.filter { hosts[$0.did] != $0.host }
+            return .init(at: Date(), outcome: "completed", respondingDevices: found.count,
+                         matchingDeviceIDs: matches.map(\.did).sorted(), addressChangedDeviceIDs: changed.map(\.did).sorted())
+        }
+    }
+    private(set) var rediscoveryEvidence: RediscoveryEvidence?
     @Published private(set) var retryingDeviceIDs: Set<String> = []
 
     enum DiagnosticsExport: Equatable {
@@ -63,6 +82,8 @@ final class AppModel: ObservableObject {
 
     let store: HomeStore
     let bridge: HomeKitBridgeController
+    let setupGuideProgress: SetupGuideProgress
+    let opensSetupGuideOnLaunch: Bool
     private let vault: SecretVault
     private let cloudTransport: (any MiHTTPTransport)?
     private let configBox: ConfigBox
@@ -104,13 +125,18 @@ final class AppModel: ObservableObject {
         self.cloudTransport = cloudTransport
         var loaded = LocalHomeConfig()
         var unavailable = false
-        switch vault.lookup(Self.configAccount) {
+        let savedConfiguration = vault.lookup(Self.configAccount)
+        switch savedConfiguration {
         case .value(let data): loaded = LocalHomeConfig.decode(data) ?? LocalHomeConfig()
         case .missing: break
         case .unavailable: unavailable = true
         }
         config = loaded
         vaultUnavailable = unavailable
+        let setupGuide = SetupGuideProgress(defaults: bridgeDefaults)
+        setupGuideProgress = setupGuide
+        opensSetupGuideOnLaunch = !preview && environment["MIJIALAN_SNAPSHOT"] == nil
+            && setupGuide.shouldOpen(configuration: savedConfiguration)
         let box = ConfigBox(loaded)
         configBox = box
         let api: LANMiotAPI
@@ -127,7 +153,7 @@ final class AppModel: ObservableObject {
         bridge = HomeKitBridgeController(vault: HomeKitBridgeVault(
             load: { vault.lookup(AppModel.bridgeAccount) },
             save: { vault.set($0, for: AppModel.bridgeAccount) }
-        ), defaults: bridgeDefaults)
+        ), defaults: bridgeDefaults, loopbackOnly: preview)
         if !unavailable, case .value(let data) = vault.lookup(Self.rememberedSessionAccount),
            let session = try? JSONDecoder().decode(MiSession.self, from: data) {
             rememberedSession = session
@@ -238,11 +264,10 @@ final class AppModel: ObservableObject {
     }
 
     @discardableResult
-    func startCloudImport() -> Task<Void, Never> {
+    func startCloudImport(requiresQRCode: Bool = false) -> Task<Void, Never> {
         cancelImport()
-        lastImportSummary = nil
         loginStorageError = nil
-        let savedSession = reusableSession
+        let savedSession = requiresQRCode ? nil : reusableSession
         let region = importRegion
         importState = savedSession == nil ? .loadingQR : .fetching
         let task = Task { [weak self] in
@@ -331,10 +356,10 @@ final class AppModel: ObservableObject {
             scannedSession.region = result.region
             sessionToRemember = scannedSession
         }
-        lastImportSummary = L10n.tr("导入 \(result.devices.count) 台可走局域网的设备", "Imported LAN devices: \(result.devices.count)") +
+        let summary = L10n.tr("导入 \(result.devices.count) 台可走局域网的设备", "Imported LAN devices: \(result.devices.count)") +
             (result.skipped.isEmpty ? "" : L10n.tr("，\(result.skipped.count) 台不能（见下方）", "; skipped: \(result.skipped.count) (see device details)")) +
             (result.region == "cn" ? "" : L10n.tr("（服务器：\(result.region)）", " (server: \(result.region))"))
-        importState = .idle
+        importState = .completed(importedCount: result.devices.count, summary: summary)
         logger.info("Imported \(result.devices.count, privacy: .public) devices, skipped \(result.skipped.count, privacy: .public)")
     }
 
@@ -366,7 +391,7 @@ final class AppModel: ObservableObject {
                 var next = self.config
                 next.merge([device])
                 self.apply(next)
-                self.lastImportSummary = L10n.tr("已添加 \(device.name)（\(device.model)）", "Added \(device.name) (\(device.model)).")
+                self.lastManualAddSummary = L10n.tr("已添加 \(device.name)（\(device.model)）", "Added \(device.name) (\(device.model)).")
             } catch {
                 self?.manualAddError = Self.describe(error)
             }
@@ -407,6 +432,17 @@ final class AppModel: ObservableObject {
         Task { await rediscover() }
     }
 
+    /// A report samples broadcasts without applying newly discovered addresses.
+    func diagnosticDiscovery() async -> RediscoveryEvidence {
+        if usesPreviewDevices { return .init(at: Date(), outcome: "preview") }
+        do {
+            let found = try await MiioDiscovery.discover()
+            return .completed(found, devices: config.devices)
+        } catch {
+            return .init(at: Date(), outcome: "failed", failure: LANFailureEvidence(error))
+        }
+    }
+
     private func startRediscoveryLoop() {
         rediscoveryTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -419,6 +455,7 @@ final class AppModel: ObservableObject {
     private func rediscover() async {
         if usesPreviewDevices {
             lastRediscoveryAt = Date()
+            rediscoveryEvidence = .init(at: Date(), outcome: "preview")
             lastRediscoveryNote = L10n.tr("预览环境使用模拟设备", "The preview uses simulated devices.")
             return
         }
@@ -429,18 +466,27 @@ final class AppModel: ObservableObject {
             let found = try await MiioDiscovery.discover()
             lastRediscoveryAt = Date()
             var next = config
+            var evidence = RediscoveryEvidence.completed(found, devices: config.devices)
+            let matches = Set(evidence.matchingDeviceIDs ?? [])
             let moved = next.updateHosts(from: found)
-            let known = Set(config.devices.map(\.did))
-            let unknown = found.filter { !known.contains($0.did) }.count
+            let unknown = found.count - matches.count
             lastRediscoveryNote = found.isEmpty
                 ? L10n.tr("局域网广播暂时没有设备回应（路由器的设备隔离也会拦住广播）", "No devices responded to the LAN broadcast. Router client isolation can also block discovery.")
                 : L10n.tr("局域网里找到 \(found.count) 台 miIO 设备", "miIO devices found on the LAN: \(found.count)") + (unknown > 0 ? L10n.tr("，其中 \(unknown) 台还没有 token", "; without a token: \(unknown)") : "")
+            var changesSaved: Bool?
             if moved {
                 logger.info("Device IPs changed; saving")
-                apply(next)
+                changesSaved = apply(next)
+                if changesSaved == false {
+                    lastRediscoveryNote = L10n.tr("找到设备的新地址，但无法写入钥匙串，请解锁后重新扫描。", "Found new device addresses but could not save them. Unlock the Keychain and scan again.")
+                }
             }
-            await api.retryDiscoveredDevices(Set(found.map(\.did)).intersection(known))
+            evidence.addressChangesSaved = changesSaved
+            rediscoveryEvidence = evidence
+            await api.retryDiscoveredDevices(matches)
         } catch {
+            lastRediscoveryAt = Date()
+            rediscoveryEvidence = .init(at: Date(), outcome: "failed", failure: LANFailureEvidence(error))
             lastRediscoveryNote = Self.describe(error)
         }
     }

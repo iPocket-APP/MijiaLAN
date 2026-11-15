@@ -14,8 +14,8 @@ actor WireHAPController {
         let body: Data
     }
     enum Failure: Error { case closed, invalidHTTP, invalidFrame, invalidPairing, timedOut }
-    let identifier = UUID().uuidString
-    private let signing = Curve25519.Signing.PrivateKey()
+    let identifier: String
+    private let signing: Curve25519.Signing.PrivateKey
     private let connection: NWConnection
     private let queue = DispatchQueue(label: "test.mijialan.hap-controller")
     private var starting: CheckedContinuation<Void, any Error>?
@@ -33,7 +33,9 @@ actor WireHAPController {
     /// Do not silently hide an EVENT that overtakes the response to the current request.
     private(set) var eventsBeforeLastResponse = 0
 
-    init(port: UInt16) {
+    init(port: UInt16, identifier: String = UUID().uuidString, signing: Curve25519.Signing.PrivateKey = .init()) {
+        self.identifier = identifier
+        self.signing = signing
         connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
     }
 
@@ -59,6 +61,29 @@ actor WireHAPController {
     }
 
     func close() { connection.cancel() }
+
+    /// Apple Home can close the setup socket and verify using the same credentials on a new TCP connection.
+    func openNewConnection(port: UInt16) async throws -> WireHAPController {
+        let next = WireHAPController(port: port, identifier: identifier, signing: signing)
+        await next.loadAccessory(identifier: accessoryIdentifier, key: accessoryKey)
+        try await next.connect()
+        return next
+    }
+
+    private func loadAccessory(identifier: String, key: Data) {
+        accessoryIdentifier = identifier
+        accessoryKey = key
+    }
+
+    func finishSending() async throws {
+        let timer = timeout()
+        defer { timer.cancel() }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            })
+        }
+    }
 
     /// A corrupt authenticated frame cannot be retried on the same session. The peer must close it,
     /// rather than leave Home waiting until this test client's own five-second watchdog fires.

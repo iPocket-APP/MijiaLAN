@@ -147,6 +147,10 @@ public enum MiioError: LocalizedError, Equatable, Sendable {
     case noEncryptedReply
     /// Nothing answers ARP at that IP (`EHOSTUNREACH` / `EHOSTDOWN`).
     case hostUnreachable
+    /// The address answered with a different miIO device ID than the one saved for it.
+    case unexpectedDevice
+    /// Recent property requests all failed with an authenticated -9999 reply. This read made no new request.
+    case propertyReadBackoff
     /// A pre-MIoT device whose legacy table has no counterpart for this write or action.
     case unsupportedByLegacyDevice
     case socket(String)
@@ -162,6 +166,8 @@ public enum MiioError: LocalizedError, Equatable, Sendable {
         case .timeout: return L10n.tr("设备没有响应（离线、IP 变了，或不在同一局域网）", "No response. The device may be offline, have a new IP, or be on another network.")
         case .noEncryptedReply: return L10n.tr("设备回应了握手，但不回应加密指令：token 多半不对或已变（重新配网后会变）", "The device responds to the handshake but not encrypted commands. Its token may be incorrect or have changed after setup.")
         case .hostUnreachable: return L10n.tr("这个 IP 上没有设备：可能断电、离线或换了 IP（也可能 App 没有「本地网络」权限）", "No device at this IP. It may be powered off, offline, or using a new IP; Local Network access may also be denied.")
+        case .unexpectedDevice: return L10n.tr("这个 IP 上是另一台设备，请重新扫描局域网。", "A different device answered at this IP. Scan the LAN again.")
+        case .propertyReadBackoff: return L10n.tr("设备未应答属性读取（-9999），稍后会自动重试。", "The device did not answer property reads (-9999). Retrying later.")
         case .unsupportedByLegacyDevice: return L10n.tr("这款老设备在局域网里不支持这个操作", "This legacy device does not support this operation over the LAN.")
         case .socket(let message): return L10n.tr("网络错误：\(message)", "Network error: \(message)")
         case .badResponse(let what): return L10n.tr("设备响应异常：\(what)", "Unexpected device response: \(what)")

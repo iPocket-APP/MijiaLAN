@@ -13,7 +13,7 @@ struct ControlCenterSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            LaunchAtLoginSettings()
+            StartupAndWakeSettings(keepsMacAwake: $bridge.keepsMacAwake)
 
             Divider()
 
@@ -27,10 +27,6 @@ struct ControlCenterSettings: View {
                         navigate(.settingsHomeKit)
                     }
                 }
-                SettingsGroup {
-                    SettingsToggleRow(L10n.tr("保持 Mac 唤醒", "Keep Mac Awake"), symbol: "moon", isOn: $bridge.keepsMacAwake,
-                                      subtitle: L10n.tr("家庭桥接运行时生效", "While the Home bridge is running"))
-                }
                 HomeKitServiceLimitNotice(warnings: bridge.serviceLimitWarnings)
             }
 
@@ -42,16 +38,7 @@ struct ControlCenterSettings: View {
                         navigate(.settingsDevices)
                     }
                     SettingsDivider()
-                    HStack(spacing: 10) {
-                        SettingsSymbol("server.rack")
-                        Text(L10n.tr("服务器", "Server"))
-                        Spacer(minLength: 8)
-                        Picker(L10n.tr("服务器", "Server"), selection: $model.importRegion) {
-                            ForEach(SettingsImportFlow.regions, id: \.0) { Text($0.1).tag($0.0) }
-                        }
-                        .labelsHidden().frame(width: 118).controlSize(.small)
-                    }
-                    .padding(.horizontal, 12).padding(.vertical, 9)
+                    ImportRegionPicker(region: $model.importRegion)
                     Button {
                         model.startCloudImport()
                         navigate(.settingsImport)
@@ -95,6 +82,14 @@ struct ControlCenterSettings: View {
 
             Divider()
 
+            SettingsGroup {
+                SettingsNavigationRow(L10n.tr("引导教程", "Setup Guide"), symbol: "book") {
+                    navigate(.setupGuide)
+                }
+            }
+
+            Divider()
+
             if let updater {
                 SoftwareUpdateSettings(updater: updater)
                 Divider()
@@ -124,7 +119,7 @@ struct ControlCenterSettings: View {
     }
 
     private func rememberedLoginRow(account: String, region: String, expired: Bool) -> some View {
-        let regionName = SettingsImportFlow.regions.first { $0.0 == region }?.1 ?? region
+        let regionName = ImportRegionPicker.regions.first { $0.0 == region }?.1 ?? region
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 SettingsSymbol("person.crop.circle")
@@ -144,7 +139,8 @@ struct ControlCenterSettings: View {
     }
 }
 
-private struct LaunchAtLoginSettings: View {
+private struct StartupAndWakeSettings: View {
+    @Binding var keepsMacAwake: Bool
     @Environment(\.panelPresented) private var panelPresented
     @State private var status: LaunchAtLogin.Status?
     @State private var errorMessage: String?
@@ -153,23 +149,30 @@ private struct LaunchAtLoginSettings: View {
         ProcessInfo.processInfo.environment["MIJIALAN_UI_PREVIEW"] == "1"
 
     var body: some View {
-        SettingsSection(L10n.tr("启动", "Startup")) {
+        SettingsSection(L10n.tr("启动与唤醒", "Startup & Wake")) {
             SettingsGroup {
                 SettingsToggleRow(L10n.tr("登录时启动", "Launch at Login"), symbol: "power",
                                   isOn: Binding(get: { registered == true }, set: setRegistered),
                                   subtitle: subtitle, statusColor: status == .requiresApproval ? .orange : nil)
                     .disabled(registered == nil)
-            }
-            if status == .requiresApproval {
-                Button(L10n.tr("打开登录项设置…", "Open Login Items Settings…")) {
-                    LaunchAtLogin.openSystemSettings()
+                if status == .requiresApproval {
+                    Button(L10n.tr("打开登录项设置…", "Open Login Items Settings…")) {
+                        LaunchAtLogin.openSystemSettings()
+                    }
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12).padding(.bottom, 10)
                 }
-                .controlSize(.small).padding(.leading, 3)
-            }
-            if let errorMessage {
-                Text(L10n.tr("无法更改登录项。\(errorMessage)", "Could not change the login item. \(errorMessage)"))
-                    .font(.system(size: 11)).foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true).padding(.leading, 3)
+                if let errorMessage {
+                    Text(L10n.tr("无法更改登录项。\(errorMessage)", "Could not change the login item. \(errorMessage)"))
+                        .font(.system(size: 11)).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12).padding(.bottom, 10)
+                }
+                SettingsDivider()
+                SettingsToggleRow(L10n.tr("保持 Mac 唤醒", "Keep Mac Awake"), symbol: "moon", isOn: $keepsMacAwake,
+                                  subtitle: L10n.tr("家庭桥接运行时生效", "While the Home bridge is running"))
             }
         }
         .onValueChange(of: panelPresented, initial: true) { presented in
@@ -271,25 +274,65 @@ struct SettingsHomeKitManagement: View {
                 if case .failed(let message) = bridge.status {
                     Text(message).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                 }
+                if let message = bridge.pairingResetError {
+                    Text(message).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                }
+                if case .failed = bridge.status, bridge.isEnabled, !bridge.isResettingPairing, !bridge.isRefreshingSetupCode {
+                    Button(L10n.tr("重试启动桥接", "Retry Starting Bridge"), action: bridge.retryStart)
+                        .controlSize(.small)
+                }
+                if bridge.canResetPairing {
+                    Button(L10n.tr("重置 HomeKit 配对…", "Reset HomeKit Pairing…"), role: .destructive) { confirmingReset = true }
+                        .controlSize(.small)
+                }
                 HomeKitServiceLimitNotice(warnings: bridge.serviceLimitWarnings)
             }
 
-            if case .running = bridge.status, !bridge.isPaired,
-               let uri = bridge.setupURI, let code = bridge.setupCode {
+            if let code = bridge.pairingCodeForDisplay {
                 SettingsSection(L10n.tr("添加到「家庭」", "Add to Home")) {
                     SettingsGroup {
                         VStack(spacing: 10) {
-                            if let image = QRCode.image(for: uri) {
-                                Image(nsImage: image).interpolation(.none).resizable().frame(width: 132, height: 132)
-                                    .padding(6).background(.white, in: .rect(cornerRadius: 8))
-                            }
-                            Text(code).font(.system(.title3, design: .monospaced).weight(.semibold)).textSelection(.enabled)
-                            Text(L10n.tr("打开 iPhone「家庭」App，点 + → 添加配件，扫描二维码。", "Open Home on your iPhone, tap + → Add Accessory, then scan this code."))
+                            HomePairingCode(uri: bridge.setupURI, code: code)
+                            Text(L10n.tr("在 iPhone「家庭」中点 + → 添加配件。扫描二维码，或手动输入 8 位设置码。",
+                                         "In Home on your iPhone, tap + → Add Accessory. Scan the QR code or enter the 8-digit setup code."))
                                 .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                             Text(L10n.tr("提示「未认证配件」时，选择「仍然添加」。", "If an uncertified accessory warning appears, choose Add Anyway."))
                                 .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         }
                         .frame(maxWidth: .infinity).padding(14)
+                    }
+                }
+            }
+
+            SettingsSection(L10n.tr("配对诊断", "Pairing Diagnostics")) {
+                Button(bridge.setupAttempt == nil
+                    ? L10n.tr("开始记录配对尝试", "Mark a Pairing Attempt")
+                    : L10n.tr("标记下一次尝试", "Mark Another Attempt"), action: bridge.beginSetupDiagnostics)
+                    .controlSize(.small)
+                    .disabled(model.diagnosticsExport == .collecting || bridge.isResettingPairing || bridge.isRefreshingSetupCode)
+                if bridge.setupAttempt != nil {
+                    Text(L10n.tr("在 iPhone「家庭」里重试添加，选择看到的结果后导出。", "Retry adding the bridge in Home on your iPhone, then select the result and export."))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Picker(L10n.tr("iPhone「家庭」结果", "Result in iPhone Home"), selection: Binding(
+                        get: { bridge.setupAttempt?.homeResult },
+                        set: { bridge.recordSetupResult($0) }
+                    )) {
+                        Text(L10n.tr("未记录", "Unrecorded")).tag(nil as HomeKitBridgeController.SetupAttempt.HomeResult?)
+                        Text(L10n.tr("配件已加入另一个家", "Accessory Already in Another Home"))
+                            .tag(Optional(HomeKitBridgeController.SetupAttempt.HomeResult.alreadyInAnotherHome))
+                        Text(L10n.tr("其他错误", "Other Error")).tag(Optional(HomeKitBridgeController.SetupAttempt.HomeResult.otherError))
+                        Text(L10n.tr("添加成功", "Added")).tag(Optional(HomeKitBridgeController.SetupAttempt.HomeResult.added))
+                    }
+                    .controlSize(.small)
+                    .disabled(model.diagnosticsExport == .collecting)
+                    Button(model.diagnosticsExport == .collecting
+                        ? L10n.tr("正在收集诊断…", "Collecting Diagnostics…")
+                        : L10n.tr("导出诊断", "Export Diagnostics"), action: model.exportDiagnostics)
+                        .controlSize(.small)
+                        .disabled(model.diagnosticsExport == .collecting)
+                    if case .failed(let message) = model.diagnosticsExport {
+                        Text(message).font(.caption).foregroundStyle(.red)
                     }
                 }
             }
@@ -316,18 +359,14 @@ struct SettingsHomeKitManagement: View {
                 Text(L10n.tr("Mac 和 iPhone 需要连接同一局域网。离家控制和自动化需要家居中枢（HomePod 或 Apple TV）。", "Your Mac and iPhone must be on the same local network. Remote access and automations require a home hub (HomePod or Apple TV)."))
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            if bridge.isPaired {
-                Divider()
-                Button(L10n.tr("重置 HomeKit 配对…", "Reset HomeKit Pairing…"), role: .destructive) { confirmingReset = true }
-                    .controlSize(.small)
-            }
         }
         .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 16)
         .alert(L10n.tr("重置 HomeKit 配对？", "Reset HomeKit Pairing?"), isPresented: $confirmingReset) {
             Button(L10n.tr("重置", "Reset"), role: .destructive) { bridge.resetPairing() }
             Button(L10n.tr("取消", "Cancel"), role: .cancel) {}
         } message: {
-            Text(L10n.tr("「家庭」App 会把这个桥当成新配件：房间、场景和自动化需要重新设置。", "Home will treat this bridge as a new accessory. Rooms, scenes, and automations will need to be set up again."))
+            Text(L10n.tr("重置会生成新的桥身份和配对码。若 iPhone「家庭」仍显示旧桥，请移除旧桥后再扫描新码。旧桥配件的房间、场景和自动化需要重新设置。",
+                         "Resetting generates a new bridge identity and pairing code. If the old bridge is still in Home, remove it before scanning the new code. Set up its accessories’ rooms, scenes, and automations again."))
         }
     }
 }
@@ -591,13 +630,20 @@ struct SettingsDeviceManagement: View {
     }
 }
 
-struct SettingsImportFlow: View {
+struct DeviceImportCard: View {
     @ObservedObject var model: AppModel
-    let navigate: (ControlCenterRoute) -> Void
+    var showsRegionPicker = false
+    var requiresQRCode = false
+    let onCancel: () -> Void
+    let onViewDevices: () -> Void
     @Environment(\.panelPresented) private var panelPresented
 
     var body: some View {
         SettingsGroup {
+            if showsRegionPicker, canChooseRegion {
+                ImportRegionPicker(region: $model.importRegion)
+                SettingsDivider()
+            }
             VStack(spacing: 14) {
                 switch model.importState {
                 case .loadingQR:
@@ -605,18 +651,32 @@ struct SettingsImportFlow: View {
                     Text(L10n.tr("正在获取登录二维码…", "Getting login QR code…"))
                     cancelButton
                 case .waitingForScan(let ticket, let expiresAt):
-                    Text(L10n.tr("使用手机「米家」App 扫码确认", "Scan with the Xiaomi Home App"))
-                        .font(.system(size: 14, weight: .semibold))
-                    if let image = QRCode.image(for: ticket.loginURL.absoluteString) {
-                        Image(nsImage: image).interpolation(.none).resizable().frame(width: 168, height: 168)
-                            .padding(8).background(.white, in: .rect(cornerRadius: 8))
-                            .accessibilityLabel(L10n.tr("米家登录二维码", "Xiaomi Home sign-in QR code"))
-                    }
+                    let image = QRCode.image(for: ticket.loginURL.absoluteString)
                     TimelineView(PanelTimelineSchedule(interval: 1, isActive: panelPresented)) { context in
-                        Text(L10n.tr("二维码剩余 \(max(0, Int(expiresAt.timeIntervalSince(context.date)))) 秒", "QR code expires in \(max(0, Int(expiresAt.timeIntervalSince(context.date)))) s"))
-                            .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                        let remaining = expiresAt.timeIntervalSince(context.date)
+                        VStack(spacing: 12) {
+                            if remaining > 0 {
+                                Text(L10n.tr("用手机「米家」App 扫码并确认登录", "Scan with the Xiaomi Home app and confirm sign-in"))
+                                    .font(.headline)
+                                if let image {
+                                    Image(nsImage: image).interpolation(.none).resizable().frame(width: 168, height: 168)
+                                        .padding(12).background(.white, in: .rect(cornerRadius: 8))
+                                        .accessibilityLabel(L10n.tr("米家登录二维码", "Xiaomi Home sign-in QR code"))
+                                }
+                                let seconds = Int(ceil(remaining))
+                                Text(L10n.tr("二维码剩余 \(seconds) 秒", "QR code expires in \(seconds) s"))
+                                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                            } else {
+                                Text(L10n.tr("米家二维码已过期", "Xiaomi Home QR code expired"))
+                            }
+                            HStack(spacing: 8) {
+                                cancelButton
+                                if requiresQRCode || remaining <= 0 {
+                                    importButton(L10n.tr("重新获取二维码", "Get a New QR Code"))
+                                }
+                            }
+                        }
                     }
-                    cancelButton
                 case .fetching:
                     ProgressView().controlSize(.small)
                     Text(L10n.tr("正在导入设备信息…", "Importing device information…"))
@@ -627,24 +687,57 @@ struct SettingsImportFlow: View {
                 case .failed(let message):
                     Label(L10n.tr("导入未完成", "Import Unsuccessful"), systemImage: "exclamationmark.circle").foregroundStyle(.orange)
                     Text(message).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    importButton(model.canReuseRememberedLogin ? L10n.tr("重试导入", "Retry Import") : L10n.tr("重新获取二维码", "Get a New QR Code"))
+                    importButton(canReuseLogin ? L10n.tr("重试导入", "Retry Import") : L10n.tr("重新获取二维码", "Get a New QR Code"))
+                case .completed(let importedCount, let summary):
+                    importResult(summary, importedCount: importedCount)
                 case .idle:
-                    if let summary = model.lastImportSummary {
-                        importSuccess(summary)
-                    } else {
-                        importButton(model.canReuseRememberedLogin ? L10n.tr("重新导入", "Re-import Devices") : L10n.tr("获取二维码", "Get QR Code"))
-                    }
+                    importButton(canReuseLogin ? L10n.tr("导入设备", "Import Devices") : L10n.tr("获取米家二维码", "Get Xiaomi Home QR Code"))
                 }
             }
             .multilineTextAlignment(.center)
             .font(.callout).frame(maxWidth: .infinity).padding(18)
         }
-        .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 16)
     }
 
-    @ViewBuilder private func importSuccess(_ summary: String) -> some View {
-        Label(L10n.tr("设备导入完成", "Devices Imported"), systemImage: "checkmark.circle").foregroundStyle(.green)
+    private var canChooseRegion: Bool {
+        switch model.importState {
+        case .idle, .completed, .needsScan, .failed: true
+        case .loadingQR, .waitingForScan, .fetching: false
+        }
+    }
+
+    private var canReuseLogin: Bool { !requiresQRCode && model.canReuseRememberedLogin }
+
+    @ViewBuilder private func importResult(_ summary: String, importedCount: Int) -> some View {
+        let empty = importedCount == 0
+        Label(empty ? L10n.tr("未找到可导入的设备", "No Devices Found to Import") : L10n.tr("设备导入完成", "Devices Imported"),
+              systemImage: empty ? "exclamationmark.circle" : "checkmark.circle")
+            .foregroundStyle(empty ? .orange : .green)
         Text(summary).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        RememberImportedLoginControl(model: model)
+        if empty {
+            Text(L10n.tr("请核对米家 App 的服务器地区后重试。", "Check the server region in Xiaomi Home and try again."))
+                .font(.caption).foregroundStyle(.secondary)
+            importButton(canReuseLogin ? L10n.tr("重试导入", "Retry Import") : L10n.tr("重新获取二维码", "Get a New QR Code"))
+            Button(L10n.tr("查看导入详情", "View Import Details"), action: onViewDevices)
+        } else {
+            Button(L10n.tr("查看设备", "View Devices"), action: onViewDevices).buttonStyle(.borderedProminent)
+        }
+    }
+
+    private func importButton(_ title: String) -> some View {
+        Button(title) { model.startCloudImport(requiresQRCode: requiresQRCode) }.buttonStyle(.borderedProminent)
+    }
+
+    private var cancelButton: some View {
+        Button(L10n.tr("取消导入", "Cancel Import"), action: onCancel).controlSize(.small)
+    }
+}
+
+struct RememberImportedLoginControl: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
         if model.canRememberImportedLogin {
             VStack(spacing: 6) {
                 Button(L10n.tr("记住米家登录", "Remember Xiaomi Home Login"), action: model.rememberImportedLogin)
@@ -660,15 +753,24 @@ struct SettingsImportFlow: View {
         } else if model.canReuseRememberedLogin {
             Text(L10n.tr("已记住米家登录", "Xiaomi Home login remembered")).font(.caption).foregroundStyle(.secondary)
         }
-        Button(L10n.tr("查看设备", "View Devices")) { navigate(.settingsDevices) }.buttonStyle(.borderedProminent)
     }
+}
 
-    private func importButton(_ title: String) -> some View {
-        Button(title) { model.startCloudImport() }.buttonStyle(.borderedProminent)
-    }
+private struct ImportRegionPicker: View {
+    @Binding var region: String
 
-    private var cancelButton: some View {
-        Button(L10n.tr("取消导入", "Cancel Import")) { navigate(.settings) }.controlSize(.small)
+    var body: some View {
+        HStack(spacing: 10) {
+            SettingsSymbol("server.rack")
+            Text(L10n.tr("米家服务器", "Xiaomi Home Region"))
+            Spacer(minLength: 8)
+            Picker(L10n.tr("米家服务器", "Xiaomi Home Region"), selection: $region) {
+                ForEach(Self.regions, id: \.0) { Text($0.1).tag($0.0) }
+            }
+            .labelsHidden().frame(width: 118).controlSize(.small)
+        }
+        .font(.callout)
+        .padding(.horizontal, 12).padding(.vertical, 9)
     }
 
     static let regions: [(String, String)] = [
@@ -717,10 +819,10 @@ struct SettingsManualDevice: View {
         }
         .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 16)
         .onAppear {
-            if draft.submitted, !model.isAddingManually, model.manualAddError == nil { draft.confirmation = model.lastImportSummary }
+            if draft.submitted, !model.isAddingManually, model.manualAddError == nil { draft.confirmation = model.lastManualAddSummary }
         }
         .onValueChange(of: model.isAddingManually) { working in
-            if draft.submitted, !working, model.manualAddError == nil { draft.confirmation = model.lastImportSummary }
+            if draft.submitted, !working, model.manualAddError == nil { draft.confirmation = model.lastManualAddSummary }
         }
     }
 
@@ -744,17 +846,24 @@ private struct HomeKitSettingsStatus {
     let bridge: HomeKitBridgeController
 
     var text: String {
-        switch bridge.status {
+        if bridge.isResettingPairing {
+            return L10n.tr("正在重置家庭配对…", "Resetting Home pairing…")
+        }
+        if bridge.isRefreshingSetupCode {
+            return L10n.tr("正在更新家庭配对码…", "Updating the Home pairing code…")
+        }
+        return switch bridge.status {
         case .stopped: L10n.tr("已关闭", "Off")
         case .waitingForDevices: L10n.tr("等待设备导入或连接", "Waiting for devices to be imported or connected")
         case .starting: L10n.tr("正在启动…", "Starting…")
-        case .running: bridge.isPaired ? L10n.tr("已配对 · \(bridge.exposedDeviceCount) 个配件", "Paired · \(bridge.exposedDeviceCount) \(bridge.exposedDeviceCount == 1 ? "accessory" : "accessories")") : L10n.tr("尚未配对 · 请打开管理家庭设备", "Not paired · Open Manage Home Devices")
+        case .running: bridge.isPaired ? L10n.tr("桥接已配对 · \(bridge.exposedDeviceCount) 个配件", "Bridge paired · \(bridge.exposedDeviceCount) \(bridge.exposedDeviceCount == 1 ? "accessory" : "accessories")") : L10n.tr("尚未配对 · 请打开管理家庭设备", "Not paired · Open Manage Home Devices")
         case .failed: L10n.tr("启动失败 · 请打开管理家庭设备", "Could not start · Open Manage Home Devices")
         }
     }
 
     var color: Color {
-        switch bridge.status {
+        if bridge.isResettingPairing || bridge.isRefreshingSetupCode { return .secondary }
+        return switch bridge.status {
         case .running: .green
         case .failed: .orange
         default: .secondary
@@ -785,7 +894,7 @@ private struct SettingsSection<Content: View>: View {
     }
 }
 
-private struct SettingsGroup<Content: View>: View {
+struct SettingsGroup<Content: View>: View {
     @Environment(\.colorScheme) private var scheme
     @ViewBuilder var content: Content
 
@@ -877,9 +986,8 @@ private struct DiagnosticsExportRow: View {
 
     private var subtitle: String {
         switch model.diagnosticsExport {
-        case .idle: L10n.tr("反馈问题时附上。包含设备名称和读数，不含 token、IP 地址和配对信息",
-                            "Attach it to a problem report. It has device names and readings, no tokens, IP addresses or pairing keys.")
-        case .collecting: L10n.tr("正在读取每台设备…", "Reading every device…")
+        case .idle: L10n.tr("反馈问题时附上。包含设备名称、读数和桥接状态。", "Attach to a problem report. Includes device names, readings, and bridge status.")
+        case .collecting: L10n.tr("正在收集设备和桥接诊断…", "Collecting device and bridge diagnostics…")
         case .exported(let url): L10n.tr("已保存 \(url.lastPathComponent)", "Saved \(url.lastPathComponent)")
         case .failed(let message): L10n.tr("导出失败：\(message)", "Could not export: \(message)")
         }

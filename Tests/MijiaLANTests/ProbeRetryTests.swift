@@ -351,7 +351,8 @@ private struct ProbeFixture: Sendable {
         config = ProbeConfig(LocalHomeConfig(devices: devices))
         let network = FakeMiioNetwork()
         network.add(host: "1", token: token, deviceID: 1, props: ["2.1": .bool(true), "8.1": .number(50)])
-        network.add(host: "2", token: token, deviceID: 2, props: ["2.1": .bool(false), "8.1": .number(30)])
+        // In single-device tests, address "2" simulates the same device after a DHCP change.
+        network.add(host: "2", token: token, deviceID: includeSecond ? 2 : 1, props: ["2.1": .bool(false), "8.1": .number(30)])
         transport = ProbeTestTransport(network: network, token: MiioToken.parse(token)!)
         let config = config
         api = LANMiotAPI(config: { config.value }, transport: transport, clock: clock.clock, jitter: { 1 })

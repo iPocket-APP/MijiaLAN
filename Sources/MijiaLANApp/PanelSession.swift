@@ -3,6 +3,7 @@ import SwiftUI
 
 enum ControlCenterRoute: Hashable {
     case home
+    case setupGuide
     case device(String)
     case settings
     case settingsHomeKit
@@ -13,7 +14,7 @@ enum ControlCenterRoute: Hashable {
     var depth: Int {
         switch self {
         case .home: 0
-        case .device, .settings: 1
+        case .device, .settings, .setupGuide: 1
         default: 2
         }
     }
@@ -21,6 +22,7 @@ enum ControlCenterRoute: Hashable {
     var diagnosticName: String {
         switch self {
         case .home: "home"
+        case .setupGuide: "setup-guide"
         case .device: "device"
         case .settings: "settings"
         case .settingsHomeKit: "homekit"
@@ -29,6 +31,8 @@ enum ControlCenterRoute: Hashable {
         case .settingsManualAdd: "manual"
         }
     }
+
+    var ownsCloudImport: Bool { self == .settingsImport || self == .setupGuide }
 }
 
 /// Only small presentation values survive an idle panel. Never store a view,
@@ -37,6 +41,7 @@ enum ControlCenterRoute: Hashable {
 final class PanelSession: ObservableObject {
     @Published var route: ControlCenterRoute
     @Published var selectedOffline: String?
+    @Published var setupGuideUsesExistingDevices = false
     let manual = PanelManualDraft()
     @Published private var expanded: [String: Set<String>] = [:]
     var layouts: [ControlCenterRoute: PanelPageLayout] = [:]

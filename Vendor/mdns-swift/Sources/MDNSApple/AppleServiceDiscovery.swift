@@ -193,7 +193,11 @@ public final class AppleServiceDiscovery: ServiceDiscovery, @unchecked Sendable 
         // Without this, mDNSResponder's keepalive timer fires (~30–60 s after
         // registration) and evicts the record — causing homed's operational
         // discovery to time out during CASE session establishment.
-        DNSServiceSetDispatchQueue(ref, queue)
+        let queueError = DNSServiceSetDispatchQueue(ref, queue)
+        guard queueError == kDNSServiceErr_NoError else {
+            DNSServiceRefDeallocate(ref)
+            throw ServiceDiscoveryError.registrationFailed(code: Int(queueError))
+        }
 
         withLock { advertisedRefs[service.name] = ref }
 
@@ -416,9 +420,20 @@ public final class AppleServiceDiscovery: ServiceDiscovery, @unchecked Sendable 
     /// ``ServiceDiscoveryError/resolveFailed(_:)`` if no answer arrives
     /// within `timeout`.
     func resolveTXT(_ record: ServiceRecord, timeout: TimeSpan) async throws -> [String: String] {
-        let name = record.name
-        let lookup = TXTLookup(name: name, type: record.serviceType.rawValue, queue: queue)
-        return try await withThrowingTaskGroup(of: [String: String].self) { group in
+        try await resolveRecord(name: record.name, type: record.serviceType.rawValue, domain: "local.",
+                                interfaceIndex: 0, timeout: timeout).txt
+    }
+
+    /// Reads a browsed instance's SRV port without opening a connection to the service.
+    public func resolveServicePort(name: String, type: String, domain: String, interfaceIndex: UInt32) async throws -> UInt16 {
+        try await resolveRecord(name: name, type: type, domain: domain, interfaceIndex: interfaceIndex,
+                                timeout: Self.txtResolveTimeout).port
+    }
+
+    private func resolveRecord(name: String, type: String, domain: String, interfaceIndex: UInt32,
+                               timeout: TimeSpan) async throws -> TXTLookup.Reply {
+        let lookup = TXTLookup(name: name, type: type, domain: domain, interfaceIndex: interfaceIndex, queue: queue)
+        return try await withThrowingTaskGroup(of: TXTLookup.Reply.self) { group in
             group.addTask { try await lookup.run() }
             group.addTask {
                 try await MonotonicClock.sleep(for: timeout)
