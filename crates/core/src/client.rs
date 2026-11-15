@@ -1,9 +1,40 @@
 use crate::packet::{self, Error, Result, Token};
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     net::{Ipv4Addr, SocketAddrV4, UdpSocket},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
+
+type PropertyId = (u32, u32);
+const PROPERTIES_PER_REQUEST: usize = 15;
+const USER_ACK_TIMEOUT: i64 = -9999;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PropertyFallback {
+    pub requested: usize,
+    pub rejected_batch_size: usize,
+    pub single_attempts: usize,
+    pub single_replies: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct ClientDiagnostics {
+    pub last_hello: Option<SystemTime>,
+    pub last_authenticated_reply: Option<SystemTime>,
+    pub batch_limit: usize,
+    pub suppressed_properties: usize,
+    pub read_backoff_seconds: u64,
+    pub last_fallback: Option<PropertyFallback>,
+}
+
+#[derive(Default)]
+pub(crate) struct PropertyBatch {
+    pub items: Vec<Value>,
+    pub failures: BTreeMap<PropertyId, String>,
+}
 
 /// Mutable ownership serializes requests to one device. Never execute this blocking client on the UI thread.
 pub struct MiioClient {
@@ -12,6 +43,12 @@ pub struct MiioClient {
     timeout: Duration,
     clock: Option<(packet::Header, Instant)>,
     next_id: u32,
+    last_hello: Option<SystemTime>,
+    last_authenticated_reply: Option<SystemTime>,
+    batch_limit: usize,
+    unanswered: BTreeMap<PropertyId, Instant>,
+    property_retry_at: Option<Instant>,
+    last_fallback: Option<PropertyFallback>,
 }
 
 impl MiioClient {
@@ -25,10 +62,40 @@ impl MiioClient {
             timeout: Duration::from_secs(2),
             clock: None,
             next_id: 100,
+            last_hello: None,
+            last_authenticated_reply: None,
+            batch_limit: PROPERTIES_PER_REQUEST,
+            unanswered: BTreeMap::new(),
+            property_retry_at: None,
+            last_fallback: None,
         }
     }
     pub fn set_timeout(&mut self, timeout: Duration) {
         self.timeout = timeout;
+    }
+
+    pub fn diagnostics(&self) -> ClientDiagnostics {
+        let now = Instant::now();
+        ClientDiagnostics {
+            last_hello: self.last_hello,
+            last_authenticated_reply: self.last_authenticated_reply,
+            batch_limit: self.batch_limit,
+            suppressed_properties: self
+                .unanswered
+                .values()
+                .filter(|until| **until > now)
+                .count(),
+            read_backoff_seconds: self
+                .property_retry_at
+                .map_or(0, |until| until.saturating_duration_since(now).as_secs()),
+            last_fallback: self.last_fallback.clone(),
+        }
+    }
+
+    pub(crate) fn reset_read_backoff(&mut self) {
+        self.batch_limit = PROPERTIES_PER_REQUEST;
+        self.unanswered.clear();
+        self.property_retry_at = None;
     }
 
     fn socket(&self) -> Result<UdpSocket> {
@@ -58,6 +125,7 @@ impl MiioClient {
                     continue;
                 }
                 self.clock = Some((header, Instant::now()));
+                self.last_hello = Some(SystemTime::now());
                 return Ok(header);
             }
         }
@@ -73,6 +141,15 @@ impl MiioClient {
         } else {
             1
         };
+        self.call_with_attempts(method, params, attempts)
+    }
+
+    pub(crate) fn call_with_attempts(
+        &mut self,
+        method: &str,
+        params: Value,
+        attempts: usize,
+    ) -> Result<Value> {
         let mut hello_answered = false;
         for attempt in 0..attempts {
             if self
@@ -134,6 +211,7 @@ impl MiioClient {
                 continue;
             }
             self.clock = Some((header, Instant::now()));
+            self.last_authenticated_reply = Some(SystemTime::now());
             if let Some(error) = json.get("error") {
                 return Err(Error::Device {
                     code: error["code"].as_i64().unwrap_or(-1),
@@ -152,22 +230,191 @@ impl MiioClient {
     }
 
     pub fn get_properties(&mut self, did: &str, properties: &[(u32, u32)]) -> Result<Vec<Value>> {
-        let mut result = Vec::new();
-        for chunk in properties.chunks(15) {
-            let params: Vec<_> = chunk
-                .iter()
-                .map(|(siid, piid)| json!({"did": did, "siid": siid, "piid": piid}))
-                .collect();
-            let response = self.call("get_properties", json!(params))?;
-            result.extend(
-                response
-                    .as_array()
-                    .ok_or_else(|| Error::Response("属性结果不是数组".into()))?
-                    .iter()
-                    .cloned(),
-            );
+        Ok(self.read_properties(did, properties)?.items)
+    }
+
+    pub(crate) fn read_properties(
+        &mut self,
+        did: &str,
+        properties: &[PropertyId],
+    ) -> Result<PropertyBatch> {
+        let mut batch = PropertyBatch::default();
+        if properties.is_empty() {
+            return Ok(batch);
         }
-        Ok(result)
+        let now = Instant::now();
+        let backing_off = || Error::Response("属性读取正在退避，请稍后重试".into());
+        if self.property_retry_at.is_some_and(|until| until > now) {
+            return Err(backing_off());
+        }
+        self.property_retry_at = None;
+        self.unanswered.retain(|_, until| *until > now);
+        let mut requested = Vec::new();
+        for &property in properties {
+            if self.unanswered.contains_key(&property) {
+                batch
+                    .failures
+                    .insert(property, "设备未应答此属性（-9999）".into());
+            } else {
+                requested.push(property);
+            }
+        }
+        if requested.is_empty() {
+            return Err(backing_off());
+        }
+        let mut fallback = None;
+        let mut first_failure = None;
+        let mut unanswered = Vec::new();
+        let mut answered = false;
+        let mut start = 0;
+        while start < requested.len() {
+            let end = (start + self.batch_limit).min(requested.len());
+            let chunk = &requested[start..end];
+            start = end;
+            let error = match self.read_chunk(did, chunk, 2) {
+                Ok(items) => {
+                    answered = true;
+                    batch.items.extend(items);
+                    continue;
+                }
+                Err(error) => error,
+            };
+            let ack_timeout = matches!(
+                error,
+                Error::Device {
+                    code: USER_ACK_TIMEOUT,
+                    ..
+                }
+            );
+            let transport_failure = matches!(
+                error,
+                Error::Timeout | Error::NoEncryptedReply | Error::Io(_) | Error::Checksum
+            );
+            for &property in chunk {
+                batch.failures.insert(property, error.to_string());
+            }
+            first_failure.get_or_insert(error);
+            if transport_failure {
+                break;
+            }
+            if !ack_timeout {
+                continue;
+            }
+            let (deadline, stats) = fallback.get_or_insert_with(|| {
+                (
+                    Instant::now() + Duration::from_millis(1500),
+                    PropertyFallback {
+                        requested: properties.len(),
+                        rejected_batch_size: chunk.len(),
+                        single_attempts: 0,
+                        single_replies: 0,
+                    },
+                )
+            });
+            if let [property] = chunk {
+                unanswered.push(*property);
+                continue;
+            }
+            let original_timeout = self.timeout;
+            let mut replies = 0;
+            for &property in chunk {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() || stats.single_attempts >= PROPERTIES_PER_REQUEST {
+                    break;
+                }
+                stats.single_attempts += 1;
+                self.set_timeout(
+                    original_timeout
+                        .min(remaining)
+                        .min(Duration::from_millis(300)),
+                );
+                match self.read_chunk(did, &[property], 1) {
+                    Ok(items) => {
+                        replies += 1;
+                        stats.single_replies += 1;
+                        answered = true;
+                        batch.failures.remove(&property);
+                        batch.items.extend(items);
+                    }
+                    Err(Error::Device {
+                        code: USER_ACK_TIMEOUT,
+                        ..
+                    }) => unanswered.push(property),
+                    Err(_) => break,
+                }
+            }
+            self.timeout = original_timeout;
+            if replies > 0 {
+                self.batch_limit = self.batch_limit.min((chunk.len() / 2).max(1));
+            }
+        }
+        if let Some((_, stats)) = fallback {
+            self.last_fallback = Some(stats);
+        }
+        if answered {
+            let deadline = Instant::now() + Duration::from_secs(600);
+            self.unanswered
+                .extend(unanswered.into_iter().map(|p| (p, deadline)));
+            return Ok(batch);
+        }
+        let error = first_failure.unwrap_or_else(backing_off);
+        if matches!(
+            error,
+            Error::Device {
+                code: USER_ACK_TIMEOUT,
+                ..
+            }
+        ) {
+            self.property_retry_at = Some(Instant::now() + Duration::from_secs(60));
+        }
+        Err(error)
+    }
+
+    fn read_chunk(
+        &mut self,
+        did: &str,
+        properties: &[PropertyId],
+        attempts: usize,
+    ) -> Result<Vec<Value>> {
+        let params: Vec<_> = properties
+            .iter()
+            .map(|(siid, piid)| json!({"did": did, "siid": siid, "piid": piid}))
+            .collect();
+        let response = self.call_with_attempts("get_properties", json!(params), attempts)?;
+        let Value::Array(mut items) = response else {
+            return Err(Error::Response("属性结果不是数组".into()));
+        };
+        items.retain(|item| {
+            let siid = item["siid"].as_u64().and_then(|id| u32::try_from(id).ok());
+            let piid = item["piid"].as_u64().and_then(|id| u32::try_from(id).ok());
+            siid.zip(piid).is_some_and(|id| properties.contains(&id))
+        });
+        Ok(items)
+    }
+
+    pub(crate) fn action(
+        &mut self,
+        did: &str,
+        siid: u32,
+        aiid: u32,
+        inputs: &[(u32, Value)],
+    ) -> Result<()> {
+        let arguments: Vec<_> = inputs
+            .iter()
+            .map(|(piid, value)| json!({"piid":piid,"value":value}))
+            .collect();
+        let result = self.call(
+            "action",
+            json!({"did":did,"siid":siid,"aiid":aiid,"in":arguments}),
+        )?;
+        match result["code"].as_i64() {
+            Some(0 | 1) => Ok(()),
+            Some(code) => Err(Error::Device {
+                code,
+                message: "设备拒绝动作".into(),
+            }),
+            None => Err(Error::Response("动作响应缺少返回码".into())),
+        }
     }
 
     pub fn set_property(&mut self, did: &str, siid: u32, piid: u32, value: Value) -> Result<()> {

@@ -107,6 +107,7 @@ pub enum Transform {
     },
     Fixed(Value),
     Action(u32, u32),
+    KettleMenu(u8),
     Cleaning {
         start: (u32, u32),
         dock: (u32, u32),
@@ -142,6 +143,10 @@ impl Binding {
         }
         if !stale && !state.online {
             return Err(-70402);
+        }
+        if let Transform::KettleMenu(menu) = self.transform {
+            let reading = mijialan_core::kettle::Reading::from_state(state).ok_or(-70402)?;
+            return Ok(json!(reading.active_menu() == Some(menu)));
         }
         if matches!(self.transform, Transform::Cleaning { .. }) && !state.online {
             return Err(-70402);
@@ -245,6 +250,11 @@ impl Binding {
                 } else {
                     Ok(())
                 };
+            }
+            Transform::KettleMenu(menu) => {
+                return engine
+                    .set_kettle_menu(&self.did, *menu, as_bool(value)?)
+                    .map_err(action_error);
             }
             Transform::MomentaryOption(_) if !as_bool(value)? => return Ok(()),
             _ => {}
@@ -405,6 +415,34 @@ pub struct Database {
     pub warnings: Vec<String>,
 }
 impl Database {
+    pub(crate) fn control_values(
+        &self,
+        states: &[DeviceState],
+    ) -> BTreeMap<(u64, u64), Result<Value, i32>> {
+        let states: BTreeMap<_, _> = states
+            .iter()
+            .map(|state| (state.device.did.as_str(), state))
+            .collect();
+        self.bindings
+            .iter()
+            .filter_map(|(&(aid, iid), binding)| {
+                if !binding.writable || !binding.readable {
+                    return None;
+                }
+                let attribute = self.attribute(aid, iid)?;
+                let permissions = attribute["perms"].as_array()?;
+                if !permissions.iter().any(|permission| permission == "ev") {
+                    return None;
+                }
+                let reading = states
+                    .get(binding.did.as_str())
+                    .ok_or(-70402)
+                    .and_then(|state| binding.read_state(state, false))
+                    .and_then(|raw| value::normalize_read(attribute, raw));
+                Some(((aid, iid), reading))
+            })
+            .collect()
+    }
     /// Uses the same constraints as GET /characteristics, from one in-memory snapshot.
     pub(crate) fn diagnostic_failures(
         &self,
@@ -790,6 +828,7 @@ fn plan_device<'a>(
     let props = &state.spec.properties;
     let power = controls::power(state);
     let native = native(&mut builder, state);
+    controls::kettle(&mut builder, state);
     if let Some(power) = power.filter(|_| !native) {
         let kind = state.spec.kind.as_str();
         let service_type = match kind {

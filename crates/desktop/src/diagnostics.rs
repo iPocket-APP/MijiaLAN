@@ -3,7 +3,7 @@ use gpui::{App, Global};
 use mijialan_core::{Engine, localization::text as t};
 use mijialan_homekit::{
     HomeKit,
-    diagnostics::{ApplicationInfo, report, suggested_name, write_report},
+    diagnostics::{ApplicationInfo, Checks, report_with_checks, suggested_name, write_report},
 };
 use std::{
     path::{Path, PathBuf},
@@ -45,9 +45,9 @@ impl Diagnostics {
     pub fn subtitle(&self) -> String {
         match self.state() {
             ExportState::Idle => {
-                t("反馈问题时附上。包含设备名称和读数，不含 Token、IP 地址和配对信息。")
+                t("反馈问题时可附上报告。包含设备名称、读数及配对阶段，已过滤凭据和网络地址。")
             }
-            ExportState::Collecting => t("正在读取每台设备…"),
+            ExportState::Collecting => t("正在收集诊断信息…"),
             ExportState::Exported(path) => format!(
                 "{} {}",
                 t("已保存"),
@@ -196,6 +196,10 @@ pub fn reveal(cx: &mut App) {
 }
 
 pub fn export(cx: &mut App, email: bool) {
+    export_with_checks(cx, email, Checks::default());
+}
+
+pub fn export_with_checks(cx: &mut App, email: bool, checks: Checks) {
     let diagnostics = cx.global::<Diagnostics>().clone();
     let info = application_info();
     if email
@@ -216,9 +220,8 @@ pub fn export(cx: &mut App, email: bool) {
         let result = cx
             .background_executor()
             .spawn(async move {
-                engine.refresh_all();
                 let now = SystemTime::now();
-                let value = report(&engine, &bridge, &metadata, now);
+                let value = report_with_checks(&engine, &bridge, &metadata, now, checks);
                 let path = logs_directory()?.join(suggested_name(now));
                 write_report(&path, &value)
             })

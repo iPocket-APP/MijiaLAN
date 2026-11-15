@@ -1,6 +1,6 @@
 # 隐私与数据流
 
-扫码登录连接 `account.xiaomi.com`，登录凭据交换连接 `sts.api.io.mi.com` 等小米域名，设备导入连接对应地区的 `api.io.mi.com`。登录跳转仅接受 HTTPS 的小米域名。登录会话不持久化。
+扫码登录连接 `account.xiaomi.com`，登录凭据交换连接 `sts.api.io.mi.com` 等小米域名，设备导入连接对应地区的 `api.io.mi.com`。登录跳转仅接受 HTTPS 的小米域名。登录会话默认停留在内存中。选择「记住米家登录」后，会话会保存在本机的加密凭据文件中以便重新导入，可在设置中删除。
 
 设备规格来自 `miot-spec.org`，下载后保存在应用数据目录。日常读写使用 UDP 54321，设备发现使用本地广播。HomeKit 桥通过 TCP 和 mDNS 与家庭客户端通信。
 
@@ -12,4 +12,4 @@ CLI 输出和错误不包含 Token；但设备名称、IP、ID 和状态也可�
 
 正式桌面包通过 `mijialan-updates.ipocket.xyz` 检查 Rust 版更新，更新包从 GitHub Releases 下载。macOS 使用 Sparkle，Windows MSI 安装版使用 WinSparkle；两者会验证更新包的 Ed25519 签名。可以在设置中关闭自动检查；Mac 可选择提前下载并在退出时自动安装，未选择时和 Windows 一样由更新窗口确认安装。更新检查不发送设备清单、Token 或 HomeKit 配对信息；演示、预览和 CLI 不检查更新。Windows 便携版保留手动更新方式。
 
-主动导出的诊断报告包含设备名称、标识、读数、错误及家庭桥状态，按字段白名单生成，并过滤凭据、网络地址和配对码。报告仅保存到本机，不会自动上传；Mac 位于 `~/Library/Logs/MijiaLAN Rust`，Windows/Linux 位于独立应用数据目录的 `Logs`。邮件入口打开待发送草稿，附件需由用户查看并决定是否分享。
+主动导出的诊断报告包含设备名称、标识、读数、最近的命令结果、桥接状态和配对阶段。配对诊断会在局域网上查看 Bonjour 广播，可记录用户选择的 iPhone「家庭」结果。检查离线设备会尝试握手和加密读取。报告按字段白名单生成并过滤凭据、网络地址和配对码，保存在本机。Mac 报告位于 `~/Library/Logs/MijiaLAN Rust`，Windows/Linux 桌面报告位于应用数据目录的 `Logs`。邮件入口打开待发送草稿。

@@ -276,7 +276,7 @@ fn run() -> anyhow::Result<()> {
                 })
                 .detach();
         }
-        let session = Rc::new(RefCell::new(ui::UiSession::default()));
+        let session = Rc::new(RefCell::new(ui::UiSession::new(engine.clone(), cx)));
         trace_panel("startup_tray");
         let tray = tray::create();
         trace_panel("startup_tray_ready");

@@ -4,6 +4,7 @@ pub mod compatibility;
 pub mod discovery;
 pub mod engine;
 pub mod import_job;
+pub mod kettle;
 pub mod legacy;
 pub mod localization;
 pub mod naming;

@@ -132,6 +132,13 @@ async function refresh() {
     element('bridge-button').textContent = state.bridge.running ? '更新配件选择' : '启用家庭桥';
     qr('pair-qr', state.bridge.qr);
     element('pin').textContent = state.bridge.pin ?? '';
+    element('refresh-pin').hidden = !state.bridge.running || state.bridge.paired;
+    element('refresh-pin').disabled = busy;
+    element('record-result').disabled = !state.bridge.attempt;
+    const results = { added: '已添加', alreadyInAnotherHome: '已在另一家庭中', otherError: '其他错误' };
+    const result = state.bridge.attempt?.homeResult;
+    element('attempt-status').textContent = result ? '已记录 · ' + results[result] :
+      state.bridge.attempt ? '配对尝试已标记。' : '';
     element('pair-status').textContent = state.bridge.paired ? '已配对。完成设置后可关闭页面。' :
       state.bridge.running ? '打开 iPhone 的「家庭 → 添加配件」，扫描下方二维码。' : '启用家庭桥后会显示配对码。';
     element('finish').hidden = !state.bridge.paired;
@@ -155,7 +162,7 @@ function submit(id, action) {
     if (event.submitter) event.submitter.disabled = true;
     element('notice').textContent = '';
     try {
-      await action();
+      await action(event);
     } catch (error) {
       element('notice').textContent = error.message;
     } finally {
@@ -178,6 +185,30 @@ submit('bridge', async () => {
   ]));
   await request('/api/bridge', { devices: selected, services });
   element('notice').textContent = '已保存配件选择。';
+});
+submit('pairing-diagnostics', async event => {
+  const operation = event.submitter?.value ?? 'markAttempt';
+  const body = operation === 'record' ? { operation, result: element('home-result').value } : { operation };
+  const report = await request('/api/pairing', body);
+  if (operation === 'export') {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'MijiaLAN-Rust-Pairing.json';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+});
+element('refresh-pin').addEventListener('click', async () => {
+  element('refresh-pin').disabled = true;
+  try {
+    await request('/api/pairing', { operation: 'refreshCode' });
+    element('notice').textContent = '已刷新配对码。';
+  } catch (error) {
+    element('notice').textContent = error.message;
+  } finally {
+    await refresh();
+  }
 });
 element('finish').addEventListener('click', async () => {
   try {

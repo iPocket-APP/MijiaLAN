@@ -91,8 +91,29 @@ impl MiotDevice {
                     "set_properties" => {
                         worker_writes.fetch_add(1, Ordering::SeqCst);
                         worker_commands.lock().unwrap().push(request.clone());
+                        if phase == 3 {
+                            std::thread::sleep(Duration::from_millis(400));
+                        }
                         for p in request["params"].as_array().unwrap() { actual.insert(format!("{}.{}",p["siid"],p["piid"]),p["value"].clone()); }
                         Value::Array(request["params"].as_array().unwrap().iter().map(|p| json!({"siid":p["siid"],"piid":p["piid"],"code":0})).collect())
+                    }
+                    "action" if spec.kind == "health-pot" => {
+                        worker_commands.lock().unwrap().push(request.clone());
+                        match request["params"]["aiid"].as_u64().unwrap() {
+                            1 => {
+                                let menu = request["params"]["in"][0]["value"].as_u64().unwrap();
+                                assert_eq!(request["params"]["in"], json!([{"piid":3,"value":menu}]));
+                                actual.insert("2.1".into(), json!(2));
+                                actual.insert("5.1".into(), json!(menu + 1));
+                                actual.insert("5.9".into(), json!(0));
+                            }
+                            2 => {
+                                assert_eq!(request["params"]["in"], json!([]));
+                                actual.insert("2.1".into(), json!(1));
+                            }
+                            action => panic!("unexpected kettle action {action}"),
+                        }
+                        json!({"code":0})
                     }
                     method => panic!("unexpected fixture method {method}"),
                 };

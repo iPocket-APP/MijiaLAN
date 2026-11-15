@@ -47,6 +47,22 @@
         <p id="pair-status" role="status">启用家庭桥后会显示配对码。</p>
         <img id="pair-qr" alt="Apple 家庭配对二维码" hidden>
         <p id="pin" class="pin"></p>
+        <button id="refresh-pin" type="button" hidden>刷新配对码</button>
+        <details>
+          <summary>配对诊断</summary>
+          <form id="pairing-diagnostics">
+            <button type="submit" value="markAttempt">标记配对尝试</button>
+            <p id="attempt-status" role="status"></p>
+            <label for="home-result">iPhone「家庭」显示的结果</label>
+            <select id="home-result">
+              <option value="added">已添加</option>
+              <option value="alreadyInAnotherHome">已在另一家庭中</option>
+              <option value="otherError">其他错误</option>
+            </select>
+            <button type="submit" id="record-result" value="record" disabled>记录结果</button>
+            <button type="submit" value="export">导出配对诊断</button>
+          </form>
+        </details>
         <button id="finish" hidden>完成并关闭向导</button>
       </section>
     </div>

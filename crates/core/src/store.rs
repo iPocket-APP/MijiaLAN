@@ -48,6 +48,8 @@ pub struct Config {
     #[serde(default)]
     pub appearance: String,
     #[serde(default)]
+    pub setup_guide_dismissed: bool,
+    #[serde(default)]
     pub homekit_names: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub homekit_excluded_services: BTreeMap<String, BTreeSet<String>>,
@@ -60,6 +62,7 @@ impl Default for Config {
             keep_awake: true,
             language: String::new(),
             appearance: String::new(),
+            setup_guide_dismissed: false,
             homekit_names: BTreeMap::new(),
             homekit_excluded_services: BTreeMap::new(),
         }

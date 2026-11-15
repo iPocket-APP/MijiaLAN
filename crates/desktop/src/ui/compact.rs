@@ -395,8 +395,11 @@ impl Dashboard {
                 section(l("家庭桥接", "Home Bridge"), p)
                     .child(group(p).child(self.compact_bridge_toggle(cx))),
             );
-        if let Some(error) = info.error {
-            body = body.child(label(error, 12., rgb(0xff453a).into()));
+        if let Some(error) = &info.error {
+            body = body.child(label(error.clone(), 12., rgb(0xff453a).into()));
+        }
+        if config.bridge_enabled && !info.running && info.error.is_some() {
+            body = body.child(self.retry_bridge_button(cx));
         }
         if info.running && !info.paired {
             body=body.child(section(l("添加到「家庭」","Add to Home"),p)
@@ -405,8 +408,10 @@ impl Dashboard {
                         .child(svg().path(path).size_full().text_color(rgb(0x000000)))))
                     .child(label(info.code,20.,p.primary).font_family("Menlo").font_weight(FontWeight::SEMIBOLD))
                     .child(label(l("打开 iPhone「家庭」App，点 + → 添加配件，扫描二维码。","Open Home on your iPhone, tap + → Add Accessory, then scan this code."),12.,p.secondary).text_center())
-                    .child(label(l("提示「未认证配件」时，选择「仍然添加」。","If an uncertified accessory warning appears, choose Add Anyway."),11.,p.secondary).text_center()))));
+                    .child(label(l("提示「未认证配件」时，选择「仍然添加」。","If an uncertified accessory warning appears, choose Add Anyway."),11.,p.secondary).text_center())
+                    .child(self.refresh_pairing_button(cx)))));
         }
+        body = body.child(self.pairing_diagnostics_button(cx));
         let mut devices = group(p);
         for (index, device) in config.devices.iter().enumerate() {
             if index > 0 {
@@ -625,6 +630,9 @@ impl Dashboard {
     fn compact_import(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = Palette::new(cx);
         let job = self.session.borrow().login.clone();
+        if job.can_remember() {
+            return self.import_complete(cx).px_4().pb_4().into_any_element();
+        }
         let progress = job.snapshot();
         let mut body = div()
             .flex()
@@ -683,19 +691,20 @@ impl Dashboard {
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.session.borrow().login.cancel();
                         this.qr = None;
-                        this.go(Page::Settings, cx);
+                        this.go(this.guide_back(Page::Settings), cx);
                     })),
             );
         }
-        body.child(label(
-            l(
-                "扫码读取设备信息，后续控制只走局域网。",
-                "Scan to import. All later control stays on the LAN.",
-            ),
-            11.,
-            p.secondary,
-        ))
-        .into_any_element()
+        body.child(self.saved_login_controls(cx))
+            .child(label(
+                l(
+                    "扫码读取设备信息，后续控制只走局域网。",
+                    "Scan to import. All later control stays on the LAN.",
+                ),
+                11.,
+                p.secondary,
+            ))
+            .into_any_element()
     }
     fn compact_manual(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = Palette::new(cx);
@@ -795,7 +804,9 @@ impl Dashboard {
             Page::Devices => self.compact_home(cx),
             Page::Detail(did) => self.compact_detail(&did, window, cx),
             Page::Settings => self.compact_settings(cx),
+            Page::Guide => self.setup_guide(true, cx),
             Page::Bridge => self.compact_home_management(cx),
+            Page::PairingDiagnostics => self.pairing_diagnostics(true, cx),
             Page::DevicesManagement => self.compact_device_management(cx),
             Page::Login => self.compact_import(cx),
             Page::Add => self.compact_manual(cx),
@@ -865,7 +876,8 @@ impl Dashboard {
             .on_action(cx.listener(|this, _: &crate::Back, _, cx| {
                 let route = match this.page {
                     Page::Detail(_) | Page::Settings => Page::Devices,
-                    _ => Page::Settings,
+                    Page::PairingDiagnostics => Page::Bridge,
+                    _ => this.guide_back(Page::Settings),
                 };
                 this.go(route, cx);
             }))
@@ -2236,7 +2248,7 @@ impl Dashboard {
     fn compact_retry(&mut self, dids: Vec<String>, cx: &mut Context<Self>) {
         self.run(cx, move |engine| {
             for did in dids {
-                let _ = engine.refresh(&did);
+                let _ = engine.retry(&did);
             }
             Ok(l("设备状态已刷新", "Device states refreshed"))
         });
@@ -2338,10 +2350,20 @@ impl Dashboard {
                 Page::Devices,
             ),
             Page::Settings => (l("设置", "Settings"), l("设备", "Devices"), Page::Devices),
+            Page::Guide => (
+                l("引导教程", "Setup Guide"),
+                l("设置", "Settings"),
+                Page::Settings,
+            ),
             Page::Bridge => (
                 l("管理家庭设备", "Manage Home Devices"),
                 l("设置", "Settings"),
                 Page::Settings,
+            ),
+            Page::PairingDiagnostics => (
+                l("配对诊断", "Pairing Diagnostics"),
+                l("桥接", "Bridge"),
+                Page::Bridge,
             ),
             Page::DevicesManagement => (
                 l("米家设备", "Mijia Devices"),
@@ -2364,6 +2386,12 @@ impl Dashboard {
                 Page::Settings,
             ),
             Page::Devices => unreachable!(),
+        };
+        let route = self.guide_back(route);
+        let back = if route == Page::Guide {
+            l("教程", "Guide")
+        } else {
+            back
         };
         let side = if mijialan_core::localization::english() {
             80.
@@ -2843,7 +2871,13 @@ impl Dashboard {
     fn compact_bridge_status(&self) -> String {
         let info = self.bridge.info();
         if !info.running {
-            return l("已关闭", "Off");
+            return if !self.engine.store.config().bridge_enabled {
+                l("已关闭", "Off")
+            } else if info.error.is_some() {
+                l("启动失败", "Could Not Start")
+            } else {
+                l("正在启动", "Starting")
+            };
         }
         if info.paired {
             l(
@@ -2860,6 +2894,7 @@ impl Dashboard {
     fn compact_bridge_toggle(&self, cx: &mut Context<Self>) -> Div {
         let p = Palette::new(cx);
         let info = self.bridge.info();
+        let enabled_in_settings = self.engine.store.config().bridge_enabled;
         let enabled = self.busy == 0 && !self.engine.is_demo();
         div()
             .flex()
@@ -2893,28 +2928,9 @@ impl Dashboard {
                     ),
             )
             .child(
-                self.compact_toggle("bridge-on", info.running, enabled, false, p)
+                self.compact_toggle("bridge-on", enabled_in_settings, enabled, false, p)
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if !enabled {
-                            return;
-                        }
-                        let on = !info.running;
-                        let bridge = this.bridge.clone();
-                        this.run(cx, move |engine| {
-                            if on {
-                                bridge
-                                    .start()
-                                    .map_err(|e| mijialan_core::Error::Validation(e.to_string()))?;
-                            } else {
-                                bridge.stop();
-                            }
-                            engine.store.update(|c| c.bridge_enabled = on)?;
-                            Ok(if on {
-                                l("家庭桥接已启动", "Home bridge started")
-                            } else {
-                                l("家庭桥接已停止", "Home bridge stopped")
-                            })
-                        });
+                        this.set_bridge_enabled(!enabled_in_settings, cx);
                     })),
             )
     }
@@ -3101,6 +3117,15 @@ impl Dashboard {
             section(l("设备接入", "Device Setup"), p).child(
                 group(p)
                     .child(self.compact_nav_row(
+                        "open-setup-guide",
+                        l("引导教程", "Setup Guide"),
+                        "list.bullet.rectangle",
+                        None,
+                        Page::Guide,
+                        cx,
+                    ))
+                    .child(divider(p).mx(px(12.)))
+                    .child(self.compact_nav_row(
                         "mijia-devices",
                         l("米家设备", "Mijia Devices"),
                         "externaldrive",
@@ -3113,6 +3138,10 @@ impl Dashboard {
                     ))
                     .child(divider(p).mx(px(12.)))
                     .child(self.compact_region_picker(cx))
+                    .when(
+                        self.session.borrow().login.saved_region().is_some(),
+                        |view| view.child(self.saved_login_controls(cx).px(px(10.)).pb(px(8.))),
+                    )
                     .child(
                         self.compact_button(
                             "qr-import",
@@ -3188,18 +3217,7 @@ impl Dashboard {
                             },
                             166.,
                             cx,
-                            |this, value, window, cx| {
-                                let mode = match value.as_str() {
-                                    "light" => ThemeMode::Light,
-                                    "dark" => ThemeMode::Dark,
-                                    _ => window.appearance().into(),
-                                };
-                                Theme::change(mode, Some(window), cx);
-                                this.run(cx, move |engine| {
-                                    engine.store.update(|c| c.appearance = value)?;
-                                    Ok(l("外观设置已保存", "Appearance saved"))
-                                });
-                            },
+                            |this, value, window, cx| this.change_appearance(value, window, cx),
                         )),
                 ),
             ),

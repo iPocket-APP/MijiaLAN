@@ -1,8 +1,9 @@
-//! One-time Xiaomi QR import. Cloud login sessions remain in memory and are discarded after import.
+//! Xiaomi QR import and optional, encrypted session reuse.
 use crate::{Device, Engine, Error, Result, Token};
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use rand::RngCore;
 use reqwest::{Url, blocking::Client, redirect::Policy};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
@@ -12,7 +13,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{runtime, time};
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+
+const LOGIN_KEY: &str = "xiaomi:remembered_login";
 
 #[derive(Clone)]
 pub struct Ticket {
@@ -21,7 +24,7 @@ pub struct Ticket {
     pub timeout: Duration,
 }
 
-#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct Session {
     user_id: String,
     ssecurity: String,
@@ -283,6 +286,45 @@ fn signature(path: &str, fields: &[(String, String)], signed: &str) -> String {
 }
 
 impl Session {
+    pub(crate) fn region(&self) -> &str {
+        &self.region
+    }
+
+    pub(crate) fn set_region(&mut self, region: String) {
+        if regions().contains(&region.as_str()) {
+            self.region = region;
+        }
+    }
+
+    pub(crate) fn load(vault: &crate::store::Vault) -> Result<Option<Self>> {
+        vault
+            .get(LOGIN_KEY)?
+            .map(|encoded| {
+                let encoded = Zeroizing::new(encoded);
+                let invalid = || Error::Storage("无法读取已保存的米家登录".into());
+                let session: Self = serde_json::from_str(&encoded).map_err(|_| invalid())?;
+                if !regions().contains(&session.region.as_str())
+                    || session.user_id.is_empty()
+                    || session.service_token.is_empty()
+                    || session.ssecurity.is_empty()
+                {
+                    return Err(invalid());
+                }
+                Ok(session)
+            })
+            .transpose()
+    }
+
+    pub(crate) fn remember(&self, vault: &crate::store::Vault) -> Result<()> {
+        let encoded =
+            serde_json::to_string(self).map_err(|_| Error::Storage("无法保存米家登录".into()))?;
+        vault.set(LOGIN_KEY, Some(encoded))
+    }
+
+    pub(crate) fn forget(vault: &crate::store::Vault) -> Result<()> {
+        vault.set(LOGIN_KEY, None)
+    }
+
     fn request(&self, api: &str, data: Value) -> Result<Value> {
         let mut nonce = vec![0u8; 8];
         rand::thread_rng().fill_bytes(&mut nonce);
@@ -341,6 +383,9 @@ impl Session {
             .form(&fields)
             .send()
             .map_err(|_| Error::Response("无法获取小米设备列表".into()))?;
+        if matches!(response.status().as_u16(), 401 | 403) {
+            return Err(Error::CloudSessionExpired);
+        }
         if !response.status().is_success() {
             return Err(Error::Response(format!(
                 "小米云返回 HTTP {}",
@@ -356,16 +401,10 @@ impl Session {
             serde_json::from_slice(&rc4(&signed_key, &base64(&text)?)?)
                 .map_err(|_| Error::Response("无法解密云响应".into()))?
         };
-        if value["code"].as_i64().unwrap_or(0) != 0 {
-            return Err(Error::Response(format!(
-                "小米云返回错误 {}，请重新扫码",
-                value["code"]
-            )));
-        }
-        Ok(value["result"].clone())
+        cloud_result(value)
     }
     pub fn import(&self, engine: &Engine, cancelled: &AtomicBool) -> Result<ImportReport> {
-        self.import_with_default(engine, cancelled, true)
+        self.import_with_default(engine, cancelled, true, true)
     }
 
     pub(crate) fn import_with_default(
@@ -373,10 +412,13 @@ impl Session {
         engine: &Engine,
         cancelled: &AtomicBool,
         bridged: bool,
+        try_other_regions: bool,
     ) -> Result<ImportReport> {
         let mut report = ImportReport::default();
         let mut order = vec![self.region.as_str()];
-        order.extend(regions().iter().copied().filter(|r| *r != self.region));
+        if try_other_regions {
+            order.extend(regions().iter().copied().filter(|r| *r != self.region));
+        }
         for region in order {
             if cancelled.load(Ordering::Relaxed) {
                 return Err(Error::Validation("导入已取消".into()));
@@ -387,7 +429,10 @@ impl Session {
             let Some(list) = result["list"].as_array().filter(|l| !l.is_empty()) else {
                 continue;
             };
-            let rooms = scoped.request("v2/homeroom/gethome_merged",json!({"fg":true,"fetch_share":true,"fetch_share_dev":true,"limit":300,"app_ver":7})).unwrap_or(Value::Null);
+            let rooms = match scoped.request("v2/homeroom/gethome_merged",json!({"fg":true,"fetch_share":true,"fetch_share_dev":true,"limit":300,"app_ver":7})) {
+                Err(Error::CloudSessionExpired) => return Err(Error::CloudSessionExpired),
+                result => result.unwrap_or(Value::Null),
+            };
             for item in list {
                 if cancelled.load(Ordering::Relaxed) {
                     return Err(Error::Validation("导入已取消".into()));
@@ -435,8 +480,34 @@ impl Session {
             report.region = region.into();
             return Ok(report);
         }
+        report.region = self.region.clone();
         Ok(report)
     }
+}
+
+fn cloud_result(value: Value) -> Result<Value> {
+    let code = value["code"].as_i64().unwrap_or_default();
+    if code == 0 {
+        return Ok(value["result"].clone());
+    }
+    let message = value["message"]
+        .as_str()
+        .or_else(|| value["desc"].as_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(code, 2 | 3)
+        || [
+            "auth err",
+            "servicetoken_expired",
+            "token expired",
+            "invalid signature",
+        ]
+        .iter()
+        .any(|reason| message.contains(reason))
+    {
+        return Err(Error::CloudSessionExpired);
+    }
+    Err(Error::Response(format!("小米云返回错误 {code}")))
 }
 
 #[derive(Debug, Default)]
@@ -504,5 +575,50 @@ mod tests {
         .await
         .unwrap();
         assert!(matches!(scan, Err(Error::Validation(message)) if message == "扫码导入已取消"));
+    }
+    #[test]
+    fn remembering_a_login_is_explicit_and_removes_only_the_session() {
+        let store = crate::Store::memory();
+        let login = Session {
+            user_id: "synthetic-user".into(),
+            ssecurity: "synthetic-secret".into(),
+            service_token: "synthetic-token".into(),
+            region: "de".into(),
+        };
+        store
+            .vault
+            .set("device:77", Some("device-credential".into()))
+            .unwrap();
+        assert!(Session::load(&store.vault).unwrap().is_none());
+        login.remember(&store.vault).unwrap();
+        assert_eq!(Session::load(&store.vault).unwrap().unwrap().region(), "de");
+        assert!(
+            !serde_json::to_string(&store.config())
+                .unwrap()
+                .contains("synthetic")
+        );
+        Session::forget(&store.vault).unwrap();
+        assert!(Session::load(&store.vault).unwrap().is_none());
+        assert_eq!(
+            store.vault.get("device:77").unwrap().as_deref(),
+            Some("device-credential")
+        );
+    }
+
+    #[test]
+    fn cloud_errors_distinguish_expired_logins_from_other_failures() {
+        for response in [
+            json!({"code":3}),
+            json!({"code":42,"message":"ServiceToken_Expired"}),
+        ] {
+            assert!(matches!(
+                cloud_result(response),
+                Err(Error::CloudSessionExpired)
+            ));
+        }
+        assert!(matches!(
+            cloud_result(json!({"code":42,"message":"maintenance"})),
+            Err(Error::Response(_))
+        ));
     }
 }

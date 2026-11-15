@@ -34,6 +34,14 @@ pub struct BridgeDiagnostics {
     pub keeps_awake: bool,
     pub structure_revision: u64,
     pub read_failures: Vec<ReadFailure>,
+    pub state_number: Option<u16>,
+    pub controls: Vec<Value>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct Checks {
+    pub probe_offline: bool,
+    pub browse_bonjour: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -167,9 +175,26 @@ pub fn report(
     application: &ApplicationInfo,
     now: SystemTime,
 ) -> Value {
+    report_with_checks(engine, bridge, application, now, Checks::default())
+}
+
+pub fn report_with_checks(
+    engine: &Engine,
+    home: &crate::HomeKit,
+    application: &ApplicationInfo,
+    now: SystemTime,
+    checks: Checks,
+) -> Value {
+    let offline = if checks.probe_offline {
+        engine.probe_offline()
+    } else {
+        BTreeMap::new()
+    };
     let states = engine.states();
     let probes = engine.probe_diagnostics();
-    let bridge = bridge.diagnostic_snapshot(&states);
+    let commands = engine.command_diagnostics();
+    let pairing = home.pairing_diagnostics(checks.browse_bonjour);
+    let bridge = home.diagnostic_snapshot(&states);
     let mut failures = BTreeMap::<&str, Vec<&ReadFailure>>::new();
     for failure in &bridge.read_failures {
         failures
@@ -183,6 +208,19 @@ pub fn report(
         let spec_type = document.and_then(|text| serde_json::from_str::<Value>(&text).ok())
             .and_then(|value| value["type"].as_str().map(str::to_owned));
         let probe = probes.get(&state.device.did);
+        let lan = probe.and_then(|probe| probe.lan.as_ref()).map(|lan| json!({
+            "lastHelloAt": lan.last_hello.map(timestamp),
+            "lastAuthenticatedReplyAt": lan.last_authenticated_reply.map(timestamp),
+            "batchLimit": lan.batch_limit, "suppressedProperties": lan.suppressed_properties,
+            "readBackoffSeconds": lan.read_backoff_seconds, "lastFallback": lan.last_fallback,
+        }));
+        let offline_probe = offline.get(&state.device.did).map(|probe| json!({
+            "hello": probe.hello, "authenticatedReply": probe.authenticated_reply, "error": probe.error,
+        }));
+        let history: Vec<_> = commands.get(&state.device.did).into_iter().flatten().map(|command| json!({
+            "at": timestamp(command.at), "method": command.method, "address": command.address,
+            "outcome": command.outcome, "error": command.error,
+        })).collect();
         let readings: Vec<_> = state.spec.properties.iter().filter(|p| p.readable && !sensitive(&p.name)).map(|property| {
             let key = property.key();
             let value = state.values.get(&key).map(|value| public_value(value).to_string());
@@ -205,7 +243,8 @@ pub fn report(
             "retryFailures":probe.map_or(0, |p| p.retry_failures),
             "nextRetryAt":probe.and_then(|p| p.next_retry_at).map(timestamp),
             "isProbing":probe.is_some_and(|p| p.active_probes > 0),
-            "revision":state.revision, "readings":readings, "homeKitReadFailures":home_failures})
+            "revision":state.revision, "readings":readings, "homeKitReadFailures":home_failures,
+            "lanReadDiagnostics":lan,"offlineProbe":offline_probe,"recentCommands":history})
     }).collect();
     let mut report = json!({"reportVersion":1, "recordedAt":timestamp(now),
         "app":{"version":application.version,"build":application.build,"implementation":"rust"},
@@ -214,6 +253,8 @@ pub fn report(
         "bridge":bridge.status,"paired":bridge.paired,"pairingStateKnown":bridge.pairing_state_known,
         "accessories":bridge.accessories,"keepsMacAwake":bridge.keeps_awake,
         "structureRevision":bridge.structure_revision,
+        "homeKitStateNumber":bridge.state_number,"homeKitControls":bridge.controls,
+        "homeKitPairingDiagnostics":pairing,
         "valuesRevision":states.iter().fold(0u64, |total, state| total.saturating_add(state.revision)),"devices":devices});
     if cfg!(target_os = "macos") {
         report["macOS"] = json!(application.os_version);

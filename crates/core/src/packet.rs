@@ -25,6 +25,8 @@ pub enum Error {
     Device { code: i64, message: String },
     #[error("响应错误：{0}")]
     Response(String),
+    #[error("{}", if crate::localization::english() { "Xiaomi Home login expired. Scan again to import devices." } else { "米家登录已过期，请重新扫码导入。" })]
+    CloudSessionExpired,
     #[error("{0}")]
     Storage(String),
     #[error("规格错误：{0}")]

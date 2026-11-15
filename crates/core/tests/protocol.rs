@@ -103,6 +103,40 @@ fn legacy_light_writes_use_known_method_and_suffix() {
     );
 }
 fn fake_device(requests: usize) -> (u16, std::thread::JoinHandle<Vec<String>>) {
+    let mut brightness = json!(45);
+    fake_device_with(requests, move |request| {
+        let result = match request["method"].as_str().unwrap() {
+            "miIO.info" => json!({"model":"dmaker.fan.p28"}),
+            "get_properties" => Value::Array(
+                request["params"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|p| {
+                        let value = if p["piid"] == 1 {
+                            json!(true)
+                        } else {
+                            brightness.clone()
+                        };
+                        json!({"siid":p["siid"],"piid":p["piid"],"code":0,"value":value})
+                    })
+                    .collect(),
+            ),
+            "set_properties" => {
+                let property = &request["params"][0];
+                brightness = property["value"].clone();
+                json!([{"siid":property["siid"],"piid":property["piid"],"code":0}])
+            }
+            _ => json!([]),
+        };
+        json!({"result":result})
+    })
+}
+
+fn fake_device_with(
+    requests: usize,
+    mut reply: impl FnMut(&Value) -> Value + Send + 'static,
+) -> (u16, std::thread::JoinHandle<Vec<String>>) {
     let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     socket
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -112,7 +146,6 @@ fn fake_device(requests: usize) -> (u16, std::thread::JoinHandle<Vec<String>>) {
         let token = Token::parse(TOKEN).unwrap();
         let mut methods = Vec::new();
         let mut buffer = [0; 65535];
-        let mut brightness = json!(45);
         while methods.len() < requests {
             let (len, from) = socket.recv_from(&mut buffer).unwrap();
             if buffer[..len] == packet::HELLO {
@@ -127,11 +160,6 @@ fn fake_device(requests: usize) -> (u16, std::thread::JoinHandle<Vec<String>>) {
             let request = parse_json(&payload).unwrap();
             let method = request["method"].as_str().unwrap().to_string();
             methods.push(method.clone());
-            let result=match method.as_str(){
-                "miIO.info"=>json!({"model":"dmaker.fan.p28"}),
-                "get_properties"=>Value::Array(request["params"].as_array().unwrap().iter().map(|p|json!({"siid":p["siid"],"piid":p["piid"],"code":0,"value":if p["piid"]==1{json!(true)}else{brightness.clone()}})).collect()),
-                "set_properties"=>{brightness=request["params"][0]["value"].clone();json!([{"siid":request["params"][0]["siid"],"piid":request["params"][0]["piid"],"code":0}])},_=>json!([])
-            };
             // A delayed response for another request must never be accepted.
             let stale =
                 json!({"id":request["id"].as_u64().unwrap()+1,"result":"stale"}).to_string();
@@ -141,10 +169,11 @@ fn fake_device(requests: usize) -> (u16, std::thread::JoinHandle<Vec<String>>) {
                     from,
                 )
                 .unwrap();
-            let reply = json!({"id":request["id"],"result":result}).to_string();
+            let mut response = reply(&request);
+            response["id"] = request["id"].clone();
             socket
                 .send_to(
-                    &packet::encode(reply.as_bytes(), &token, 77, 900001).unwrap(),
+                    &packet::encode(response.to_string().as_bytes(), &token, 77, 900001).unwrap(),
                     from,
                 )
                 .unwrap();
@@ -152,6 +181,42 @@ fn fake_device(requests: usize) -> (u16, std::thread::JoinHandle<Vec<String>>) {
         methods
     });
     (port, thread)
+}
+
+#[test]
+fn partial_miot_reads_keep_earlier_values_and_retry_rejected_batches() {
+    let (port, fixture) = fake_device_with(6, |request| {
+        let properties = request["params"].as_array().unwrap();
+        let first = properties[0]["piid"].as_u64().unwrap();
+        if first == 16 || first == 17 && properties.len() > 1 {
+            return json!({"error":{"code":-9999,"message":"user ack timeout"}});
+        }
+        json!({"result":properties.iter().map(|property| {
+            json!({"did":"ignored","siid":2,"piid":property["piid"],"code":0,"value":property["piid"]})
+        }).collect::<Vec<_>>()})
+    });
+    let mut client = MiioClient::with_port(Ipv4Addr::LOCALHOST, port, Token::parse(TOKEN).unwrap());
+    let properties: Vec<_> = (1..=18).map(|piid| (2, piid)).collect();
+    let values = client.get_properties("77", &properties).unwrap();
+    assert_eq!(
+        values
+            .iter()
+            .map(|value| value["value"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        (1..=18).filter(|value| *value != 16).collect::<Vec<_>>()
+    );
+    let diagnostics = client.diagnostics();
+    let fallback = diagnostics.last_fallback.unwrap();
+    assert_eq!((fallback.single_attempts, fallback.single_replies), (3, 2));
+    assert_eq!(diagnostics.suppressed_properties, 1);
+    assert_eq!(
+        client
+            .get_properties("77", &[(2, 16), (2, 17)])
+            .unwrap()
+            .len(),
+        1
+    );
+    fixture.join().unwrap();
 }
 #[test]
 fn real_udp_handshake_read_write_and_response_matching() {

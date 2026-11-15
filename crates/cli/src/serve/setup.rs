@@ -12,7 +12,7 @@ use mijialan_core::{
     Error, cloud,
     import_job::{ImportJob, Progress},
 };
-use mijialan_homekit::mapping;
+use mijialan_homekit::{HomeResult, diagnostics, mapping};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -186,6 +186,7 @@ fn routes(wizard: Arc<Wizard>) -> Router {
             "/api/bridge",
             post(select_devices).layer(DefaultBodyLimit::max(512 * 1024)),
         )
+        .route("/api/pairing", post(pairing))
         .route("/api/finish", post(finish))
         .layer(DefaultBodyLimit::max(32 * 1024))
         .layer(middleware::from_fn_with_state(wizard.clone(), guard))
@@ -341,8 +342,55 @@ async fn status(State(wizard): State<Arc<Wizard>>) -> impl IntoResponse {
             "paired": bridge.paired,
             "qr": if bridge.running && !bridge.paired { qr_svg(&bridge.uri) } else { None },
             "pin": (bridge.running && !bridge.paired).then_some(bridge.code),
+            "attempt": wizard.service.bridge.setup_attempt(),
         },
     }))
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "operation", rename_all = "camelCase")]
+enum PairingOperation {
+    RefreshCode,
+    MarkAttempt,
+    Record { result: HomeResult },
+    Export,
+}
+
+async fn pairing(
+    State(wizard): State<Arc<Wizard>>,
+    Json(operation): Json<PairingOperation>,
+) -> Result<Response, Failure> {
+    wizard.require_active()?;
+    match operation {
+        PairingOperation::RefreshCode => {
+            require_idle(&wizard)?;
+            wizard
+                .service
+                .bridge
+                .refresh_setup_code()
+                .map_err(|error| (StatusCode::CONFLICT, error.to_string()))?;
+        }
+        PairingOperation::MarkAttempt => wizard.service.bridge.begin_setup_diagnostics(),
+        PairingOperation::Record { result } => wizard.service.bridge.record_home_result(result),
+        PairingOperation::Export => {
+            let report = tokio::task::spawn_blocking(move || {
+                diagnostics::report_with_checks(
+                    &wizard.service.engine,
+                    &wizard.service.bridge,
+                    &diagnostics::ApplicationInfo::default(),
+                    std::time::SystemTime::now(),
+                    diagnostics::Checks {
+                        browse_bonjour: true,
+                        probe_offline: false,
+                    },
+                )
+            })
+            .await
+            .map_err(storage_failure)?;
+            return Ok(Json(report).into_response());
+        }
+    }
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 #[derive(Deserialize)]
@@ -579,6 +627,16 @@ mod tests {
             StatusCode::UNAUTHORIZED
         );
         assert_eq!(
+            send(
+                &router,
+                post("/api/pairing", ORIGIN),
+                r#"{"operation":"export"}"#
+            )
+            .await
+            .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
             send(&router, get("/", "untrusted.test"), "").await.status(),
             StatusCode::FORBIDDEN
         );
@@ -620,6 +678,37 @@ mod tests {
             .unwrap();
         let data: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(data["bridge"]["pin"].is_null());
+        for data in [
+            r#"{"operation":"markAttempt"}"#,
+            r#"{"operation":"record","result":"alreadyInAnotherHome"}"#,
+        ] {
+            assert_eq!(
+                send(
+                    &router,
+                    post("/api/pairing", ORIGIN).header(header::COOKIE, cookie),
+                    data
+                )
+                .await
+                .status(),
+                StatusCode::NO_CONTENT
+            );
+        }
+        let report = send(
+            &router,
+            post("/api/pairing", ORIGIN).header(header::COOKIE, cookie),
+            r#"{"operation":"export"}"#,
+        )
+        .await;
+        assert_eq!(report.status(), StatusCode::OK);
+        assert_eq!(report.headers()[header::CACHE_CONTROL], "no-store");
+        let bytes = axum::body::to_bytes(report.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            report["homeKitPairingDiagnostics"]["setupAttempt"]["homeResult"],
+            "alreadyInAnotherHome"
+        );
         assert_eq!(
             send(
                 &router,

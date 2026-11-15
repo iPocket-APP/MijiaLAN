@@ -52,12 +52,18 @@ pub fn text(value: impl AsRef<str>) -> String {
         "导出" => "Export",
         "用邮件发送" => "Send by Email",
         "在文件夹中显示" => "Show in Folder",
-        "正在读取每台设备…" => "Reading every device…",
+        "正在收集诊断信息…" => "Collecting diagnostics…",
         "已保存" => "Saved",
         "导出失败：" => "Could not export:",
-        "反馈问题时附上。包含设备名称和读数，不含 Token、IP 地址和配对信息。" => {
-            "Attach it to a problem report. It has device names and readings, no tokens, IP addresses or pairing keys."
+        "反馈问题时可附上报告。包含设备名称、读数及配对阶段，已过滤凭据和网络地址。" => {
+            "Attach the report to feedback. It includes device names, readings, and pairing stages. Credentials and network addresses are redacted."
         }
+        "引导教程" => "Setup Guide",
+        "返回引导教程" => "Back to Setup Guide",
+        "自动" => "Auto",
+        "浅色" => "Light",
+        "深色" => "Dark",
+        "外观设置已保存" => "Appearance saved",
         "请描述遇到的问题，例如哪台设备在家庭中显示警告：" => {
             "Please describe the problem, such as which accessory shows a warning in Home:"
         }

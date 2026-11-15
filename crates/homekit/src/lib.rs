@@ -3,4 +3,4 @@ pub mod diagnostics;
 pub mod mapping;
 mod server;
 
-pub use server::{BridgeInfo, HomeKit};
+pub use server::{BridgeInfo, HomeKit, HomeResult, PairingDiagnostics, SetupAttempt};

@@ -13,6 +13,10 @@ if [[ -d "$sparkle" ]]; then
   codesign "${flags[@]}" "$sparkle/Updater.app"
   codesign "${flags[@]}" "$app/Contents/Frameworks/Sparkle.framework"
 fi
+helper="$app/Contents/Library/LoginItems/MijiaLANRustLoginItem.app"
+if [[ -d "$helper" ]]; then
+  codesign "${flags[@]}" "$helper"
+fi
 codesign "${flags[@]}" "$app/Contents/MacOS/mijia-rust"
 codesign "${flags[@]}" "$app/Contents/MacOS/mijialan-rust"
 codesign "${flags[@]}" "$app"

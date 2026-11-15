@@ -620,6 +620,60 @@ fn presets(model: &str, p: &Property) -> Vec<Value> {
         .filter(|v| p.validate(v).is_ok())
         .collect()
 }
+pub(super) fn kettle(b: &mut Builder<'_>, state: &DeviceState) {
+    if state.device.model != mijialan_core::kettle::MODEL {
+        return;
+    }
+    let status = state
+        .spec
+        .properties
+        .iter()
+        .find(|property| property.key() == mijialan_core::kettle::STATUS && property.readable);
+    let start = state.spec.actions.iter().find(|action| {
+        action.siid == 2
+            && action.aiid == 1
+            && action.name == "start-cook"
+            && action.inputs.len() == 1
+            && action.inputs[0].piid == 3
+    });
+    let stop = state.spec.actions.iter().any(|action| {
+        action.siid == 2
+            && action.aiid == 2
+            && action.name == "cancel-cooking"
+            && action.inputs.is_empty()
+    });
+    let (Some(status), Some(start), true) = (status, start, stop) else {
+        return;
+    };
+    let mode = &start.inputs[0];
+    for choice in &mode.choices {
+        let Some(menu) = choice.value.as_u64().filter(|menu| *menu < 6) else {
+            continue;
+        };
+        // These switches start heating. Never reuse an existing select-only service or action IID.
+        let key = format!("kettle-menu:{menu}");
+        let Some(service) = b.service(
+            &key,
+            "49",
+            choice.label(mijialan_core::localization::english()),
+        ) else {
+            continue;
+        };
+        b.characteristic(
+            service,
+            &format!("{key}:on"),
+            "25",
+            "bool",
+            Some(status),
+            Transform::KettleMenu(menu as u8),
+            true,
+            None,
+        );
+    }
+    b.consumed
+        .extend(["action:2.1".into(), "action:2.2".into(), mode.key()]);
+}
+
 pub(super) fn extras(b: &mut Builder<'_>, state: &DeviceState, reviewed: bool) {
     enum Control<'a> {
         Property(&'a Property),

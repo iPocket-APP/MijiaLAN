@@ -5,7 +5,7 @@ use crate::{
 use anyhow::{Result, anyhow, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use ed25519_dalek::SigningKey;
-use mdns_sd::{IfKind, ServiceDaemon, ServiceInfo};
+use mdns_sd::{DaemonEvent, IfKind, ServiceDaemon, ServiceInfo};
 use mijialan_core::Engine;
 use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -14,13 +14,18 @@ use sha2::{Digest, Sha512};
 use std::{
     collections::BTreeMap,
     io::{Read, Write},
-    net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream},
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
+
+mod pairing_diagnostics;
+mod writes;
+use pairing_diagnostics::Trace;
+pub use pairing_diagnostics::{HomeResult, PairingDiagnostics, SetupAttempt};
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Pairing {
@@ -35,21 +40,33 @@ struct Identity {
     secret: [u8; 32],
     pairings: BTreeMap<String, Pairing>,
     port: u16,
+    #[serde(default = "initial_state_number")]
+    state_number: u16,
 }
+
+fn initial_state_number() -> u16 {
+    1
+}
+
+fn new_pin() -> String {
+    let mut rng = rand::thread_rng();
+    loop {
+        let text: String = (0..8)
+            .map(|_| char::from(b'0' + rng.gen_range(0..10)))
+            .collect();
+        if text != "12345678"
+            && text != "87654321"
+            && text.as_bytes().iter().any(|b| *b != text.as_bytes()[0])
+        {
+            return format!("{}-{}-{}", &text[..3], &text[3..5], &text[5..]);
+        }
+    }
+}
+
 impl Identity {
     fn create() -> Self {
         let mut rng = rand::thread_rng();
-        let pin = loop {
-            let text: String = (0..8)
-                .map(|_| char::from(b'0' + rng.gen_range(0..10)))
-                .collect();
-            if text != "12345678"
-                && text != "87654321"
-                && text.as_bytes().iter().any(|b| *b != text.as_bytes()[0])
-            {
-                break format!("{}-{}-{}", &text[..3], &text[3..5], &text[5..]);
-            }
-        };
+        let pin = new_pin();
         let mut secret = [0; 32];
         rng.fill_bytes(&mut secret);
         let alphabet = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -65,6 +82,7 @@ impl Identity {
             secret,
             pairings: BTreeMap::new(),
             port: 0,
+            state_number: initial_state_number(),
         }
     }
     fn uri(&self) -> String {
@@ -109,15 +127,36 @@ struct Shared {
     setup_owner: Mutex<Option<(u64, Instant)>>,
     attempts: Mutex<Vec<Instant>>,
     connections: Mutex<BTreeMap<u64, TcpStream>>,
+    writes: Mutex<writes::Pending>,
+    address: SocketAddr,
+    announced: bool,
+    trace: Arc<Mutex<Trace>>,
+    controller_departed: AtomicBool,
 }
 impl Shared {
     fn save_identity(&self, identity: &Identity) -> Result<()> {
+        if self.stop.load(Ordering::Relaxed) {
+            bail!("家庭桥已停止");
+        }
         self.engine
             .store
             .vault
             .set("homekit:identity", Some(serde_json::to_string(identity)?))?;
         self.dirty.store(true, Ordering::Relaxed);
         Ok(())
+    }
+
+    fn advance_state_number(&self) {
+        let mut identity = self.identity.lock().unwrap();
+        if identity.pairings.is_empty() || !self.controller_departed.swap(false, Ordering::AcqRel) {
+            return;
+        }
+        let previous = identity.state_number;
+        identity.state_number = previous.checked_add(1).unwrap_or(1);
+        if self.save_identity(&identity).is_err() {
+            identity.state_number = previous;
+            self.controller_departed.store(true, Ordering::Release);
+        }
     }
     fn refresh(&self) -> Result<()> {
         let mut layout = self.layout.lock().unwrap();
@@ -154,6 +193,8 @@ impl Shared {
 pub struct HomeKit {
     engine: Arc<Engine>,
     running: Mutex<Option<Arc<Shared>>>,
+    lifecycle: Mutex<()>,
+    trace: Arc<Mutex<Trace>>,
     error: Mutex<Option<String>>,
     thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -162,16 +203,14 @@ impl HomeKit {
         Self {
             engine,
             running: Mutex::new(None),
+            lifecycle: Mutex::new(()),
+            trace: Arc::new(Mutex::new(Trace::default())),
             error: Mutex::new(None),
             thread: Mutex::new(None),
         }
     }
     pub fn start(&self) -> Result<()> {
-        let result = self.start_at((Ipv4Addr::UNSPECIFIED, 0).into(), true);
-        if let Err(error) = &result {
-            *self.error.lock().unwrap() = Some(error.to_string());
-        }
-        result
+        self.start_at((Ipv4Addr::UNSPECIFIED, 0).into(), true)
     }
     fn load_identity(&self) -> Result<Option<Identity>> {
         self.engine
@@ -190,10 +229,24 @@ impl HomeKit {
             .map(|identity| !identity.pairings.is_empty()))
     }
     pub fn start_at(&self, address: SocketAddr, announce: bool) -> Result<()> {
+        let _lifecycle = self.lifecycle.lock().unwrap();
+        self.start_recording_error(address, announce)
+    }
+
+    fn start_recording_error(&self, address: SocketAddr, announce: bool) -> Result<()> {
+        let result = self.start_locked(address, announce);
+        if let Err(error) = &result {
+            *self.error.lock().unwrap() = Some(error.to_string());
+        }
+        result
+    }
+
+    fn start_locked(&self, address: SocketAddr, announce: bool) -> Result<()> {
         let mut running = self.running.lock().unwrap();
         if running.is_some() {
             return Ok(());
         }
+        self.trace.lock().unwrap().clear_advertisement();
         let identity = self.load_identity()?.unwrap_or_else(Identity::create);
         let layout = match self.engine.store.vault.get("homekit:layout")? {
             Some(text) => serde_json::from_str(&text)?,
@@ -204,20 +257,17 @@ impl HomeKit {
         } else {
             address
         };
-        let socket = socket2::Socket::new(
-            socket2::Domain::for_address(desired),
-            socket2::Type::STREAM,
-            Some(socket2::Protocol::TCP),
-        )?;
-        #[cfg(not(target_os = "windows"))]
-        socket.set_reuse_address(true)?;
-        socket.bind(&desired.into())?;
-        socket.listen(128)?;
-        let listener: TcpListener = socket.into();
-        listener.set_nonblocking(true)?;
+        let dual_stack = (desired.ip() == IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+            .then(|| bind_listener((Ipv6Addr::UNSPECIFIED, desired.port()).into(), true).ok())
+            .flatten();
+        let (listener, v4_only) = match dual_stack {
+            Some(listener) => (listener, false),
+            None => (bind_listener(desired, false)?, desired.is_ipv4()),
+        };
         let port = listener.local_addr()?.port();
         let mut identity = identity;
         identity.port = port;
+        identity.state_number = identity.state_number.max(1);
         let shared = Arc::new(Shared {
             engine: self.engine.clone(),
             identity: Mutex::new(identity),
@@ -235,6 +285,11 @@ impl HomeKit {
             setup_owner: Mutex::new(None),
             attempts: Mutex::new(vec![]),
             connections: Mutex::new(BTreeMap::new()),
+            writes: Mutex::new(writes::Pending::default()),
+            address,
+            announced: announce,
+            trace: self.trace.clone(),
+            controller_departed: AtomicBool::new(true),
         });
         shared.save_identity(&shared.identity.lock().unwrap())?;
         shared.refresh()?;
@@ -244,18 +299,36 @@ impl HomeKit {
             None
         };
         let advertised_ip = (!address.ip().is_unspecified()).then_some(address.ip());
+        let mut monitor = None;
         if let Some(mdns) = &mdns {
             if let Some(ip) = advertised_ip {
                 mdns.disable_interface(IfKind::All)?;
                 mdns.enable_interface(ip)?;
+            } else if v4_only {
+                mdns.disable_interface(IfKind::IPv6)?;
+            } else if address.is_ipv6() {
+                mdns.disable_interface(IfKind::IPv4)?;
             }
-            advertise(mdns, &shared, advertised_ip)?;
+            monitor = mdns.monitor().ok();
+            if let Err(error) = advertise(mdns, &shared, advertised_ip) {
+                let _ = mdns.shutdown();
+                self.trace.lock().unwrap().advertisement_error();
+                return Err(error);
+            }
         }
         let worker = shared.clone();
         let thread = std::thread::Builder::new()
             .name("mijia-homekit".into())
             .spawn(move || {
                 let mut refresh = Instant::now() - Duration::from_secs(6);
+                let mut state_check = Instant::now();
+                let mut revisions = worker.engine.state_revisions();
+                let mut published = worker
+                    .database
+                    .read()
+                    .unwrap()
+                    .control_values(&worker.engine.states());
+                let mut structure_revision = worker.layout.lock().unwrap().version;
                 let mut awake = None;
                 while !worker.stop.load(Ordering::Relaxed) {
                     match listener.accept() {
@@ -265,13 +338,22 @@ impl HomeKit {
                                 continue;
                             }
                             let id = rand::random();
-                            if let Ok(copy) = stream.try_clone() {
-                                connections.insert(id, copy);
-                            }
+                            let Ok(copy) = stream.try_clone() else {
+                                continue;
+                            };
+                            connections.insert(id, copy);
                             drop(connections);
+                            worker.trace.lock().unwrap().connection_accepted();
                             let worker = worker.clone();
                             std::thread::spawn(move || {
-                                let _ = serve(stream, &worker, id);
+                                let mut verified = false;
+                                let result = serve(stream, &worker, id, &mut verified);
+                                if verified {
+                                    worker.controller_departed.store(true, Ordering::Release);
+                                }
+                                if result.is_err() {
+                                    worker.trace.lock().unwrap().connection_error();
+                                }
                                 worker.connections.lock().unwrap().remove(&id);
                                 let mut owner = worker.setup_owner.lock().unwrap();
                                 if owner.is_some_and(|(owner, _)| owner == id) {
@@ -310,10 +392,41 @@ impl HomeKit {
                         worker.keeps_awake.store(awake.is_some(), Ordering::Relaxed);
                         refresh = Instant::now();
                     }
+                    if state_check.elapsed() >= Duration::from_millis(250) {
+                        state_check = Instant::now();
+                        let current = worker.engine.state_revisions();
+                        let version = worker.layout.lock().unwrap().version;
+                        if current != revisions || version != structure_revision {
+                            let states = worker.engine.states();
+                            let next = worker.database.read().unwrap().control_values(&states);
+                            if published.iter().any(|(id, value)| {
+                                next.get(id).is_some_and(|current| current != value)
+                            }) {
+                                worker.advance_state_number();
+                            }
+                            published = next;
+                            revisions = current;
+                            structure_revision = version;
+                        }
+                    }
                     if worker.dirty.swap(false, Ordering::Relaxed)
                         && let Some(mdns) = &mdns
+                        && advertise(mdns, &worker, advertised_ip).is_err()
                     {
-                        let _ = advertise(mdns, &worker, advertised_ip);
+                        worker.trace.lock().unwrap().advertisement_error();
+                    }
+                    if let Some(monitor) = &monitor {
+                        for event in monitor.try_iter() {
+                            match event {
+                                DaemonEvent::Announce(..) => {
+                                    worker.trace.lock().unwrap().advertised()
+                                }
+                                DaemonEvent::Error(..) => {
+                                    worker.trace.lock().unwrap().advertisement_error()
+                                }
+                                _ => {}
+                            }
+                        }
                     }
                     std::thread::sleep(Duration::from_millis(40));
                 }
@@ -335,8 +448,15 @@ impl HomeKit {
     }
 
     pub fn stop(&self) {
+        let _lifecycle = self.lifecycle.lock().unwrap();
+        self.stop_locked();
+    }
+
+    fn stop_locked(&self) {
         if let Some(shared) = self.running.lock().unwrap().take() {
+            let identity = shared.identity.lock().unwrap();
             shared.stop.store(true, Ordering::Relaxed);
+            drop(identity);
             for (_, stream) in std::mem::take(&mut *shared.connections.lock().unwrap()) {
                 let _ = stream.shutdown(std::net::Shutdown::Both);
             }
@@ -347,17 +467,50 @@ impl HomeKit {
     }
     /// Only the explicit, confirmed reset control invokes this operation.
     pub fn reset_pairing(&self) -> Result<()> {
-        let restart = self.info().running;
-        self.stop();
-        if let Err(error) = self.engine.store.vault.set("homekit:identity", None) {
-            if restart {
-                let _ = self.start();
+        let _lifecycle = self.lifecycle.lock().unwrap();
+        let running = self.running.lock().unwrap().clone();
+        let settings = running
+            .as_ref()
+            .map(|shared| (shared.address, shared.announced));
+        self.stop_locked();
+        let fresh = Identity::create();
+        if let Err(error) = self
+            .engine
+            .store
+            .vault
+            .set("homekit:identity", Some(serde_json::to_string(&fresh)?))
+        {
+            if let Some((address, announce)) = settings {
+                let _ = self.start_recording_error(address, announce);
             }
             return Err(error.into());
         }
-        if restart {
-            self.start()?;
+        if let Some((address, announce)) = settings {
+            self.start_recording_error(address, announce)?;
         }
+        Ok(())
+    }
+
+    /// Reissue an unused PIN without replacing the accessory identity or changing its port.
+    pub fn refresh_setup_code(&self) -> Result<()> {
+        let _lifecycle = self.lifecycle.lock().unwrap();
+        let running = self.running.lock().unwrap();
+        let shared = running.as_ref().ok_or_else(|| anyhow!("家庭桥尚未启动"))?;
+        let mut owner = shared.setup_owner.lock().unwrap();
+        let mut identity = shared.identity.lock().unwrap();
+        if !identity.pairings.is_empty() {
+            bail!("家庭桥已经配对，不能刷新配对码");
+        }
+        let mut pin = new_pin();
+        while pin == identity.pin {
+            pin = new_pin();
+        }
+        let old = std::mem::replace(&mut identity.pin, pin);
+        if let Err(error) = shared.save_identity(&identity) {
+            identity.pin = old;
+            return Err(error);
+        }
+        *owner = None;
         Ok(())
     }
     pub fn info(&self) -> BridgeInfo {
@@ -400,7 +553,10 @@ impl HomeKit {
     ) -> crate::diagnostics::BridgeDiagnostics {
         let running = self.running.lock().unwrap();
         if let Some(shared) = running.as_ref() {
-            let paired = !shared.identity.lock().unwrap().pairings.is_empty();
+            let (paired, state_number) = {
+                let identity = shared.identity.lock().unwrap();
+                (!identity.pairings.is_empty(), identity.state_number)
+            };
             let structure_revision = shared.layout.lock().unwrap().version;
             let database = shared.database.read().unwrap();
             crate::diagnostics::BridgeDiagnostics {
@@ -411,6 +567,15 @@ impl HomeKit {
                 keeps_awake: shared.keeps_awake.load(Ordering::Relaxed),
                 structure_revision,
                 read_failures: database.diagnostic_failures(states),
+                state_number: Some(state_number),
+                controls: database
+                    .control_values(states)
+                    .into_iter()
+                    .map(|((aid, iid), result)| match result {
+                        Ok(value) => json!({"aid":aid,"iid":iid,"status":0,"value":value}),
+                        Err(status) => json!({"aid":aid,"iid":iid,"status":status}),
+                    })
+                    .collect(),
             }
         } else {
             crate::diagnostics::BridgeDiagnostics {
@@ -441,7 +606,7 @@ fn advertise(mdns: &ServiceDaemon, shared: &Shared, address: Option<IpAddr>) -> 
         ("id".into(), identity.device_id.clone()),
         ("md".into(), "MijiaLAN Rust Bridge".into()),
         ("pv".into(), "1.1".into()),
-        ("s#".into(), "1".into()),
+        ("s#".into(), identity.state_number.to_string()),
         (
             "sf".into(),
             if identity.pairings.is_empty() {
@@ -471,6 +636,23 @@ fn advertise(mdns: &ServiceDaemon, shared: &Shared, address: Option<IpAddr>) -> 
     };
     mdns.register(info)?;
     Ok(())
+}
+
+fn bind_listener(address: SocketAddr, dual_stack: bool) -> std::io::Result<TcpListener> {
+    let socket = socket2::Socket::new(
+        socket2::Domain::for_address(address),
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )?;
+    if dual_stack {
+        socket.set_only_v6(false)?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    socket.set_reuse_address(true)?;
+    socket.bind(&address.into())?;
+    socket.listen(128)?;
+    socket.set_nonblocking(true)?;
+    Ok(socket.into())
 }
 
 struct Request {
@@ -587,14 +769,14 @@ impl Connection {
                 .is_some_and(|p| p.public == *public)
         })
     }
-    fn route(&mut self, r: Request, shared: &Shared) -> Result<Vec<u8>> {
+    fn route(&mut self, r: Request, shared: &Arc<Shared>) -> Result<Vec<u8>> {
         if r.method == "POST" && r.target == "/pair-setup" {
             let fields = crypto::parse(&r.body)?;
             let state = crypto::field(&fields, 6)?.first().copied().unwrap_or(0);
+            let mut owner = shared.setup_owner.lock().unwrap();
             if !shared.identity.lock().unwrap().pairings.is_empty() {
                 return Ok(pairing_error(state.saturating_add(1), 6));
             }
-            let mut owner = shared.setup_owner.lock().unwrap();
             if owner.is_some_and(|(id, at)| id != self.id && at.elapsed() < Duration::from_secs(30))
             {
                 return Ok(pairing_error(state.saturating_add(1), 7));
@@ -799,7 +981,7 @@ impl Connection {
                 };
                 let mut item = json!({"aid":aid,"iid":iid});
                 let attribute = database.attribute(aid, iid);
-                let result = database.read(&shared.engine, aid, iid, false);
+                let result = shared.read(&database, aid, iid);
                 if let Some(attribute) = attribute {
                     for flag in [
                         "type",
@@ -872,36 +1054,16 @@ impl Connection {
                             .ok_or(-70409)
                             .and_then(|a| mapping::validate_write(a, value))
                             .and_then(|requested| {
-                                binding.write(&shared.engine, &requested)?;
-                                Ok(requested)
+                                shared.accept_write((aid, iid), binding, requested)
                             });
                         match result {
                             Err(error) => status = error,
-                            Ok(requested) => {
+                            Ok(shown) => {
                                 if let Some(last) = self.subscriptions.get_mut(&(aid, iid)) {
-                                    let current = shared.database.read().unwrap().read(
-                                        &shared.engine,
-                                        aid,
-                                        iid,
-                                        false,
+                                    *last = shown.map_or(
+                                        Value::Null,
+                                        |value| json!({"aid":aid,"iid":iid,"value":value}),
                                     );
-                                    let dimmed_off = matches!(
-                                        binding.transform,
-                                        mapping::Transform::Brightness { .. }
-                                    ) && requested.as_f64() == Some(0.);
-                                    *last = match current {
-                                        // The originating controller already knows the value it
-                                        // wrote. Zero brightness preserves the saved dimmer level.
-                                        Ok(value)
-                                            if dimmed_off
-                                                || mapping::equivalent(&value, &requested) =>
-                                        {
-                                            json!({"aid":aid,"iid":iid,"value":value})
-                                        }
-                                        // Momentary switches need a corrective event even when
-                                        // their real state never changed.
-                                        _ => Value::Null,
-                                    };
                                 }
                             }
                         }
@@ -966,7 +1128,7 @@ impl Connection {
     }
 }
 
-fn serve(mut stream: TcpStream, shared: &Shared, id: u64) -> Result<()> {
+fn serve(mut stream: TcpStream, shared: &Arc<Shared>, id: u64, verified: &mut bool) -> Result<()> {
     stream.set_read_timeout(Some(Duration::from_millis(250)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     stream.set_nodelay(true)?;
@@ -1003,13 +1165,23 @@ fn serve(mut stream: TcpStream, shared: &Shared, id: u64) -> Result<()> {
             plain.append(&mut wire);
         }
         while let Some(request) = request(&mut plain)? {
-            let response = connection.route(request, shared)?;
+            let exchange = pairing_diagnostics::exchange(&request);
+            let response = connection.route(request, shared);
+            if let Some((phase, state)) = exchange {
+                shared
+                    .trace
+                    .lock()
+                    .unwrap()
+                    .handshake(phase, state, response.as_deref().ok());
+            }
+            let response = response?;
             if let Some(session) = &mut connection.session {
                 stream.write_all(&session.encode(&response)?)?;
             } else {
                 stream.write_all(&response)?;
             }
             if let Some(session) = connection.activate.take() {
+                *verified = true;
                 connection.session = Some(session);
                 wire.append(&mut plain);
                 break;
@@ -1022,7 +1194,7 @@ fn serve(mut stream: TcpStream, shared: &Shared, id: u64) -> Result<()> {
             let database = shared.database.read().unwrap();
             let mut changed = Vec::new();
             for ((aid, iid), last_value) in &mut connection.subscriptions {
-                let result = database.read(&shared.engine, *aid, *iid, false);
+                let result = shared.read(&database, *aid, *iid);
                 let item = match result {
                     Ok(value) => json!({"aid":aid,"iid":iid,"value":value}),
                     Err(status) => json!({"aid":aid,"iid":iid,"status":status}),

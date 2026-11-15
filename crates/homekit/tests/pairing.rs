@@ -12,7 +12,7 @@ use std::{
     io::{Read, Write},
     net::{Ipv4Addr, TcpStream},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 mod support;
@@ -20,6 +20,17 @@ mod support;
 #[allow(dead_code)]
 #[path = "../../core/tests/support/vacuum.rs"]
 mod vacuum_support;
+
+fn wait_for(mut ready: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !ready() {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for a settled HomeKit state"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
 
 #[test]
 fn encrypted_fan_speed_commands_and_same_value_error_recovery_match_native() {
@@ -75,6 +86,7 @@ fn encrypted_fan_speed_commands_and_same_value_error_recovery_match_native() {
         .find(|c| c["type"] == "29")
         .unwrap();
     let iid = speed["iid"].as_u64().unwrap();
+    device.phase.store(3, Ordering::SeqCst);
     for value in [0, 75] {
         let body = json!({"characteristics":[{"aid":aid,"iid":iid,"value":value}]}).to_string();
         assert_eq!(
@@ -88,7 +100,20 @@ fn encrypted_fan_speed_commands_and_same_value_error_recovery_match_native() {
             .0,
             204
         );
+        if value == 0 {
+            assert_eq!(
+                engine.state("77").unwrap().values["2.1"],
+                true,
+                "Home must receive the response before the slow device confirms power-off"
+            );
+        }
     }
+    device.phase.store(0, Ordering::SeqCst);
+    wait_for(|| {
+        engine.state("77").is_some_and(|state| {
+            state.values["2.1"] == true && device.writes.load(Ordering::SeqCst) == 3
+        })
+    });
     let commands = device.commands.lock().unwrap().clone();
     assert_eq!(
         commands.len(),
@@ -468,8 +493,116 @@ fn linux_service_reopens_a_paired_light_and_accepts_writes_with_the_old_controll
         payload.as_bytes(),
     );
     assert_eq!(status, 204);
-    assert_eq!(engine.refresh("77").unwrap().values["2.2"], 42);
+    wait_for(|| engine.state("77").unwrap().values["2.2"] == 42);
     bridge.stop();
+}
+
+#[test]
+fn refresh_setup_code_invalidates_old_exchange_and_reports_progress_without_credentials() {
+    use mijialan_homekit::{HomeResult, diagnostics};
+    let engine = Arc::new(Engine::demo());
+    let bridge = HomeKit::new(engine.clone());
+    let address = (Ipv4Addr::LOCALHOST, 0).into();
+    bridge.start_at(address, false).unwrap();
+    let old = bridge.info();
+    bridge.begin_setup_diagnostics();
+    let controller = ControllerKeypair::from_seed("test-diagnostics-controller".into(), [81; 32]);
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, old.port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let mut old_setup = PairSetupClient::new(&old.code, controller.clone()).unwrap();
+    let (_, m2) = request(&mut stream, "POST", "/pair-setup", &old_setup.start());
+    let m3 = send(old_setup.handle(&m2).unwrap());
+    bridge.refresh_setup_code().unwrap();
+    let current = bridge.info();
+    assert_ne!(old.code, current.code);
+    assert_ne!(old.uri, current.uri);
+    assert_eq!(
+        (old.port, &old.uri[16..]),
+        (current.port, &current.uri[16..])
+    );
+    let (_, rejected) = request(&mut stream, "POST", "/pair-setup", &m3);
+    assert_eq!(crypto::parse(&rejected).unwrap()[&7], [2]);
+    let accessory = pair_controller(&mut stream, &current.code, &controller);
+    let _ = verify(&mut stream, &controller, &accessory);
+    bridge.record_home_result(HomeResult::Added);
+    assert!(bridge.refresh_setup_code().is_err());
+    let report = diagnostics::report(
+        &engine,
+        &bridge,
+        &diagnostics::ApplicationInfo::default(),
+        std::time::SystemTime::now(),
+    );
+    let trace = &report["homeKitPairingDiagnostics"];
+    assert_eq!(trace["setupAttempt"]["homeResult"], "added");
+    assert_eq!(trace["recentHandshakes"].as_array().unwrap().len(), 7);
+    assert!(
+        trace["recentHandshakes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["outcome"] == "rejected")
+    );
+    let text = report.to_string();
+    for secret in [
+        old.code.as_str(),
+        current.code.as_str(),
+        &current.uri,
+        "test-diagnostics-controller",
+    ] {
+        assert!(!text.contains(secret));
+    }
+}
+
+#[test]
+fn paired_bridge_advances_state_number_and_keeps_it_on_restart() {
+    let engine = Arc::new(Engine::demo());
+    let bridge = HomeKit::new(engine.clone());
+    let address = (Ipv4Addr::LOCALHOST, 0).into();
+    let number = || {
+        bridge
+            .diagnostic_snapshot(&engine.states())
+            .state_number
+            .unwrap()
+    };
+    bridge.start_at(address, false).unwrap();
+    let before = number();
+    let info = bridge.info();
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, info.port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let controller = ControllerKeypair::from_seed("state-number-test".into(), [82; 32]);
+    let accessory = pair_controller(&mut stream, &info.code, &controller);
+    let _ = verify(&mut stream, &controller, &accessory);
+    drop(stream);
+    bridge.stop();
+    // A 0.2.0 installation already has this identity and controller, without a saved s#.
+    let stored = engine.store.vault.get("homekit:identity").unwrap().unwrap();
+    let mut identity: Value = serde_json::from_str(&stored).unwrap();
+    identity.as_object_mut().unwrap().remove("state_number");
+    engine
+        .store
+        .vault
+        .set("homekit:identity", Some(identity.to_string()))
+        .unwrap();
+    bridge.start_at(address, false).unwrap();
+    assert_eq!(number(), before);
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, bridge.info().port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let _ = verify(&mut stream, &controller, &accessory);
+    drop(stream);
+    let next = !engine.state("1").unwrap().values["2.1"].as_bool().unwrap();
+    engine.write("1", "2.1", json!(next)).unwrap();
+    wait_for(|| number() == before + 1);
+    bridge.stop();
+    bridge.start_at(address, false).unwrap();
+    assert_eq!(number(), before + 1);
+    assert!(bridge.info().paired);
+    assert_eq!(bridge.info().port, info.port);
 }
 
 #[test]
@@ -914,6 +1047,64 @@ fn paired_controller_keeps_service_ids_and_names_when_changing_home_selection() 
     bridge.refresh_accessories().unwrap();
     assert_eq!(read_database(&mut stream, &mut session), before);
     assert!(bridge.info().paired);
+}
+
+#[test]
+fn kettle_switches_use_miot_arguments_and_only_stop_the_active_menu() {
+    use mijialan_core::{Device, Specification, Store, Token, kettle};
+    use mijialan_homekit::mapping::{self, Layout, Transform};
+    let fixture = support::MiotDevice::with_readings(
+        kettle::MODEL,
+        Specification::bundled(kettle::MODEL).unwrap(),
+        [("2.1".into(), json!(1)), ("5.9".into(), json!(0))].into(),
+    );
+    let store = Arc::new(Store::memory());
+    store
+        .put(
+            Device {
+                did: "77".into(),
+                name: "Fixture Kettle".into(),
+                model: kettle::MODEL.into(),
+                host: Ipv4Addr::LOCALHOST,
+                room: String::new(),
+                port: fixture.port,
+                bridged: true,
+            },
+            &Token::parse(support::TOKEN).unwrap(),
+        )
+        .unwrap();
+    let engine = Engine::new(store, false);
+    engine.refresh("77").unwrap();
+    let database = mapping::build(&engine, &mut Layout::default());
+    let menus: std::collections::BTreeMap<_, _> = database
+        .bindings
+        .values()
+        .filter_map(|binding| {
+            let Transform::KettleMenu(menu) = binding.transform else {
+                return None;
+            };
+            Some((menu, binding))
+        })
+        .collect();
+    assert_eq!(
+        menus.keys().copied().collect::<Vec<_>>(),
+        (0..6).collect::<Vec<_>>()
+    );
+    for binding in menus.values() {
+        assert_eq!(binding.read(&engine, false), Ok(json!(false)));
+    }
+    assert_eq!(menus[&4].write(&engine, &json!(true)), Ok(()));
+    assert_eq!(menus[&4].read(&engine, false), Ok(json!(true)));
+    assert_eq!(menus[&3].read(&engine, false), Ok(json!(false)));
+    assert_eq!(menus[&3].write(&engine, &json!(false)), Ok(()));
+    assert_eq!(
+        fixture.commands.lock().unwrap().len(),
+        1,
+        "turning off another menu must not cancel cooking"
+    );
+    assert_eq!(menus[&4].write(&engine, &json!(false)), Ok(()));
+    assert_eq!(menus[&4].read(&engine, false), Ok(json!(false)));
+    assert_eq!(fixture.commands.lock().unwrap().len(), 2);
 }
 
 #[test]

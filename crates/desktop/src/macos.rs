@@ -6,6 +6,7 @@ pub use menu::{defer_panel_dismiss, is_tracking_menu, show_popup_menu};
 use gpui::Window;
 use objc2::{MainThreadMarker, msg_send, rc::Retained, runtime::AnyObject, sel};
 use objc2_app_kit::{
+    NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
     NSApplication, NSApplicationActivationPolicy, NSColor, NSEvent, NSEventMask, NSScreen, NSView,
     NSWindow, NSWindowStyleMask,
 };
@@ -116,6 +117,18 @@ fn native(window: &Window) -> Option<objc2::rc::Retained<NSWindow>> {
     // GPUI owns the NSView and this function only borrows it on the main thread.
     let view = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
     view.window()
+}
+
+pub fn set_appearance(window: &Window, preference: &str) {
+    if let Some(window) = native(window) {
+        // Both appearance names are available on the minimum macOS deployment target.
+        let appearance = match preference {
+            "light" => NSAppearance::appearanceNamed(unsafe { NSAppearanceNameAqua }),
+            "dark" => NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua }),
+            _ => None,
+        };
+        window.setAppearance(appearance.as_deref());
+    }
 }
 fn anchor(tray: Option<&tray_icon::TrayIcon>) -> Option<(NSRect, NSRect)> {
     let mtm = MainThreadMarker::new()?;

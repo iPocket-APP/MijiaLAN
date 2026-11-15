@@ -64,6 +64,9 @@ enum Command {
     Diagnostics {
         #[arg(long)]
         output: std::path::PathBuf,
+        /// Attempt a bounded LAN health check of offline devices.
+        #[arg(long)]
+        probe_offline: bool,
     },
     Remove {
         did: String,
@@ -90,14 +93,21 @@ fn run() -> anyhow::Result<()> {
     match args.command {
         #[cfg(target_os = "linux")]
         Command::Serve(_) => unreachable!(),
-        Command::Diagnostics { output } => {
+        Command::Diagnostics {
+            output,
+            probe_offline,
+        } => {
             engine.refresh_all();
             let bridge = HomeKit::new(engine.clone());
-            let data = mijialan_homekit::diagnostics::report(
+            let data = mijialan_homekit::diagnostics::report_with_checks(
                 &engine,
                 &bridge,
                 &mijialan_homekit::diagnostics::ApplicationInfo::default(),
                 std::time::SystemTime::now(),
+                mijialan_homekit::diagnostics::Checks {
+                    probe_offline,
+                    browse_bonjour: false,
+                },
             );
             let path = mijialan_homekit::diagnostics::write_report(&output, &data)?;
             println!("{}", path.display());

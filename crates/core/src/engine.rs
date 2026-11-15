@@ -1,11 +1,11 @@
 use crate::{
-    Device, Error, MiioClient, Property, Result, Specification, Store, Token, legacy::Profile,
-    spec, store::Config,
+    Device, Error, MiioClient, Property, Result, Specification, Store, Token,
+    client::ClientDiagnostics, legacy::Profile, spec, store::Config,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     net::Ipv4Addr,
     sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant, SystemTime},
@@ -30,6 +30,23 @@ pub struct ProbeDiagnostics {
     pub retry_failures: u32,
     pub next_retry_at: Option<SystemTime>,
     pub active_probes: usize,
+    pub lan: Option<ClientDiagnostics>,
+}
+
+#[derive(Clone, Debug)]
+pub struct OfflineProbe {
+    pub hello: bool,
+    pub authenticated_reply: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CommandRecord {
+    pub at: SystemTime,
+    pub method: &'static str,
+    pub address: String,
+    pub outcome: &'static str,
+    pub error: Option<String>,
 }
 
 pub struct Engine {
@@ -38,6 +55,7 @@ pub struct Engine {
     states: RwLock<BTreeMap<String, DeviceState>>,
     probe_requests: Mutex<BTreeSet<String>>,
     probes: Mutex<BTreeMap<String, ProbeDiagnostics>>,
+    commands: Mutex<BTreeMap<String, VecDeque<CommandRecord>>>,
     demo: bool,
 }
 
@@ -79,6 +97,7 @@ impl Engine {
             states: RwLock::new(states),
             probe_requests: Mutex::new(BTreeSet::new()),
             probes: Mutex::new(BTreeMap::new()),
+            commands: Mutex::new(BTreeMap::new()),
             demo,
         }
     }
@@ -227,6 +246,21 @@ impl Engine {
     pub fn state(&self, did: &str) -> Option<DeviceState> {
         self.states.read().unwrap().get(did).cloned()
     }
+    pub fn is_online(&self, did: &str) -> bool {
+        self.states
+            .read()
+            .unwrap()
+            .get(did)
+            .is_some_and(|state| state.online)
+    }
+    pub fn state_revisions(&self) -> BTreeMap<String, u64> {
+        self.states
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(did, state)| (did.clone(), state.revision))
+            .collect()
+    }
     fn device(&self, did: &str) -> Result<Device> {
         self.store
             .config()
@@ -299,8 +333,9 @@ impl Engine {
         self.store.put(device.clone(), token)?;
         self.clients.lock().unwrap().remove(&device.did);
         let spec = self.load_spec(&device.model, false).unwrap_or_default();
+        let did = device.did.clone();
         self.states.write().unwrap().insert(
-            device.did.clone(),
+            did.clone(),
             DeviceState {
                 device,
                 spec,
@@ -311,6 +346,7 @@ impl Engine {
                 revision: 0,
             },
         );
+        self.probe_requests.lock().unwrap().insert(did);
         Ok(())
     }
     fn load_spec(&self, model: &str, network: bool) -> Result<Specification> {
@@ -351,6 +387,87 @@ impl Engine {
     pub fn probe_diagnostics(&self) -> BTreeMap<String, ProbeDiagnostics> {
         self.probes.lock().unwrap().clone()
     }
+
+    pub fn command_diagnostics(&self) -> BTreeMap<String, VecDeque<CommandRecord>> {
+        self.commands.lock().unwrap().clone()
+    }
+
+    fn record_command(
+        &self,
+        did: &str,
+        method: &'static str,
+        address: String,
+        result: &Result<()>,
+        success: &'static str,
+    ) {
+        if !self.states.read().unwrap().contains_key(did) {
+            return;
+        }
+        let mut commands = self.commands.lock().unwrap();
+        let records = commands.entry(did.into()).or_default();
+        if records.len() == 20 {
+            records.pop_front();
+        }
+        records.push_back(CommandRecord {
+            at: SystemTime::now(),
+            method,
+            address,
+            outcome: if result.is_ok() { success } else { "failed" },
+            error: result.as_ref().err().map(ToString::to_string),
+        });
+    }
+
+    /// A short independent probe does not alter the polling schedule or cached readings.
+    pub fn probe_offline(&self) -> BTreeMap<String, OfflineProbe> {
+        if self.demo {
+            return BTreeMap::new();
+        }
+        let devices: Vec<_> = self
+            .states()
+            .into_iter()
+            .filter(|state| !state.online)
+            .map(|state| state.device)
+            .collect();
+        let mut results = BTreeMap::new();
+        for devices in devices.chunks(8) {
+            std::thread::scope(|scope| {
+                let workers: Vec<_> = devices
+                    .iter()
+                    .map(|device| scope.spawn(|| (device.did.clone(), self.probe_device(device))))
+                    .collect();
+                results.extend(workers.into_iter().filter_map(|worker| worker.join().ok()));
+            });
+        }
+        results
+    }
+
+    fn probe_device(&self, device: &Device) -> OfflineProbe {
+        let mut probe = OfflineProbe {
+            hello: false,
+            authenticated_reply: false,
+            error: None,
+        };
+        let result = (|| {
+            let token = self.store.token(&device.did)?;
+            let mut client = MiioClient::with_port(device.host, device.port, token);
+            client.set_timeout(Duration::from_millis(750));
+            client.handshake()?;
+            probe.hello = true;
+            let result = client.call_with_attempts("miIO.info", json!([]), 1);
+            probe.authenticated_reply = client.diagnostics().last_authenticated_reply.is_some();
+            result.map(|_| ())
+        })();
+        probe.error = result.err().map(|error| error.to_string());
+        probe
+    }
+
+    pub fn retry(&self, did: &str) -> Result<DeviceState> {
+        let client = self.clients.lock().unwrap().get(did).cloned();
+        if let Some(client) = client {
+            client.lock().unwrap().reset_read_backoff();
+        }
+        self.refresh(did)
+    }
     fn record_retry_schedule(&self, did: &str, failures: u32, delay: Duration) {
         let mut probes = self.probes.lock().unwrap();
         // A removed device may still have a completed worker waiting for the poller.
@@ -390,30 +507,24 @@ impl Engine {
                     .filter(|p| p.readable)
                     .map(|p| (p.siid, p.piid))
                     .collect();
-                let response = client.get_properties(did, &props)?;
+                let response = client.read_properties(did, &props)?;
                 let mut values = BTreeMap::new();
                 for p in &spec.properties {
                     if p.readable {
-                        errors.insert(p.key(), "设备未返回此属性".into());
+                        let reason = response
+                            .failures
+                            .get(&(p.siid, p.piid))
+                            .cloned()
+                            .unwrap_or_else(|| "设备未返回此属性".into());
+                        errors.insert(p.key(), reason);
                     }
                 }
-                for item in response {
-                    let Some(siid) = item["siid"].as_u64().and_then(|id| u32::try_from(id).ok())
-                    else {
-                        continue;
-                    };
-                    let Some(piid) = item["piid"].as_u64().and_then(|id| u32::try_from(id).ok())
-                    else {
-                        continue;
-                    };
-                    if !props.contains(&(siid, piid)) {
-                        continue;
-                    }
-                    let key = format!("{siid}.{piid}");
+                for item in response.items {
+                    let key = format!("{}.{}", item["siid"], item["piid"]);
                     if item["code"].as_i64() == Some(0) && item.get("value").is_some() {
                         values.insert(key.clone(), item["value"].clone());
                         errors.remove(&key);
-                    } else {
+                    } else if !values.contains_key(&key) {
                         errors.insert(key, format!("设备返回 {}", item["code"]));
                     }
                 }
@@ -433,6 +544,12 @@ impl Engine {
                 revision,
             })
         })();
+        self.probes
+            .lock()
+            .unwrap()
+            .entry(did.into())
+            .or_default()
+            .lan = Some(client.diagnostics());
         match result {
             Ok(mut state) => {
                 let mut states = self.states.write().unwrap();
@@ -478,7 +595,9 @@ impl Engine {
         };
         let mut client = client.as_ref().map(|c| c.lock().unwrap());
         if let Some(client) = client.as_mut() {
-            send_property(client, &state.device, property, &value)?;
+            let result = send_property(client, &state.device, property, &value);
+            self.record_command(did, "property", key.into(), &result, "accepted");
+            result?;
         }
         if let Some(state) = self.states.write().unwrap().get_mut(did) {
             state.values.insert(key.into(), value);
@@ -533,16 +652,16 @@ impl Engine {
             .collect::<Result<Vec<_>>>()?;
 
         let mut readings = BTreeMap::new();
-        let result = (|| {
-            for (property, value) in plan {
-                let key = property.key();
-                let Some(client) = client.as_deref_mut() else {
-                    readings.insert(key, value.clone());
-                    continue;
-                };
+        let result = plan.into_iter().try_for_each(|(property, value)| {
+            let key = property.key();
+            let Some(client) = client.as_deref_mut() else {
+                readings.insert(key, value.clone());
+                return Ok(());
+            };
+            let result = (|| {
                 send_property(client, &device, property, value)?;
                 if !property.readable {
-                    continue;
+                    return Ok(());
                 }
                 let mut confirmed = false;
                 for attempt in 0..3 {
@@ -564,9 +683,16 @@ impl Engine {
                 if !confirmed {
                     return Err(Error::Response("设备已接受指令，但尚未确认状态变化".into()));
                 }
-            }
-            Ok(())
-        })();
+                Ok(())
+            })();
+            let success = if property.readable {
+                "confirmed"
+            } else {
+                "accepted"
+            };
+            self.record_command(did, "property", key, &result, success);
+            result
+        });
         if !readings.is_empty() {
             let mut states = self.states.write().unwrap();
             let current = states
@@ -586,6 +712,7 @@ impl Engine {
         self.clients.lock().unwrap().remove(did);
         self.states.write().unwrap().remove(did);
         self.probes.lock().unwrap().remove(did);
+        self.commands.lock().unwrap().remove(did);
         Ok(())
     }
     pub fn action(&self, did: &str, siid: u32, aiid: u32, inputs: Vec<Value>) -> Result<()> {
@@ -604,37 +731,47 @@ impl Engine {
         for (property, value) in action.inputs.iter().zip(&inputs) {
             property.validate(value)?;
         }
+        if state.device.model == crate::kettle::MODEL && siid == 2 {
+            match (aiid, inputs.as_slice()) {
+                (1, [menu]) => {
+                    let menu = menu
+                        .as_u64()
+                        .filter(|menu| *menu < 6)
+                        .ok_or_else(|| Error::Validation("养生壶菜单无效".into()))?;
+                    return self.run_kettle(&state, crate::kettle::Command::Start(menu as u8));
+                }
+                (2, []) => return self.run_kettle(&state, crate::kettle::Command::Stop(None)),
+                _ => {}
+            }
+        }
         if self.demo {
             return Ok(());
         }
         let client = self.client(&state.device)?;
+        let params: Vec<_> = action
+            .inputs
+            .iter()
+            .zip(inputs)
+            .map(|(property, value)| (property.piid, value))
+            .collect();
         let result = {
             let mut client = client.lock().unwrap();
             if let Some(profile) = Profile::for_model(&state.device.model) {
                 profile.invoke(&mut client, siid, aiid)
             } else {
-                client
-                    .call(
-                        "action",
-                        json!({"did":did,"siid":siid,"aiid":aiid,"in":inputs}),
-                    )
-                    .and_then(|result| match result["code"].as_i64() {
-                        Some(0 | 1) => Ok(()),
-                        Some(code) => Err(Error::Device {
-                            code,
-                            message: "设备拒绝动作".into(),
-                        }),
-                        None => Err(Error::Response("动作响应缺少返回码".into())),
-                    })
+                client.action(did, siid, aiid, &params)
             }
         };
         if state.spec.kind != "vacuum" {
+            self.record_command(did, "action", format!("{siid}.{aiid}"), &result, "accepted");
             return result;
         }
         if let Err(error) = result {
             // An action with an ambiguous reply is never sent again.
             let _ = self.refresh(did);
-            return Err(error);
+            let result = Err(error);
+            self.record_command(did, "action", format!("{siid}.{aiid}"), &result, "accepted");
+            return result;
         }
         let status = crate::vacuum::status_property(&state.spec);
         let before = status.and_then(|p| {
@@ -657,10 +794,138 @@ impl Engine {
                     .and_then(|v| crate::vacuum::status_description(p, v))
             });
             if crate::vacuum::confirms(&action.name, description, before) {
+                self.record_command(
+                    did,
+                    "action",
+                    format!("{siid}.{aiid}"),
+                    &Ok(()),
+                    "confirmed",
+                );
                 return Ok(());
             }
         }
-        Err(Error::Response("设备已接受动作，但尚未确认状态变化".into()))
+        let result = Err(Error::Response("设备已接受动作，但尚未确认状态变化".into()));
+        self.record_command(did, "action", format!("{siid}.{aiid}"), &result, "accepted");
+        result
+    }
+
+    pub fn set_kettle_menu(&self, did: &str, menu: u8, on: bool) -> Result<()> {
+        let state = self
+            .state(did)
+            .filter(|state| state.device.model == crate::kettle::MODEL && state.online)
+            .ok_or_else(|| Error::Validation("养生壶离线或型号不支持".into()))?;
+        if menu >= 6 {
+            return Err(Error::Validation("养生壶菜单无效".into()));
+        }
+        let command = if on {
+            crate::kettle::Command::Start(menu)
+        } else {
+            crate::kettle::Command::Stop(Some(menu))
+        };
+        self.run_kettle(&state, command)
+    }
+
+    fn run_kettle(&self, state: &DeviceState, command: crate::kettle::Command) -> Result<()> {
+        use crate::kettle::{Command, Reading};
+        let did = &state.device.did;
+        let unavailable = || Error::Response("无法读取养生壶状态".into());
+        if self.demo {
+            let reading = Reading::from_state(state).ok_or_else(unavailable)?;
+            if command.needed(reading)?
+                && let Some(state) = self.states.write().unwrap().get_mut(did)
+            {
+                let status = if let Command::Start(menu) = command {
+                    state
+                        .values
+                        .insert(crate::kettle::MENU_ID.into(), json!(menu + 1));
+                    state
+                        .values
+                        .insert(crate::kettle::RECIPE_TYPE.into(), json!(0));
+                    2
+                } else {
+                    1
+                };
+                state
+                    .values
+                    .insert(crate::kettle::STATUS.into(), json!(status));
+                state.revision += 1;
+            }
+            return Ok(());
+        }
+        let client = self.client(&state.device)?;
+        let mut client = client.lock().unwrap();
+        let (action, inputs) = command.action();
+        let result = (|| {
+            let reading = self
+                .read_kettle(&mut client, &state.device)?
+                .ok_or_else(unavailable)?;
+            if !command.needed(reading)? {
+                return Ok(());
+            }
+            client.action(did, 2, action, &inputs)?;
+            for attempt in 0..3 {
+                if attempt > 0 {
+                    std::thread::sleep(Duration::from_millis(350));
+                }
+                if self
+                    .read_kettle(&mut client, &state.device)?
+                    .is_some_and(|reading| command.confirmed(reading))
+                {
+                    return Ok(());
+                }
+            }
+            Err(Error::Response(
+                "养生壶已接受指令，但尚未确认菜单状态".into(),
+            ))
+        })();
+        self.record_command(did, "action", format!("2.{action}"), &result, "confirmed");
+        result
+    }
+
+    fn read_kettle(
+        &self,
+        client: &mut MiioClient,
+        device: &Device,
+    ) -> Result<Option<crate::kettle::Reading>> {
+        use crate::kettle::{READINGS, Reading};
+        let batch = client.read_properties(&device.did, &READINGS)?;
+        let values: BTreeMap<_, _> = batch
+            .items
+            .into_iter()
+            .filter(|item| item["code"] == 0 && item.get("value").is_some())
+            .map(|item| {
+                (
+                    format!("{}.{}", item["siid"], item["piid"]),
+                    item["value"].clone(),
+                )
+            })
+            .collect();
+        let reading = Reading::from_values(&values);
+        if let Some(state) = self
+            .states
+            .write()
+            .unwrap()
+            .get_mut(&device.did)
+            .filter(|state| {
+                state.device.model == device.model
+                    && state.device.host == device.host
+                    && state.device.port == device.port
+            })
+        {
+            for (siid, piid) in READINGS {
+                let key = format!("{siid}.{piid}");
+                if let Some(value) = values.get(&key) {
+                    state.errors.remove(&key);
+                    state.values.insert(key, value.clone());
+                } else {
+                    state.errors.insert(key, "设备未返回此属性".into());
+                }
+            }
+            state.revision += 1;
+        } else {
+            return Err(Error::Validation("设备配置已变更".into()));
+        }
+        Ok(reading)
     }
     pub fn update_discovered_hosts(
         &self,

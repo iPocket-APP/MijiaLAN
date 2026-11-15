@@ -28,6 +28,7 @@ use std::{
 };
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod compact;
+mod setup;
 
 fn homekit_unavailable(state: Option<&DeviceState>) -> String {
     t(if state.is_none_or(|state| state.spec.kind.is_empty()) {
@@ -66,7 +67,9 @@ enum Page {
     Add,
     Discover,
     Login,
+    Guide,
     Bridge,
+    PairingDiagnostics,
     Settings,
     #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
     DevicesManagement,
@@ -79,6 +82,8 @@ pub struct UiSession {
     pending: Option<Page>,
     home_expanded: BTreeSet<String>,
     login: Arc<mijialan_core::import_job::ImportJob>,
+    guide_child: Option<Page>,
+    probe_offline: bool,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     compact: compact::PanelSession,
 }
@@ -92,12 +97,32 @@ impl Default for UiSession {
             pending: None,
             home_expanded: BTreeSet::new(),
             login: Arc::new(mijialan_core::import_job::ImportJob::default()),
+            guide_child: None,
+            probe_offline: false,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             compact: compact::PanelSession::default(),
         }
     }
 }
 impl UiSession {
+    pub fn new(engine: Arc<Engine>, cx: &App) -> Self {
+        let config = engine.store.config();
+        let mut session = Self::default();
+        if !engine.is_demo() && config.devices.is_empty() && !config.setup_guide_dismissed {
+            session.page = Page::Guide;
+        }
+        if !engine.is_demo() {
+            let login = session.login.clone();
+            cx.background_executor()
+                .spawn(async move {
+                    if let Err(error) = login.load_remembered(&engine) {
+                        eprintln!("Could not load remembered Xiaomi Home login: {error}");
+                    }
+                })
+                .detach();
+        }
+        session
+    }
     pub fn panel_height(&self) -> f32 {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
@@ -160,6 +185,19 @@ impl Dashboard {
             reason = "Only macOS installs a native popup activation observer"
         )]
         let mut subscriptions = Vec::new();
+        let appearance = if engine.is_demo() {
+            std::env::var("MIJIALAN_UI_THEME").unwrap_or_else(|_| engine.store.config().appearance)
+        } else {
+            engine.store.config().appearance
+        };
+        Self::apply_appearance(&appearance, window, cx);
+        subscriptions.push(cx.observe_window_appearance(window, |this, window, cx| {
+            let follow_system = this.engine.store.config().appearance.is_empty()
+                && !(this.engine.is_demo() && std::env::var_os("MIJIALAN_UI_THEME").is_some());
+            if follow_system {
+                Theme::sync_system_appearance(Some(window), cx);
+            }
+        }));
         #[cfg(target_os = "macos")]
         subscriptions.push(cx.observe_window_activation(window, |_, window, cx| {
             crate::trace_panel(if window.is_window_active() {
@@ -241,8 +279,10 @@ impl Dashboard {
     fn go(&mut self, page: Page, cx: &mut Context<Self>) {
         if self.page == Page::Login && page != Page::Login {
             self.qr = None;
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
             self.session.borrow().login.cancel();
+        }
+        if page != self.page && page != Page::PairingDiagnostics && page != Page::Bridge {
+            self.session.borrow_mut().guide_child = None;
         }
         self.page = page;
         self.error = false;
@@ -393,6 +433,35 @@ impl Dashboard {
         self.status = "正在获取二维码…".into();
         self.error = false;
         cx.notify();
+    }
+
+    fn apply_appearance(preference: &str, window: &mut Window, cx: &mut App) {
+        #[cfg(target_os = "macos")]
+        crate::macos::set_appearance(window, preference);
+        let mode = match preference {
+            "light" => ThemeMode::Light,
+            "dark" => ThemeMode::Dark,
+            #[cfg(target_os = "macos")]
+            _ => cx.window_appearance().into(),
+            #[cfg(not(target_os = "macos"))]
+            _ => window.appearance().into(),
+        };
+        Theme::change(mode, Some(window), cx);
+    }
+
+    fn change_appearance(
+        &mut self,
+        preference: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        Self::apply_appearance(&preference, window, cx);
+        self.run(cx, move |engine| {
+            engine
+                .store
+                .update(|config| config.appearance = preference)?;
+            Ok(t("外观设置已保存"))
+        });
     }
     fn heading(&self, title: &str, subtitle: &str, cx: &App) -> Div {
         div()
@@ -1039,6 +1108,9 @@ impl Dashboard {
         content.into_any_element()
     }
     fn login_page(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.session.borrow().login.can_remember() {
+            return self.import_complete(cx).into_any_element();
+        }
         let mut regions = div().flex().flex_wrap().gap_2();
         for region in cloud::regions() {
             let selected = self.region == *region;
@@ -1108,11 +1180,12 @@ impl Dashboard {
                         })),
                 )
             })
+            .child(self.saved_login_controls(cx))
             .into_any_element()
     }
     fn bridge_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let info = self.bridge.info();
-        let enabled = info.running;
+        let enabled = self.engine.store.config().bridge_enabled;
         let mut content = div()
             .flex()
             .flex_col()
@@ -1136,24 +1209,7 @@ impl Dashboard {
                             .checked(enabled)
                             .disabled(self.busy > 0 || self.engine.is_demo())
                             .on_click(cx.listener(|this, on: &bool, _, cx| {
-                                let on = *on;
-                                let bridge = this.bridge.clone();
-                                this.run(cx, move |engine| {
-                                    if on {
-                                        bridge.start().map_err(|e| {
-                                            mijialan_core::Error::Validation(e.to_string())
-                                        })?;
-                                    } else {
-                                        bridge.stop();
-                                    }
-                                    engine.store.update(|c| c.bridge_enabled = on)?;
-                                    Ok(if on {
-                                        "HomeKit 桥已启动"
-                                    } else {
-                                        "HomeKit 桥已停止"
-                                    }
-                                    .into())
-                                });
+                                this.set_bridge_enabled(*on, cx);
                             })),
                     ),
             );
@@ -1176,10 +1232,13 @@ impl Dashboard {
                         })),
                 ),
         );
-        if let Some(error) = info.error {
-            content = content.child(div().text_color(cx.theme().danger).child(error));
+        if let Some(error) = &info.error {
+            content = content.child(div().text_color(cx.theme().danger).child(error.clone()));
         }
-        if enabled {
+        if enabled && !info.running && info.error.is_some() {
+            content = content.child(self.retry_bridge_button(cx));
+        }
+        if info.running {
             self.qr_counter += 1;
             let path = self.assets.qr(&info.uri, self.qr_counter);
             content = content.child(div().child(format!(
@@ -1193,30 +1252,33 @@ impl Dashboard {
                 info.port
             )));
             if !info.paired {
-                content =
-                    content
-                        .when_some(path, |d, path| {
-                            d.child(
-                                div()
-                                    .w(px(240.))
-                                    .h(px(240.))
-                                    .p_2()
-                                    .bg(rgb(0xffffff))
-                                    .rounded_xl()
-                                    .child(svg().path(path).size_full().text_color(rgb(0x000000))),
-                            )
-                        })
-                        .child(
+                content = content
+                    .when_some(path, |d, path| {
+                        d.child(
                             div()
-                                .text_2xl()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(info.code),
+                                .w(px(240.))
+                                .h(px(240.))
+                                .p_2()
+                                .bg(rgb(0xffffff))
+                                .rounded_xl()
+                                .child(svg().path(path).size_full().text_color(rgb(0x000000))),
                         )
-                        .child(div().text_sm().child(
-                            "在 iPhone「家庭」中添加配件并扫描二维码，确认添加未认证配件。",
-                        ));
+                    })
+                    .child(
+                        div()
+                            .text_2xl()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(info.code),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .child("在 iPhone「家庭」中添加配件并扫描二维码，确认添加未认证配件。"),
+                    )
+                    .child(self.refresh_pairing_button(cx));
             }
         }
+        content = content.child(self.pairing_diagnostics_button(cx));
         let config = self.engine.store.config();
         for state in self.engine.states() {
             let did = state.device.did.clone();
@@ -1398,9 +1460,10 @@ impl Dashboard {
             )
     }
     fn settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        let config = self.engine.store.config();
         let mut languages = div().flex().gap_2();
         for (code, label) in [("", "跟随系统"), ("zh-CN", "简体中文"), ("en", "English")] {
-            let selected = self.engine.store.config().language == code;
+            let selected = config.language == code;
             languages = languages.child(
                 Button::new(SharedString::from(format!("lang:{code}")))
                     .label(t(label))
@@ -1420,6 +1483,18 @@ impl Dashboard {
                     })),
             );
         }
+        let mut appearance = div().flex().gap_2();
+        for (preference, title) in [("", "自动"), ("light", "浅色"), ("dark", "深色")] {
+            appearance = appearance.child(
+                Button::new(SharedString::from(format!("appearance:{preference}")))
+                    .label(t(title))
+                    .when(config.appearance == preference, |button| button.primary())
+                    .disabled(self.busy > 0)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.change_appearance(preference.into(), window, cx);
+                    })),
+            );
+        }
         div()
             .flex()
             .flex_col()
@@ -1430,21 +1505,9 @@ impl Dashboard {
                 cx,
             ))
             .child(languages)
-            .child(
-                Button::new("theme")
-                    .label(t("切换浅色 / 深色外观"))
-                    .on_click(cx.listener(|_, _, window, cx| {
-                        let mode = if cx.theme().mode.is_dark() {
-                            ThemeMode::Light
-                        } else {
-                            ThemeMode::Dark
-                        };
-                        Theme::change(mode, Some(window), cx);
-                    })),
-            )
-            .child(div().text_sm().child(t(
-                "凭据保存在本项目独立的系统凭据存储中。扫码登录会话不持久化。",
-            )))
+            .child(appearance)
+            .child(self.setup_guide_button(cx))
+            .child(self.saved_login_controls(cx))
             .when(!cfg!(target_os = "linux"), |view| {
                 view.child(
                     Button::new("desktop-check-updates")
@@ -1670,16 +1733,18 @@ impl Render for Dashboard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pending = self.session.borrow_mut().pending.take();
         if let Some(page) = pending {
-            self.page = page;
+            self.go(page, cx);
         }
-        if let Some(result) = self.session.borrow().login.take_finished() {
+        let login = self.session.borrow().login.clone();
+        if let Some(result) = login.take_finished() {
             self.qr = None;
             match result {
                 Ok(message) => {
                     self.status = message;
                     self.error = false;
-                    if self.page == Page::Login {
-                        self.page = Page::Devices;
+                    if self.page == Page::Login && !login.can_remember() {
+                        self.page = self.guide_back(Page::Devices);
+                        self.session.borrow_mut().guide_child = None;
                     }
                 }
                 Err(error) => {
@@ -1702,6 +1767,7 @@ impl Render for Dashboard {
                 }
             }
             mijialan_core::import_job::Progress::Importing if self.page == Page::Login => {
+                self.qr = None;
                 self.status = "正在导入设备…".into();
             }
             _ => {}
@@ -1719,7 +1785,9 @@ impl Render for Dashboard {
                 Page::Add => self.add_page(cx),
                 Page::Discover => self.discover_page(cx),
                 Page::Login => self.login_page(cx),
+                Page::Guide => self.setup_guide(false, cx),
                 Page::Bridge => self.bridge_page(cx),
+                Page::PairingDiagnostics => self.pairing_diagnostics(false, cx),
                 Page::Settings => self.settings(cx),
                 Page::DevicesManagement => self.devices(cx),
             };
@@ -1809,6 +1877,16 @@ impl Render for Dashboard {
                                 .min_h_0()
                                 .overflow_y_scroll()
                                 .p_8()
+                                .when(self.guide_back(Page::Devices) == Page::Guide, |view| {
+                                    view.child(
+                                        Button::new("back-to-setup-guide")
+                                            .label(t("返回引导教程"))
+                                            .mb_4()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.go(Page::Guide, cx)
+                                            })),
+                                    )
+                                })
                                 .child(content),
                         )
                         .child(
