@@ -210,7 +210,7 @@ public actor MiCloudClient: MiCloudAPI {
         if statusCode == 401 || statusCode == 403 { throw MiCloudError.sessionExpired }
         // Errors come back as plain JSON; successes are base64(RC4(json)).
         if let plain = try? JSONDecoder().decode(JSONValue.self, from: body), case .object = plain {
-            return try unwrapResult(plain)
+            return try unwrapResult(plain, statusCode: statusCode)
         }
         guard statusCode == 200 else { throw MiCloudError.http(statusCode) }
         guard let text = String(data: body, encoding: .utf8),
@@ -218,22 +218,25 @@ public actor MiCloudClient: MiCloudAPI {
               let json = try? JSONDecoder().decode(JSONValue.self, from: decrypted) else {
             throw MiCloudError.badResponse("无法解密")
         }
-        return try unwrapResult(json)
+        return try unwrapResult(json, statusCode: statusCode)
     }
 
-    static func unwrapResult(_ json: JSONValue) throws -> JSONValue {
+    private static func unwrapResult(_ json: JSONValue, statusCode: Int) throws -> JSONValue {
         let code = json["code"]?.intValue ?? 0
         let message = json["message"]?.stringValue ?? json["desc"]?.stringValue ?? ""
-        if code == 0 { return json["result"] ?? .null }
-        let lower = message.lowercased()
+        let lower = message.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // Xiaomi can return code 0 with SERVICETOKEN_EXPIRED, even on HTTP 426.
+        let mentionsLogin = lower.contains("token") || lower.contains("session") || lower.contains("login")
+        let expiredLogin = (mentionsLogin && lower.contains("expired")) || (statusCode == 426 && lower == "expired")
         if code == 2 || code == 3
+            || expiredLogin
             || lower.contains("auth err")
-            || lower.contains("servicetoken_expired")
-            || lower.contains("token expired")
             || lower.contains("invalid signature") {
             throw MiCloudError.sessionExpired
         }
-        throw MiCloudError.api(code: code, message: message)
+        guard code == 0 else { throw MiCloudError.api(code: code, message: message) }
+        guard statusCode == 200 else { throw MiCloudError.http(statusCode) }
+        return json["result"] ?? .null
     }
 
     // MARK: Endpoints

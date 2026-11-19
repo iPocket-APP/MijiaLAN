@@ -20,7 +20,7 @@ final class AppModel: ObservableObject {
     enum ImportState: Equatable {
         case idle
         case loadingQR
-        case waitingForScan(QRLoginTicket, expiresAt: Date)
+        case waitingForScan(QRLoginTicket, expiresAt: Date, renewingLogin: Bool)
         case fetching
         case completed(importedCount: Int, summary: String)
         case needsScan
@@ -293,24 +293,30 @@ final class AppModel: ObservableObject {
             do {
                 try Task.checkCancellation()
                 let transport = cloudTransport ?? URLSessionMiTransport()
-                let session: MiSession
                 if let savedSession {
-                    session = savedSession
-                } else {
-                    let login = MiAccountLogin(transport: transport, redirectlessTransport: cloudTransport, region: region)
-                    let ticket = try await login.start()
-                    try Task.checkCancellation()
-                    importState = .waitingForScan(ticket, expiresAt: Date().addingTimeInterval(ticket.timeout))
-                    session = try await login.waitForScan(ticket)
-                    try Task.checkCancellation()
-                    importState = .fetching
+                    do {
+                        let result = try await CloudTokenImport.fetch(session: savedSession, transport: transport, tryOtherRegions: false)
+                        try finishImport(result, scannedSession: nil)
+                        return
+                    } catch MiCloudError.sessionExpired {
+                        try Task.checkCancellation()
+                        forgetRememberedLogin()
+                        rememberedSessionExpired = rememberedSession != nil
+                        importState = .loadingQR
+                    }
                 }
+                let login = MiAccountLogin(transport: transport, redirectlessTransport: cloudTransport, region: region)
+                let ticket = try await login.start()
+                try Task.checkCancellation()
+                importState = .waitingForScan(ticket, expiresAt: Date().addingTimeInterval(ticket.timeout), renewingLogin: savedSession != nil)
+                let session = try await login.waitForScan(ticket)
+                try Task.checkCancellation()
+                importState = .fetching
                 let result = try await CloudTokenImport.fetch(session: session, transport: transport, tryOtherRegions: savedSession == nil)
-                try finishImport(result, scannedSession: savedSession == nil ? session : nil)
-            } catch MiCloudError.sessionExpired where savedSession != nil {
+                try finishImport(result, scannedSession: session)
+            } catch MiCloudError.sessionExpired {
                 guard !Task.isCancelled else { return }
-                forgetRememberedLogin()
-                rememberedSessionExpired = rememberedSession != nil
+                // A newly scanned session was also rejected. Let the user retry.
                 importState = .needsScan
             } catch is CancellationError {
                 return

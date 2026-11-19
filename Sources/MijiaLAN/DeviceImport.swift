@@ -40,7 +40,10 @@ public enum CloudTokenImport {
                     "get_split_device": .bool(false),
                     "support_smart_home": .bool(true),
                 ]))
-                guard !(list["list"]?.arrayValue ?? []).isEmpty else { continue }
+                guard let entries = list["list"]?.arrayValue else {
+                    throw MiCloudError.badResponse(L10n.tr("缺少设备清单", "Missing device list"))
+                }
+                guard !entries.isEmpty else { continue }
                 let rooms = (try? await client.homeRooms()) ?? []
                 return parse(list, rooms: rooms, region: region)
             } catch MiCloudError.sessionExpired {
