@@ -8,8 +8,11 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct RememberedMijiaLoginTests {
+    private let suite = "test.mijialan.remembered-login.\(UUID().uuidString)"
+
     @Test("A QR login is saved only on request and survives recreating the app model")
     func consentAndRelaunch() async throws {
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
         let storage = SecretVault.Storage.memory()
         let transport = ImportTransport()
         let first = makeModel(storage, transport)
@@ -69,6 +72,7 @@ struct RememberedMijiaLoginTests {
 
     @Test("A network timeout can be retried, and an expired session returns to QR sign-in")
     func timeoutAndExpiration() async throws {
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
         let storage = SecretVault.Storage.memory()
         let session = MiSession(userId: "123456789", cUserId: "fixture", ssecurity: "AAAAAAAAAAAAAAAAAAAAAA==",
                                 serviceToken: "fixture-session", region: "de")
@@ -106,7 +110,8 @@ struct RememberedMijiaLoginTests {
     }
 
     private func makeModel(_ storage: SecretVault.Storage, _ transport: ImportTransport) -> AppModel {
-        AppModel(environment: ["MIJIALAN_UI_PREVIEW": "1"], secretStorage: storage, cloudTransport: transport)
+        AppModel(environment: ["MIJIALAN_UI_PREVIEW": "1"], secretStorage: storage, cloudTransport: transport,
+                 ephemeralDefaultsSuite: suite)
     }
 
     private func expectCompleted(_ model: AppModel) {
@@ -119,11 +124,17 @@ struct RememberedMijiaLoginTests {
     }
 }
 
-private actor ImportTransport: MiHTTPTransport {
+actor ImportTransport: MiHTTPTransport {
     enum DeviceListResponse { case valid, timeout, expired }
 
     private(set) var requests: [URL] = []
     private var deviceListResponse = DeviceListResponse.valid
+
+    private let devices: [JSONValue]
+
+    init(devices: [JSONValue] = [.object(["did": .string("blt.fixture"), "model": .string("fixture.sensor"), "name": .string("Fixture Sensor")])]) {
+        self.devices = devices
+    }
 
     func clearRequests() { requests.removeAll() }
     func setDeviceListResponse(_ response: DeviceListResponse) { deviceListResponse = response }
@@ -156,10 +167,8 @@ private actor ImportTransport: MiHTTPTransport {
                 body = "{}"
             case .valid:
                 status = 200
-                // The fixture is skipped as a Bluetooth device, so import needs no external MIoT specification.
-                body = url.host == "de.api.io.mi.com"
-                    ? #"{"code":0,"result":{"list":[{"did":"blt.fixture","model":"fixture.sensor","name":"Fixture Sensor"}]}}"#
-                    : #"{"code":0,"result":{"list":[]}}"#
+                let list = url.host == "de.api.io.mi.com" ? devices : []
+                body = JSONValue.object(["code": .number(0), "result": .object(["list": .array(list)])]).compactJSONString
             }
         default:
             status = 200

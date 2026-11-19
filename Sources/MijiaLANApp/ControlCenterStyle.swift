@@ -107,7 +107,13 @@ struct ConnectionIssue {
     let message: String
     let needsAttention: Bool
 
-    init(health: LANDeviceHealth) {
+    init(health: LANDeviceHealth?) {
+        guard let health else {
+            title = L10n.tr("缺少设备规格", "Device Specification Missing")
+            message = L10n.tr("连接互联网后点「重试」，即可重新获取此型号的控制项。", "Connect to the internet and choose Retry to fetch the controls for this model.")
+            needsAttention = true
+            return
+        }
         needsAttention = [.tokenRejected, .unsupported].contains(health.state)
         switch health.state {
         case .tokenRejected:

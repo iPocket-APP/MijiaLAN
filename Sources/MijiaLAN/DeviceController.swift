@@ -120,7 +120,7 @@ public final class DeviceController: ObservableObject {
                 snapshots[device.did] = template
                 continue
             }
-            guard let schema = DeviceSchema.load(model: device.model, specType: device.specType) else {
+            guard let schema = DeviceSchema.load(model: device.model, specType: device.specType, archive: api.specs) else {
                 snapshots[device.did] = nil
                 continue
             }

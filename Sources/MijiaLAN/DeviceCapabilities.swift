@@ -77,13 +77,10 @@ public struct DeviceSchema: Codable, Equatable, Sendable {
               let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(Self.self, from: data)
     }
-    /// Bundled schemas pin the reviewed version; newly imported models use the raw spec cached at import.
-    public static func load(model: String, specType: String?) -> DeviceSchema? {
+    /// Built-in models use their reviewed version. Other models use the archived public definition.
+    public static func load(model: String, specType: String?, archive: DeviceSpecArchive = .standard) -> DeviceSchema? {
         if let schema = bundled(model: model) { return schema }
-        guard let specType else { return nil }
-        let url = LocalHomeProvider.specCacheDirectory.appendingPathComponent("instances")
-            .appendingPathComponent(specType.replacingOccurrences(of: ":", with: "_") + ".json")
-        return (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode(Self.self, from: $0) }
+        return specType.flatMap(archive.schema(for:))
     }
     public static let bundledModels = [
         "dmaker.fan.p28", "zhimi.airpurifier.rma1", "yeelink.light.lamp4", "lumi.acpartner.mcn02",

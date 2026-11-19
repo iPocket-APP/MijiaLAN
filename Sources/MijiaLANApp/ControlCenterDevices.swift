@@ -138,7 +138,7 @@ private struct OfflineDeviceTile: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        let issue = ConnectionIssue(health: snapshot?.health ?? LANDeviceHealth())
+        let issue = ConnectionIssue(health: snapshot?.health)
         Button(action: action) {
             VStack(alignment: .leading, spacing: 7) {
                 if retrying { ProgressView().controlSize(.mini).frame(width: 18, height: 18) }
@@ -173,8 +173,9 @@ struct OfflineDeviceCard: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        let health = devices.snapshots[device.did]?.health ?? LANDeviceHealth()
-        let issue = ConnectionIssue(health: health)
+        let snapshot = devices.snapshots[device.did]
+        let health = snapshot?.health ?? LANDeviceHealth()
+        let issue = ConnectionIssue(health: snapshot?.health)
         VStack(alignment: .leading, spacing: 9) {
             HStack {
                 Text(DevicePresentation.name(device)).font(.system(size: 13, weight: .semibold)).foregroundStyle(.primary).lineLimit(2)

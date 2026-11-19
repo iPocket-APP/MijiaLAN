@@ -198,6 +198,8 @@ public final class HomeKitBridgeController: ObservableObject {
         self.savedCapabilityIIDs = defaults.data(forKey: Self.capabilityIIDsKey) == nil ? nil : capabilityIIDs
     }
 
+    public func hasReservedAccessory(for did: String) -> Bool { layout.aids[did] != nil }
+
     public func attach(to store: HomeStore, capabilities: DeviceController? = nil) {
         self.store = store
         self.capabilities = capabilities
@@ -778,7 +780,8 @@ public final class HomeKitBridgeController: ObservableObject {
         let ordered = visible.filter { layout.aids[$0.id] != nil } + visible.filter { layout.aids[$0.id] == nil }
         var retained: Set<String> = []
         var limitWarnings: [ServiceLimitWarning] = []
-        for snapshot in ordered.prefix(HomeKitAccessoryMapper.maxBridgedAccessories) {
+        for snapshot in ordered {
+            guard retained.count < HomeKitAccessoryMapper.maxBridgedAccessories else { break }
             let did = snapshot.id
             var ids = capabilityIIDs[did] ?? [:]
             let plan = CapabilityHomeKitMapper.plan(snapshot: snapshot, legacyDevice: legacyDevices[did],

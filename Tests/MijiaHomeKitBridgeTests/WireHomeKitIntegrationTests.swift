@@ -79,7 +79,12 @@ struct WireHomeKitIntegrationTests {
             #expect(!unpaired.records.isEmpty && unpaired.records.allSatisfy { $0.setupHashMatches == true && $0.resolvedPort == service.port })
             try await controller.connect()
             try await controller.pair(setupCode: identity.setupCode)
-            let paired = try #require(await service.observeBonjour())
+            // Pair-setup can finish before the local browser sees the updated TXT record.
+            let deadline = MonotonicClock.now + .seconds(8)
+            var paired = try #require(await service.observeBonjour())
+            while Set(paired.records.compactMap(\.sf)) != [0], MonotonicClock.now < deadline {
+                paired = try #require(await service.observeBonjour())
+            }
             #expect(paired.matchingInstances == 1)
             #expect(Set(paired.records.compactMap(\.sf)) == [0])
             #expect(!paired.records.isEmpty && paired.records.allSatisfy { $0.setupHashMatches == true && $0.resolvedPort == service.port })

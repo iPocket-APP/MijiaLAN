@@ -555,9 +555,15 @@ struct UpdateCheckerTests {
             to: dmgSrcDir.appendingPathComponent("MenuBarMijia.app", isDirectory: true)
         )
         let dmgURL = rootDir.appendingPathComponent("MenuBarMijia-1.5.0.dmg")
+        // Build the fixture without mounting a writable staging volume on the test host.
+        let sourceImage = rootDir.appendingPathComponent("fixture.dmg")
         try Self.runTool(
             "/usr/bin/hdiutil",
-            ["create", "-volname", "MenuBarMijia 1.5.0", "-srcfolder", dmgSrcDir.path, "-ov", "-format", "UDZO", dmgURL.path]
+            ["makehybrid", "-hfs", "-hfs-volume-name", "MenuBarMijia 1.5.0", "-o", sourceImage.path, dmgSrcDir.path]
+        )
+        try Self.runTool(
+            "/usr/bin/hdiutil",
+            ["convert", sourceImage.path, "-format", "UDZO", "-o", dmgURL.path]
         )
 
         let dmgDest = rootDir.appendingPathComponent("dmg-dest", isDirectory: true)

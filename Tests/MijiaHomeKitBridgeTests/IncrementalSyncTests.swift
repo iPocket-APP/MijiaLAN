@@ -9,6 +9,53 @@ import MijiaCore
 
 @MainActor
 struct IncrementalSyncTests {
+    @Test("A device with no HomeKit services leaves all 149 accessory slots available")
+    func accessoryCapacity() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let specs = DeviceSpecArchive(directory: root, cacheDirectory: root.appendingPathComponent("cache"))
+        let type = "urn:miot-spec-v2:device:gateway:0000A001:capacity-test:1"
+        let filename = try #require(MiotSpecStore.instanceFileName(for: type))
+        let json = #"{"type":"\#(type)","services":[{"iid":1,"type":"urn:miot-spec-v2:service:device-information:00007801:test:1","properties":[]}]}"#
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data(json.utf8).write(to: root.appendingPathComponent(filename))
+        let gateway = LocalDevice(did: "1000", name: "Gateway", model: "test.gateway", host: "test", token: "", specType: type)
+        let plugs = (1001...1150).map { id in
+            LocalDevice(did: String(id), name: "Plug \(id)", model: "chuangmi.plug.m3", host: "test", token: "")
+        }
+        let config = LocalHomeConfig(devices: [gateway] + plugs)
+        let api = LANMiotAPI(config: { config }, transport: SyncTestTransport(model: gateway.model), specs: specs)
+        let devices = DeviceController(api: api, config: { config })
+        defer { devices.shutdown() }
+        try #require(devices.snapshots.count == 151)
+
+        let suite = "test.mijialan.capacity.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: HomeKitBridgeController.keepAwakeKey)
+        let store = HomeStore(provider: MockHomeProvider(snapshot: devices.synthesizedHome()), defaultsSuiteName: suite)
+        for _ in 0..<200 where !store.hasReceivedInitialSnapshot { try await MonotonicClock.sleep(for: .milliseconds(5)) }
+        try #require(store.hasReceivedInitialSnapshot)
+        let secrets = try #require(HomeKitBridgeSecrets.generate().encoded())
+        let bridge = HomeKitBridgeController(vault: HomeKitBridgeVault(load: { .value(secrets) }, save: { _ in true }),
+                                             defaults: defaults, port: 0, loopbackOnly: true)
+        bridge.attach(to: store, capabilities: devices)
+        await bridge.waitUntilIdle()
+        #expect(bridge.exposedDeviceCount == 149)
+        #expect(bridge.publishedServices(for: gateway.did) == nil)
+        #expect(bridge.publishedServices(for: "1149") != nil)
+        #expect(bridge.publishedServices(for: "1150") == nil)
+
+        store.hideDevice("1001")
+        for _ in 0..<20 { await Task.yield() }
+        await bridge.waitUntilIdle()
+        #expect(bridge.exposedDeviceCount == 149)
+        #expect(bridge.publishedServices(for: "1150") != nil)
+        bridge.isEnabled = false
+        await bridge.waitUntilIdle()
+        await api.shutdown()
+    }
+
     @Test("Invalid firmware readings become unavailable and recover without rebuilding the accessory")
     func invalidReadings() async throws {
         let fixture = try await Fixture.make()
@@ -246,9 +293,10 @@ struct IncrementalSyncTests {
             let defaults = try #require(UserDefaults(suiteName: suite))
             defaults.set(false, forKey: HomeKitBridgeController.keepAwakeKey)
             let model = schema?.model ?? "dmaker.fan.p28"
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+            let specs = DeviceSpecArchive(directory: directory, cacheDirectory: directory.appendingPathComponent("cache"))
             let schemaURL: URL?
             if let schema {
-                let directory = LocalHomeProvider.specCacheDirectory.appendingPathComponent("instances")
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 let url = directory.appendingPathComponent(schema.type.replacingOccurrences(of: ":", with: "_") + ".json")
                 try JSONEncoder().encode(schema).write(to: url, options: .atomic)
@@ -257,7 +305,7 @@ struct IncrementalSyncTests {
             let device = LocalDevice(did: "123", name: "Fan", model: model, host: "test", token: String(repeating: "0", count: 32), specType: schema?.type)
             let config = LocalHomeConfig(devices: [device])
             let transport = SyncTestTransport(model: model)
-            let api = LANMiotAPI(config: { config }, transport: transport)
+            let api = LANMiotAPI(config: { config }, transport: transport, specs: specs)
             let devices = DeviceController(api: api, config: { config })
             await devices.refreshNow()
             let store = HomeStore(provider: CapabilityHomeProvider(controller: devices), defaultsSuiteName: suite)
@@ -283,7 +331,7 @@ struct IncrementalSyncTests {
             devices.shutdown()
             await api.shutdown()
             defaults.removePersistentDomain(forName: suite)
-            if let schemaURL { try? FileManager.default.removeItem(at: schemaURL) }
+            if let schemaURL { try? FileManager.default.removeItem(at: schemaURL.deletingLastPathComponent()) }
         }
     }
 }

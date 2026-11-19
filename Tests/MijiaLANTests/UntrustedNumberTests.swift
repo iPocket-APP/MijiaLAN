@@ -67,11 +67,12 @@ struct UntrustedNumberTests {
             #"{"iid": \#(iid), "type": "urn:miot-spec-v2:property:\#(name):00000001:test:1", "description": "\#(name)", "format": "\#(format)", "access": ["read", "write", "notify"]}"#
         }
         let spec = #"{"type": "\#(type)", "services": [{"iid": 2, "type": "urn:miot-spec-v2:service:light:00007802:test:1", "description": "Light", "properties": [\#(property(1, "on", "bool")), \#(property(2, "brightness", "uint32")), \#(property(3, "color-temperature", "uint32"))]}]}"#
-        let directory = LocalHomeProvider.specCacheDirectory.appendingPathComponent("instances")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let specs = DeviceSpecArchive(directory: directory, cacheDirectory: directory.appendingPathComponent("cache"))
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent(type.replacingOccurrences(of: ":", with: "_") + ".json")
         try Data(spec.utf8).write(to: url, options: .atomic)
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: directory) }
 
         let network = FakeMiioNetwork()
         let fake = network.add(host: "test", token: token, deviceID: 91, props: [
@@ -80,7 +81,8 @@ struct UntrustedNumberTests {
         fake.model = "test.light.bounds"
         let device = LocalDevice(did: "91", name: "Lamp", model: fake.model, host: "test", token: token, specType: type)
         let config = LocalHomeConfig(devices: [device])
-        let controller = DeviceController(api: LANMiotAPI(config: { config }, transport: network), config: { config })
+        let controller = DeviceController(api: LANMiotAPI(config: { config }, transport: network, specs: specs), config: { config })
+        defer { controller.shutdown() }
         await controller.refreshNow()
 
         #expect(controller.snapshots["91"]?.value("p:2:2") == .number(12345678901234567890))
