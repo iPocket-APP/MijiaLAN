@@ -240,9 +240,14 @@ private struct PanelPage: View {
         switch route {
         case .home:
             VStack(spacing: 0) {
-                if model.vaultUnavailable {
-                    Label(L10n.tr("钥匙串暂时无法访问，请重新打开 App 并允许访问。", "Keychain access is unavailable. Reopen the app and allow access."), systemImage: ControlCenterSymbol.keychainUnavailable)
-                        .font(.caption).foregroundStyle(.orange).padding(12)
+                if let error = model.configurationError {
+                    HStack {
+                        Label(AppModel.describe(error), systemImage: ControlCenterSymbol.keychainUnavailable)
+                        if error == .unavailable {
+                            Button(L10n.tr("重试读取", "Retry"), action: model.retryLoadingConfiguration)
+                        }
+                    }
+                    .font(.caption).foregroundStyle(.orange).padding(12)
                 }
                 ControlCenterDevices(model: model, session: session, openDevice: { navigate(.device($0)) }, openSetup: { navigate(.setupGuide) })
             }

@@ -20,7 +20,7 @@ final class AppModel: ObservableObject {
     enum ImportState: Equatable {
         case idle
         case loadingQR
-        case waitingForScan(QRLoginTicket, expiresAt: Date)
+        case waitingForScan(QRLoginTicket, expiresAt: Date, renewingLogin: Bool)
         case fetching
         case completed(importedCount: Int, summary: String)
         case needsScan
@@ -28,8 +28,18 @@ final class AppModel: ObservableObject {
     }
 
     @Published private(set) var config: LocalHomeConfig
-    /// The Keychain item exists but could not be read (prompt declined); nothing is saved until it can be.
-    @Published private(set) var vaultUnavailable: Bool
+    enum ConfigurationError: LocalizedError, Equatable {
+        case unavailable, invalidData, writeFailed
+
+        var errorDescription: String? {
+            switch self {
+            case .unavailable: L10n.tr("无法读取钥匙串，请解锁后重试。", "Could not read Keychain. Unlock it and try again.")
+            case .invalidData: L10n.tr("无法读取已有设备清单，原始数据已保留。", "The saved device list could not be decoded. Your original data has been preserved.")
+            case .writeFailed: L10n.tr("无法将设备资料保存到钥匙串。", "Could not save the devices to Keychain.")
+            }
+        }
+    }
+    @Published private(set) var configurationError: ConfigurationError?
     /// Climate devices' power draw in watts, which MijiaCore does not carry.
     var powerWatts: [String: Double] { devices.snapshots.compactMapValues { s in
         s.capabilities.first { $0.name == "electric-power" }.flatMap { s.value($0.id)?.doubleValue }
@@ -86,10 +96,13 @@ final class AppModel: ObservableObject {
     let opensSetupGuideOnLaunch: Bool
     private let vault: SecretVault
     private let cloudTransport: (any MiHTTPTransport)?
+    private let lanTransport: any MiioTransport
+    private let specTransport: (any MiHTTPTransport)?
     private let configBox: ConfigBox
     private let api: LANMiotAPI
     private var importTask: Task<Void, Never>?
     private var rediscoveryTask: Task<Void, Never>?
+    private var specRecovery: Task<Void, Never>?
     private var bridgeAttached = false
     private var homeKitSelectionObservation: AnyCancellable?
     private var homeKitSupport: (revision: UInt64, devices: [String: Bool]) = (0, [:])
@@ -102,7 +115,10 @@ final class AppModel: ObservableObject {
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         secretStorage: SecretVault.Storage? = nil,
-        cloudTransport: (any MiHTTPTransport)? = nil
+        cloudTransport: (any MiHTTPTransport)? = nil,
+        specs: DeviceSpecArchive = .standard,
+        specTransport: (any MiHTTPTransport)? = nil,
+        ephemeralDefaultsSuite: String = "com.mijialan.MijiaLAN.dev"
     ) {
         #if DEBUG
         let preview = environment["MIJIALAN_UI_PREVIEW"] == "1"
@@ -116,35 +132,31 @@ final class AppModel: ObservableObject {
             vault.set(data, for: Self.configAccount)
         }
         #if DEBUG
-        if preview, let seed = ControlCenterPreview.config.encoded() { vault.set(seed, for: Self.configAccount) }
+        if preview, secretStorage == nil, let seed = ControlCenterPreview.config.encoded() { vault.set(seed, for: Self.configAccount) }
         #endif
-        let defaultsSuite = ephemeral ? "com.mijialan.MijiaLAN.dev" : "com.mijialan.MijiaLAN.home"
+        let defaultsSuite = ephemeral ? ephemeralDefaultsSuite : "com.mijialan.MijiaLAN.home"
         if ephemeral { UserDefaults.standard.removePersistentDomain(forName: defaultsSuite) }
         let bridgeDefaults = ephemeral ? (UserDefaults(suiteName: defaultsSuite) ?? .standard) : .standard
         self.vault = vault
         self.cloudTransport = cloudTransport
+        self.specTransport = specTransport
         var loaded = LocalHomeConfig()
-        var unavailable = false
         let savedConfiguration = vault.lookup(Self.configAccount)
-        switch savedConfiguration {
-        case .value(let data): loaded = LocalHomeConfig.decode(data) ?? LocalHomeConfig()
-        case .missing: break
-        case .unavailable: unavailable = true
-        }
+        do { loaded = try Self.readConfiguration(savedConfiguration) }
+        catch { configurationError = error }
         config = loaded
-        vaultUnavailable = unavailable
         let setupGuide = SetupGuideProgress(defaults: bridgeDefaults)
         setupGuideProgress = setupGuide
         opensSetupGuideOnLaunch = !preview && environment["MIJIALAN_SNAPSHOT"] == nil
             && setupGuide.shouldOpen(configuration: savedConfiguration)
         let box = ConfigBox(loaded)
         configBox = box
-        let api: LANMiotAPI
         #if DEBUG
-        api = preview ? LANMiotAPI(config: { box.value }, transport: ControlCenterPreviewTransport()) : LANMiotAPI(config: { box.value })
+        self.lanTransport = preview ? ControlCenterPreviewTransport() as any MiioTransport : UDPMiioTransport()
         #else
-        api = LANMiotAPI(config: { box.value })
+        self.lanTransport = UDPMiioTransport()
         #endif
+        let api = LANMiotAPI(config: { box.value }, transport: self.lanTransport, specs: specs)
         self.api = api
         let controller = DeviceController(api: api, config: { box.value })
         devices = controller
@@ -154,11 +166,7 @@ final class AppModel: ObservableObject {
             load: { vault.lookup(AppModel.bridgeAccount) },
             save: { vault.set($0, for: AppModel.bridgeAccount) }
         ), defaults: bridgeDefaults, loopbackOnly: preview)
-        if !unavailable, case .value(let data) = vault.lookup(Self.rememberedSessionAccount),
-           let session = try? JSONDecoder().decode(MiSession.self, from: data) {
-            rememberedSession = session
-            importRegion = session.region
-        }
+        if savedConfiguration != .unavailable { loadRememberedLogin() }
 
         // The Home selection helpers also depend on state owned by these three objects.
         homeKitSelectionObservation = Publishers.CombineLatest4(
@@ -169,6 +177,7 @@ final class AppModel: ObservableObject {
         .sink { [weak self] _ in self?.objectWillChange.send() }
 
         if preview || (ephemeral && environment["MIJIALAN_SNAPSHOT"] != nil) { bridge.isEnabled = false }
+        recoverMissingSpecs()
         attachBridgeIfNeeded()
         if !preview { startRediscoveryLoop() }
     }
@@ -189,7 +198,9 @@ final class AppModel: ObservableObject {
         let pending = Set(ids).subtracting(retryingDeviceIDs)
         retryingDeviceIDs.formUnion(pending)
         for did in pending {
+            let recovery = devices.snapshots[did] == nil ? recoverMissingSpecs() : nil
             Task {
+                await recovery?.value
                 await devices.retry(did: did)
                 retryingDeviceIDs.remove(did)
             }
@@ -251,9 +262,7 @@ final class AppModel: ObservableObject {
     }
 
     func remove(_ device: LocalDevice) {
-        var next = config
-        next.remove(did: device.did)
-        apply(next)
+        try? updateConfiguration { $0.remove(did: device.did) }
     }
 
     // MARK: Cloud Import
@@ -261,6 +270,14 @@ final class AppModel: ObservableObject {
     private var reusableSession: MiSession? {
         guard !rememberedSessionExpired, rememberedSession?.region == importRegion else { return nil }
         return rememberedSession
+    }
+
+    private func loadRememberedLogin() {
+        if case .value(let data) = vault.lookup(Self.rememberedSessionAccount),
+           let session = try? JSONDecoder().decode(MiSession.self, from: data) {
+            rememberedSession = session
+            importRegion = session.region
+        }
     }
 
     @discardableResult
@@ -276,24 +293,30 @@ final class AppModel: ObservableObject {
             do {
                 try Task.checkCancellation()
                 let transport = cloudTransport ?? URLSessionMiTransport()
-                let session: MiSession
                 if let savedSession {
-                    session = savedSession
-                } else {
-                    let login = MiAccountLogin(transport: transport, redirectlessTransport: cloudTransport, region: region)
-                    let ticket = try await login.start()
-                    try Task.checkCancellation()
-                    importState = .waitingForScan(ticket, expiresAt: Date().addingTimeInterval(ticket.timeout))
-                    session = try await login.waitForScan(ticket)
-                    try Task.checkCancellation()
-                    importState = .fetching
+                    do {
+                        let result = try await CloudTokenImport.fetch(session: savedSession, transport: transport, tryOtherRegions: false)
+                        try finishImport(result, scannedSession: nil)
+                        return
+                    } catch MiCloudError.sessionExpired {
+                        try Task.checkCancellation()
+                        forgetRememberedLogin()
+                        rememberedSessionExpired = rememberedSession != nil
+                        importState = .loadingQR
+                    }
                 }
+                let login = MiAccountLogin(transport: transport, redirectlessTransport: cloudTransport, region: region)
+                let ticket = try await login.start()
+                try Task.checkCancellation()
+                importState = .waitingForScan(ticket, expiresAt: Date().addingTimeInterval(ticket.timeout), renewingLogin: savedSession != nil)
+                let session = try await login.waitForScan(ticket)
+                try Task.checkCancellation()
+                importState = .fetching
                 let result = try await CloudTokenImport.fetch(session: session, transport: transport, tryOtherRegions: savedSession == nil)
-                try await finishImport(result, scannedSession: savedSession == nil ? session : nil)
-            } catch MiCloudError.sessionExpired where savedSession != nil {
+                try finishImport(result, scannedSession: session)
+            } catch MiCloudError.sessionExpired {
                 guard !Task.isCancelled else { return }
-                forgetRememberedLogin()
-                rememberedSessionExpired = rememberedSession != nil
+                // A newly scanned session was also rejected. Let the user retry.
                 importState = .needsScan
             } catch is CancellationError {
                 return
@@ -338,19 +361,13 @@ final class AppModel: ObservableObject {
         loginStorageError = nil
     }
 
-    private func finishImport(_ result: CloudImportResult, scannedSession: MiSession?) async throws {
+    private func finishImport(_ result: CloudImportResult, scannedSession: MiSession?) throws {
         try Task.checkCancellation()
-        var devices = result.devices
-        await resolveSpecTypes(&devices)
-        try Task.checkCancellation()
-        var next = config
-        next.merge(devices)
-        let imported = Set(next.devices.map(\.did))
-        next.skipped = result.skipped.filter { !imported.contains($0.did) }
-        next.importedAt = Date()
-        guard apply(next) else {
-            importState = .failed(L10n.tr("无法将设备资料保存到钥匙串。", "Could not save the devices to Keychain."))
-            return
+        try updateConfiguration { next in
+            next.merge(result.devices)
+            let imported = Set(next.devices.map(\.did))
+            next.skipped = result.skipped.filter { !imported.contains($0.did) }
+            next.importedAt = Date()
         }
         if var scannedSession {
             scannedSession.region = result.region
@@ -363,39 +380,25 @@ final class AppModel: ObservableObject {
         logger.info("Imported \(result.devices.count, privacy: .public) devices, skipped \(result.skipped.count, privacy: .public)")
     }
 
-    /// Looks each model's MIoT spec up once (miot-spec.org, no account) so later starts never need the internet.
-    private func resolveSpecTypes(_ devices: inout [LocalDevice]) async {
-        let source = MiotSpecStore(cacheDirectory: LocalHomeProvider.specCacheDirectory)
-        for index in devices.indices {
-            guard !Task.isCancelled else { return }
-            let device = devices[index]
-            if let spec = try? await source.spec(model: device.model, specType: device.specType) {
-                devices[index].specType = spec.type
-            }
-        }
-    }
-
     // MARK: Manual Add
 
-    func addManually(host: String, token: String, name: String) {
-        guard !isAddingManually else { return }
+    @discardableResult
+    func addManually(host: String, token: String, name: String) -> Task<Void, Never>? {
+        guard !isAddingManually else { return nil }
         isAddingManually = true
         manualAddError = nil
-        Task { [weak self] in
+        lastManualAddSummary = nil
+        return Task {
+            defer { isAddingManually = false }
             do {
                 let device = try await ManualDeviceProbe.probe(
-                    host: host, token: token, name: name,
-                    specSource: MiotSpecStore(cacheDirectory: LocalHomeProvider.specCacheDirectory)
+                    host: host, token: token, name: name, transport: lanTransport
                 )
-                guard let self else { return }
-                var next = self.config
-                next.merge([device])
-                self.apply(next)
-                self.lastManualAddSummary = L10n.tr("已添加 \(device.name)（\(device.model)）", "Added \(device.name) (\(device.model)).")
+                try updateConfiguration { $0.merge([device]) }
+                lastManualAddSummary = L10n.tr("已添加 \(device.name)（\(device.model)）", "Added \(device.name) (\(device.model)).")
             } catch {
-                self?.manualAddError = Self.describe(error)
+                manualAddError = Self.describe(error)
             }
-            self?.isAddingManually = false
         }
     }
 
@@ -436,7 +439,7 @@ final class AppModel: ObservableObject {
     func diagnosticDiscovery() async -> RediscoveryEvidence {
         if usesPreviewDevices { return .init(at: Date(), outcome: "preview") }
         do {
-            let found = try await MiioDiscovery.discover()
+            let found = try await MiioDiscovery.discover(transport: lanTransport)
             return .completed(found, devices: config.devices)
         } catch {
             return .init(at: Date(), outcome: "failed", failure: LANFailureEvidence(error))
@@ -448,6 +451,8 @@ final class AppModel: ObservableObject {
             while !Task.isCancelled {
                 await self?.rediscover()
                 try? await MonotonicClock.sleep(for: Self.rediscoveryInterval)
+                guard !Task.isCancelled, let self else { return }
+                self.recoverMissingSpecs()
             }
         }
     }
@@ -463,22 +468,23 @@ final class AppModel: ObservableObject {
         isRediscovering = true
         defer { isRediscovering = false }
         do {
-            let found = try await MiioDiscovery.discover()
+            let found = try await MiioDiscovery.discover(transport: lanTransport)
             lastRediscoveryAt = Date()
-            var next = config
             var evidence = RediscoveryEvidence.completed(found, devices: config.devices)
             let matches = Set(evidence.matchingDeviceIDs ?? [])
-            let moved = next.updateHosts(from: found)
             let unknown = found.count - matches.count
             lastRediscoveryNote = found.isEmpty
                 ? L10n.tr("局域网广播暂时没有设备回应（路由器的设备隔离也会拦住广播）", "No devices responded to the LAN broadcast. Router client isolation can also block discovery.")
                 : L10n.tr("局域网里找到 \(found.count) 台 miIO 设备", "miIO devices found on the LAN: \(found.count)") + (unknown > 0 ? L10n.tr("，其中 \(unknown) 台还没有 token", "; without a token: \(unknown)") : "")
             var changesSaved: Bool?
-            if moved {
+            if evidence.addressChangedDeviceIDs?.isEmpty == false {
                 logger.info("Device IPs changed; saving")
-                changesSaved = apply(next)
-                if changesSaved == false {
-                    lastRediscoveryNote = L10n.tr("找到设备的新地址，但无法写入钥匙串，请解锁后重新扫描。", "Found new device addresses but could not save them. Unlock the Keychain and scan again.")
+                do {
+                    try updateConfiguration { $0.updateHosts(from: found) }
+                    changesSaved = true
+                } catch {
+                    changesSaved = false
+                    lastRediscoveryNote = Self.describe(error)
                 }
             }
             evidence.addressChangesSaved = changesSaved
@@ -491,27 +497,102 @@ final class AppModel: ObservableObject {
         }
     }
 
-    // MARK: Persistence
+    // MARK: Specifications
+
+    private var missingSpecRequests: Set<DeviceSpecArchive.Request> {
+        Set(config.devices.lazy.filter { self.devices.snapshots[$0.did] == nil }.map(DeviceSpecArchive.Request.init))
+    }
 
     @discardableResult
-    private func apply(_ next: LocalHomeConfig) -> Bool {
-        guard let data = next.encoded(), vault.set(data, for: Self.configAccount) else {
-            vaultUnavailable = true
-            logger.error("Could not save the device config to the Keychain")
-            return false
+    private func recoverMissingSpecs() -> Task<Void, Never>? {
+        if let specRecovery { return specRecovery }
+        guard !missingSpecRequests.isEmpty else { return nil }
+        let task = Task { await restoreSpecs() }
+        specRecovery = task
+        return task
+    }
+
+    private func restoreSpecs() async {
+        let archive = api.specs
+        let source = MiotSpecStore(transport: specTransport ?? URLSessionMiTransport(timeout: 15), cacheDirectory: archive.cacheDirectory)
+        var attempted: Set<DeviceSpecArchive.Request> = []
+        while !Task.isCancelled {
+            let requests = missingSpecRequests.subtracting(attempted)
+            guard !requests.isEmpty else { break }
+            attempted.formUnion(requests)
+            let resolved = await archive.resolve(requests, using: source)
+            guard !missingSpecRequests.isDisjoint(with: resolved.keys) else { continue }
+            // An import, removal or DHCP update may have completed during the download.
+            // Only update the type of a device that still needs the same specification.
+            if config.devices.contains(where: { device in
+                resolved[.init(device)].map { $0 != device.specType } == true
+            }) {
+                do {
+                    try updateConfiguration { next in
+                        for index in next.devices.indices {
+                            if let type = resolved[.init(next.devices[index])] { next.devices[index].specType = type }
+                        }
+                    }
+                    continue
+                } catch {
+                    // A device with an already saved type can still use its restored file.
+                }
+            }
+            devices.reconcileConfiguration(force: true)
+            store.refreshNow()
         }
-        vaultUnavailable = false
+        specRecovery = nil
+        attachBridgeIfNeeded()
+    }
+
+    // MARK: Persistence
+
+    private static func readConfiguration(_ lookup: CredentialVault.Lookup) throws(ConfigurationError) -> LocalHomeConfig {
+        switch lookup {
+        case .missing: return LocalHomeConfig()
+        case .unavailable: throw .unavailable
+        case .value(let data):
+            guard let saved = LocalHomeConfig.decode(data) else { throw .invalidData }
+            return saved
+        }
+    }
+
+    func retryLoadingConfiguration() {
+        do { adopt(try Self.readConfiguration(vault.lookup(Self.configAccount))) }
+        catch { configurationError = error }
+    }
+
+    /// A newly unlocked Keychain may contain devices that were never loaded into this process.
+    private func updateConfiguration(_ change: (inout LocalHomeConfig) -> Void) throws(ConfigurationError) {
+        do throws(ConfigurationError) {
+            var next = try Self.readConfiguration(vault.lookup(Self.configAccount))
+            change(&next)
+            guard let data = next.encoded(), vault.set(data, for: Self.configAccount) else { throw .writeFailed }
+            adopt(next)
+        } catch {
+            configurationError = error
+            logger.error("Could not update the saved device configuration")
+            throw error
+        }
+    }
+
+    private func adopt(_ next: LocalHomeConfig) {
+        if configurationError != nil && rememberedSession == nil { loadRememberedLogin() }
+        configurationError = nil
         config = next
         configBox.value = next
-        devices.reconcileConfiguration(force: true)
+        devices.reconcileConfiguration()
         store.refreshNow()
+        recoverMissingSpecs()
         attachBridgeIfNeeded()
-        return true
     }
 
     /// The bridge waits for the first imported device, so a fresh install does not advertise an empty bridge.
     private func attachBridgeIfNeeded() {
         guard !bridgeAttached, !config.devices.isEmpty else { return }
+        if specRecovery != nil && (devices.snapshots.isEmpty || config.devices.contains(where: {
+            devices.snapshots[$0.did] == nil && bridge.hasReservedAccessory(for: $0.did)
+        })) { return }
         bridgeAttached = true
         bridge.attach(to: store, capabilities: devices)
     }

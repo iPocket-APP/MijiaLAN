@@ -650,13 +650,15 @@ struct DeviceImportCard: View {
                     ProgressView().controlSize(.small)
                     Text(L10n.tr("正在获取登录二维码…", "Getting login QR code…"))
                     cancelButton
-                case .waitingForScan(let ticket, let expiresAt):
+                case .waitingForScan(let ticket, let expiresAt, let renewingLogin):
                     let image = QRCode.image(for: ticket.loginURL.absoluteString)
                     TimelineView(PanelTimelineSchedule(interval: 1, isActive: panelPresented)) { context in
                         let remaining = expiresAt.timeIntervalSince(context.date)
                         VStack(spacing: 12) {
                             if remaining > 0 {
-                                Text(L10n.tr("用手机「米家」App 扫码并确认登录", "Scan with the Xiaomi Home app and confirm sign-in"))
+                                Text(renewingLogin
+                                     ? L10n.tr("米家登录已过期，用米家 App 扫码后继续导入", "Your sign-in expired. Scan with Xiaomi Home to continue importing.")
+                                     : L10n.tr("用手机「米家」App 扫码并确认登录", "Scan with the Xiaomi Home app and confirm sign-in"))
                                     .font(.headline)
                                 if let image {
                                     Image(nsImage: image).interpolation(.none).resizable().frame(width: 168, height: 168)

@@ -7,7 +7,7 @@
 | Activity | Connection or storage | Data involved |
 | --- | --- | --- |
 | Xiaomi Home device import | Xiaomi account and Xiaomi Home cloud services | Login session, device registry, tokens, IPs, names and rooms |
-| Device specifications | `miot-spec.org` and a local cache | Models and public specifications; no Xiaomi credentials required |
+| Device specifications | `miot-spec.org`, the local download cache and a copy in Application Support | Device models and public specifications. Missing specifications are fetched without Xiaomi credentials. |
 | Daily device control | Local UDP 54321 | miIO / MIoT commands and readings |
 | Apple Home bridge | LAN HAP and Bonjour / mDNS | Bridge identity, selected device names, services, readings and controls |
 | Credential persistence | Local macOS Keychain | Device registry and tokens, bridge identity, setup code and pairing keys, and the Xiaomi Home login session and server region if remembered |

@@ -79,6 +79,32 @@ struct MiCloudCryptoTests {
         }
     }
 
+    @Test("An expired service token takes precedence over code zero and the HTTP status", arguments: [200, 426])
+    func expiredDespiteZeroCode(status: Int) {
+        for message in ["SERVICETOKEN_EXPIRED", "Service token has expired", "invalid signature"] {
+            let body = JSONValue.object(["code": .number(0), "message": .string(message)])
+            #expect(throws: MiCloudError.sessionExpired) {
+                try MiCloudClient.decodeResponse(Data(body.compactJSONString.utf8), statusCode: status, signedNonce: Vectors.signedNonce)
+            }
+        }
+    }
+
+    @Test("HTTP 426 can carry a short expiration message without a service token name")
+    func shortExpiryMessage() {
+        let body = Data(#"{"code":0,"message":"expired"}"#.utf8)
+        #expect(throws: MiCloudError.sessionExpired) {
+            try MiCloudClient.decodeResponse(body, statusCode: 426, signedNonce: Vectors.signedNonce)
+        }
+    }
+
+    @Test("An unrelated HTTP failure with code zero stays a transport failure")
+    func failedHTTPWithZeroCode() {
+        let body = Data(#"{"code":0,"message":"upgrade required","result":{"list":[]}}"#.utf8)
+        #expect(throws: MiCloudError.http(426)) {
+            try MiCloudClient.decodeResponse(body, statusCode: 426, signedNonce: Vectors.signedNonce)
+        }
+    }
+
     @Test("Compact JSON writes integral numbers without a fraction")
     func compactJSON() {
         let v: JSONValue = .object(["params": .array([.object(["did": .string("1"), "siid": .number(2), "value": .number(26.5), "on": .bool(true)])])])

@@ -29,6 +29,13 @@ actor ControlCenterPreviewTransport: MiioTransport {
     private let token = Data(repeating: 0, count: 16)
     private let latency: TimeSpan
     private var values: [String: [String: JSONValue]] = [
+        "192.0.2.2": [
+            "2.1": .bool(false), "2.2": .number(0), "2.4": .number(1),
+            "3.1": .number(52), "3.4": .number(8), "3.7": .number(23.4),
+            "4.1": .number(76), "4.3": .number(44), "4.4": .number(137),
+            "6.1": .bool(true), "8.1": .bool(false), "9.1": .number(0), "9.2": .number(14),
+            "13.2": .number(1)
+        ],
         "192.0.2.3": ["power": .string("on"), "bright": .number(71), "ct": .number(3500)],
         "192.0.2.6": ["power": .string("off"), "mode": .string("auto"), "tar_temp": .number(29),
                           "fan_level": .string("auto_fan"), "ver_swing": .string("on"), "load_power": .number(1)]
@@ -54,7 +61,23 @@ actor ControlCenterPreviewTransport: MiioTransport {
         if case .array(let array) = request["params"] { args = array } else { args = [] }
         let result: JSONValue
         if method == "miIO.info" {
-            result = .object(["model": .string(host == "192.0.2.3" ? "yeelink.light.lamp4" : "lumi.acpartner.mcn02")])
+            guard let device = ControlCenterPreview.config.devices.first(where: { $0.host == host }) else { throw MiioError.hostUnreachable }
+            result = .object(["model": .string(device.model)])
+        } else if host == "192.0.2.2", method == "get_properties" || method == "set_properties" {
+            result = .array(args.map { item in
+                guard case .object(var reply) = item, let service = reply["siid"]?.integer,
+                      let property = reply["piid"]?.integer else { return .object(["code": .number(-4003)]) }
+                let key = "\(service).\(property)"
+                let written = reply.removeValue(forKey: "value")
+                guard let current = values[host]?[key] else {
+                    reply["code"] = .number(-4003)
+                    return .object(reply)
+                }
+                reply["code"] = .number(0)
+                if method == "get_properties" { reply["value"] = current }
+                else if let written { values[host]?[key] = written }
+                return .object(reply)
+            })
         } else if method == "get_prop" {
             result = .array(args.map { values[host]?[$0.stringValue ?? ""] ?? .null })
         } else if method.hasPrefix("set_"), let value = args.first {

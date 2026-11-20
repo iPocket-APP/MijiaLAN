@@ -204,7 +204,8 @@ public actor MiotSpecStore: MiotSpecSource {
         return try await instance(type: type)
     }
 
-    private func typeIndex() async throws -> [String: String] {
+    /// The released type for each model. A batch importer can resolve all missing types with one lookup.
+    public func typeIndex() async throws -> [String: String] {
         if let typeByModel { return typeByModel }
         // Actor reentrancy: concurrent spec lookups would otherwise each download the 2 MB index.
         if let indexTask { return try await indexTask.value }
@@ -252,22 +253,36 @@ public actor MiotSpecStore: MiotSpecSource {
         return best.mapValues(\.type)
     }
 
+    public static func instanceFileName(for type: String) -> String? {
+        guard !type.isEmpty, !type.hasPrefix("."),
+              type.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || ":._-".contains($0)) }) else { return nil }
+        return type.replacingOccurrences(of: ":", with: "_") + ".json"
+    }
+
     private func instance(type: String) async throws -> MiotDeviceSpec? {
+        guard let safeName = Self.instanceFileName(for: type) else { return nil }
         if let cached = specByType[type] { return cached }
-        let safeName = type.replacingOccurrences(of: ":", with: "_") + ".json"
         let file = cacheDirectory.appendingPathComponent("instances", isDirectory: true).appendingPathComponent(safeName)
-        if let data = try? Data(contentsOf: file), let spec = try? JSONDecoder().decode(MiotDeviceSpec.self, from: data) {
+        if let data = try? Data(contentsOf: file), let spec = try? JSONDecoder().decode(MiotDeviceSpec.self, from: data), spec.type == type {
             specByType[type] = spec
             return spec
         }
+        guard try await downloadInstance(for: type) != nil else { return nil }
+        return specByType[type]
+    }
+
+    /// Fetch the original JSON when a durable copy is missing or the download cache needs repair.
+    public func downloadInstance(for type: String) async throws -> Data? {
+        guard let name = Self.instanceFileName(for: type) else { return nil }
         var comps = URLComponents(string: "https://miot-spec.org/miot-spec-v2/instance")!
         comps.queryItems = [URLQueryItem(name: "type", value: type)]
         let (data, http) = try await transport.send(URLRequest(url: comps.url!))
         guard http.statusCode == 200 else { throw MiCloudError.http(http.statusCode) }
         let spec = try JSONDecoder().decode(MiotDeviceSpec.self, from: data)
-        writeCache(data, to: file)
+        guard spec.type == type else { return nil }
+        writeCache(data, to: cacheDirectory.appendingPathComponent("instances").appendingPathComponent(name))
         specByType[type] = spec
-        return spec
+        return data
     }
 
     private func writeCache(_ data: Data, to file: URL) {

@@ -78,6 +78,7 @@ public struct LANDeviceDiagnostics: Equatable, Sendable {
 public actor LANMiotAPI: MiCloudAPI {
     private let logger = Logger(subsystem: "com.mijialan.MijiaLAN", category: "LAN")
     let config: @Sendable () -> LocalHomeConfig
+    public nonisolated let specs: DeviceSpecArchive
     private let transport: any MiioTransport
     private let port: UInt16
     private let probeTimeout: TimeSpan
@@ -115,16 +116,18 @@ public actor LANMiotAPI: MiCloudAPI {
         transport: any MiioTransport = UDPMiioTransport(),
         port: UInt16 = MiioPacket.port,
         probeTimeout: TimeSpan = .milliseconds(2500),
-        commandTimeout: TimeSpan = .seconds(5)
+        commandTimeout: TimeSpan = .seconds(5),
+        specs: DeviceSpecArchive = .standard
     ) {
         self.init(config: config, transport: transport, port: port, probeTimeout: probeTimeout,
-                  commandTimeout: commandTimeout, clock: ProbeClock(), jitter: { Double.random(in: 0.9...1.1) })
+                  commandTimeout: commandTimeout, specs: specs, clock: ProbeClock(), jitter: { Double.random(in: 0.9...1.1) })
     }
 
     init(config: @escaping @Sendable () -> LocalHomeConfig, transport: any MiioTransport,
          port: UInt16 = MiioPacket.port, probeTimeout: TimeSpan = .milliseconds(2500),
-         commandTimeout: TimeSpan = .seconds(5), clock: ProbeClock, jitter: @escaping @Sendable () -> Double) {
+         commandTimeout: TimeSpan = .seconds(5), specs: DeviceSpecArchive = .standard, clock: ProbeClock, jitter: @escaping @Sendable () -> Double) {
         self.config = config
+        self.specs = specs
         self.transport = transport
         self.port = port
         self.probeTimeout = probeTimeout
@@ -318,7 +321,7 @@ public actor LANMiotAPI: MiCloudAPI {
     private func legacyProfile(for device: LocalDevice) -> LegacyMiioProfile? {
         if let profile = legacyProfiles[device.model] { return profile }
         guard let profile = LegacyMiioProfile.forModel(device.model) else { return nil }
-        let schema = DeviceSchema.load(model: device.model, specType: device.specType)
+        let schema = DeviceSchema.load(model: device.model, specType: device.specType, archive: specs)
         let resolved = profile.resolved(with: schema)
         if schema != nil { legacyProfiles[device.model] = resolved }
         return resolved

@@ -14,6 +14,9 @@ struct ControlCenterDeviceDetail: View {
         VStack(alignment: .leading, spacing: 16) {
             if let snapshot = devices.snapshots[device.did] {
                 if !snapshot.isOnline { OfflineDeviceCard(model: model, device: device) }
+                if let readings = PurifierReadings(snapshot) {
+                    PurifierReadingsCard(readings: readings)
+                }
                 if snapshot.schema.category == "air-conditioner" {
                     AirConditionerControl(snapshot: snapshot, working: working, perform: run)
                     Text(L10n.tr("家庭中的当前温度使用设定温度占位，此设备没有实测室温读数。", "Home uses the target temperature as a placeholder for the current temperature. This device does not report measured room temperature."))

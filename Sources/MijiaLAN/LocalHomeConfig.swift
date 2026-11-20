@@ -62,7 +62,9 @@ public struct LocalHomeConfig: Codable, Equatable, Sendable {
         for var device in incoming {
             if let index = devices.firstIndex(where: { $0.did == device.did }) {
                 device.roomName = device.roomName ?? devices[index].roomName
-                device.specType = device.specType ?? devices[index].specType
+                if device.model == devices[index].model {
+                    device.specType = device.specType ?? devices[index].specType
+                }
                 devices[index] = device
             } else {
                 devices.append(device)

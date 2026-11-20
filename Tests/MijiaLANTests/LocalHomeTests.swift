@@ -267,10 +267,15 @@ struct DeviceImportTests {
     func configMerge() {
         var config = LocalHomeConfig(devices: [lamp("1", host: "192.168.1.5", room: "卧室")],
                                      skipped: [SkippedDevice(did: "2", name: "x", model: "m", reason: "r")])
+        var sameModel = config.devices[0]
+        sameModel.specType = nil
+        config.merge([sameModel])
+        #expect(config.devices[0].specType == FakeSpecs.lightType)
         config.merge([LocalDevice(did: "1", name: "新名字", model: "m", host: "192.168.1.6", token: tokenB),
                       LocalDevice(did: "2", name: "插座", model: "m", host: "192.168.1.7", token: tokenA)])
         #expect(config.devices.map(\.roomName) == ["卧室", nil])
         #expect(config.devices[0].host == "192.168.1.6")
+        #expect(config.devices[0].specType == nil)
         #expect(config.skipped.isEmpty)
 
         let moved = config.updateHosts(from: [MiioDiscoveredDevice(host: "192.168.1.99", deviceID: 2)])

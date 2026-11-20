@@ -13,10 +13,11 @@ struct HomeKitServiceSelectionTests {
     @Test("Turning off a device's last Home service keeps the device out of Home; turning the device on brings it all back")
     func lastService() async throws {
         // Simulated devices, in-memory secrets and a scratch defaults suite; the bridge stays off.
-        let model = AppModel(environment: ["MIJIALAN_EPHEMERAL": "1", "MIJIALAN_UI_PREVIEW": "1"])
+        let suite = "test.mijialan.home-selection.\(UUID().uuidString)"
+        let model = AppModel(environment: ["MIJIALAN_EPHEMERAL": "1", "MIJIALAN_UI_PREVIEW": "1"], ephemeralDefaultsSuite: suite)
         defer {
             model.devices.shutdown()
-            UserDefaults.standard.removePersistentDomain(forName: "com.mijialan.MijiaLAN.dev")
+            UserDefaults.standard.removePersistentDomain(forName: suite)
         }
         let device = try #require(model.config.devices.first { $0.model == "zhimi.airpurifier.rma1" })
         for _ in 0..<500 where model.devices.snapshots[device.did] == nil { try await MonotonicClock.sleep(for: .milliseconds(2)) }
