@@ -6,6 +6,7 @@ MijiaLAN maintains this local MijiaCore package after the upstream repository be
 ## 来源 / Provenance
 
 - Original repository: `https://github.com/jryang1997/MenuBarMijia`
+- Current upstream repository: `https://github.com/jryang2026-code/MenuBarHome` (renamed from MenuBarMijia)
 - Release: `1.1.4`
 - Revision: `c6a9db1c84fa30125ed4b642b6745487dec94e89`
 - License: MIT; the original copyright and permission notice are preserved in [LICENSE](LICENSE).
